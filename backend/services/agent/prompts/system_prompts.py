@@ -69,3 +69,11 @@ TRADE_AGENT_PROMPT = r"""
 - 不要在标签外输出任何文字或解释。
 - 标签内部必须是有效的 JSON。
 """
+
+SEARCH_AGENT_PROMPT = r"""
+占位符
+"""
+
+
+
+
