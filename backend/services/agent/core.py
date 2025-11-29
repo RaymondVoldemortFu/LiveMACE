@@ -1,9 +1,15 @@
 # services/agent/core.py
 import json
+import logging
 from typing import Dict, Any, List
 from .llm_client import LLMClient
 from .tools import ToolRegistry
 from config.agent_config import AgentConfig
+
+# Define loggers
+logger = logging.getLogger(__name__)
+llm_logger = logging.getLogger("llm_trace")
+agent_logger = logging.getLogger("agent_decision")
 
 SYSTEM_PROMPT = """
 你是一个加密货币交易 Agent。
@@ -48,6 +54,12 @@ class TradingAgent:
         输出:
             与原先 call_ai_for_decision 返回值同结构的决策 dict
         """
+        # Log start of decision process
+        logger.info("Starting agent decision process")
+        agent_logger.info("=== Starting New Decision Process ===")
+        agent_logger.info(f"Portfolio: {json.dumps(portfolio, ensure_ascii=False)}")
+        agent_logger.info(f"Prices: {json.dumps(prices, ensure_ascii=False)}")
+
         messages: List[Dict[str, Any]] = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {
@@ -62,17 +74,47 @@ class TradingAgent:
             },
         ]
 
-        for _ in range(self.max_steps):
+        for step in range(self.max_steps):
+            # Requirement 1: Log raw LLM request
+            llm_logger.info(f"--- Step {step+1}/{self.max_steps} Request ---")
+            llm_logger.info(json.dumps(messages, ensure_ascii=False, indent=2))
+            
+            logger.info(f"Initiating LLM request (Step {step+1})")
+
             resp = self.llm.call(messages, tools=self.tools.openai_tools)
+            
+            # Requirement 1: Log raw LLM response
+            llm_logger.info(f"--- Step {step+1}/{self.max_steps} Response ---")
+            llm_logger.info(json.dumps(resp, ensure_ascii=False, indent=2))
+
             tool_calls = resp["tool_calls"]
+            content = resp["content"]
+
+            # Requirement 2: Log LLM output content and tool calls
+            agent_logger.info(f"--- Step {step+1} LLM Output ---")
+            agent_logger.info(f"Content: {content}")
+            if tool_calls:
+                agent_logger.info(f"Tool Calls: {json.dumps([t.model_dump() if hasattr(t, 'model_dump') else str(t) for t in tool_calls], ensure_ascii=False)}")
 
             # 1) 有工具调用：执行工具并把结果回传给模型
             if tool_calls:
+                logger.info(f"LLM requested {len(tool_calls)} tool calls")
                 for tc in tool_calls:
                     name = tc.function.name
-                    args = json.loads(tc.function.arguments or "{}")
+                    args_str = tc.function.arguments or "{}"
+                    args = json.loads(args_str)
+                    
+                    # Console output (Simple)
+                    logger.info(f"Executing tool: {name}")
+                    
+                    # File output (Detailed)
+                    agent_logger.info(f"Executing tool '{name}' with args: {args_str}")
+
                     tool = self.tools.get(name)
                     result = tool(**args)
+                    
+                    # Log tool result
+                    agent_logger.info(f"Tool '{name}' result: {json.dumps(result, ensure_ascii=False)}")
 
                     messages.append(
                         {
@@ -85,9 +127,11 @@ class TradingAgent:
                 continue
 
             # 2) 没有工具调用，视为最终决策，尝试解析 JSON
-            content = resp["content"]
             if not content:
-                raise ValueError("LLM returned empty content")
+                error_msg = "LLM returned empty content"
+                logger.error(error_msg)
+                agent_logger.error(error_msg)
+                raise ValueError(error_msg)
 
             text = content.strip()
             # 兼容 ```json ... ``` 包裹
@@ -96,19 +140,30 @@ class TradingAgent:
             elif text.startswith("```"):
                 text = text.strip("`").strip()
 
-            decision = json.loads(text)
+            try:
+                decision = json.loads(text)
+                
+                # Log final decision
+                logger.info(f"Agent reached final decision: {decision.get('operation')} {decision.get('symbol', '')}")
+                agent_logger.info(f"Final Decision Parsed: {json.dumps(decision, ensure_ascii=False)}")
 
-            # 简单做一下字段兜底，保持与旧逻辑兼容
-            if "leverage" not in decision or not decision["leverage"]:
-                decision["leverage"] = 1
-            if "direction" not in decision or not decision["direction"]:
-                decision["direction"] = "long"
-            else:
-                decision["direction"] = decision["direction"].lower()
+                # 简单做一下字段兜底，保持与旧逻辑兼容
+                if "leverage" not in decision or not decision["leverage"]:
+                    decision["leverage"] = 1
+                if "direction" not in decision or not decision["direction"]:
+                    decision["direction"] = "long"
+                else:
+                    decision["direction"] = decision["direction"].lower()
 
-            return decision
+                return decision
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse decision JSON: {e}")
+                agent_logger.error(f"JSON Parse Error: {e}. Content: {text}")
+                raise
 
         # 超过 max_steps 还没给出最终决策，保守 hold
+        logger.warning("Agent exceeded max steps, fallback to HOLD")
+        agent_logger.warning("Exceeded max steps, returning fallback HOLD decision")
         return {
             "operation": "hold",
             "symbol": "",

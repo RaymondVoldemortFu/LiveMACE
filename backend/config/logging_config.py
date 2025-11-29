@@ -9,6 +9,8 @@ def setup_logging():
     - Output to console
     - Output to file (rotated daily)
     - Separate error logs
+    - Separate LLM trace logs
+    - Separate Agent decision logs
     """
     # Create logs directory if it doesn't exist
     # backend/config/logging_config.py -> backend/logs
@@ -25,11 +27,6 @@ def setup_logging():
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.INFO)
     
-    # Clear existing handlers to avoid duplicates if re-initialized
-    # Note: This might remove uvicorn's default handlers if called after uvicorn setup,
-    # but usually we want to override them or add to them.
-    # If we want to keep existing handlers (like uvicorn's), we shouldn't clear them blindly,
-    # but here we want to enforce our format and destinations.
     if root_logger.hasHandlers():
         root_logger.handlers.clear()
 
@@ -39,8 +36,7 @@ def setup_logging():
     console_handler.setLevel(logging.INFO)
     root_logger.addHandler(console_handler)
 
-    # Info Log File Handler (Rotating daily, keep 30 days)
-    # Contains INFO and higher (including ERROR)
+    # Info Log File Handler
     info_log_file = os.path.join(log_dir, "app.log")
     info_handler = logging.handlers.TimedRotatingFileHandler(
         info_log_file, when="midnight", interval=1, backupCount=30, encoding="utf-8"
@@ -49,8 +45,7 @@ def setup_logging():
     info_handler.setLevel(logging.INFO)
     root_logger.addHandler(info_handler)
 
-    # Error Log File Handler (Rotating daily, keep 30 days)
-    # Contains only ERROR and CRITICAL
+    # Error Log File Handler
     error_log_file = os.path.join(log_dir, "error.log")
     error_handler = logging.handlers.TimedRotatingFileHandler(
         error_log_file, when="midnight", interval=1, backupCount=30, encoding="utf-8"
@@ -59,8 +54,34 @@ def setup_logging():
     error_handler.setLevel(logging.ERROR)
     root_logger.addHandler(error_handler)
 
-    # Explicitly set uvicorn loggers to propagate or use our handlers
-    # Uvicorn configures its own loggers ('uvicorn', 'uvicorn.access', 'uvicorn.error')
+    # --- Specialized Loggers ---
+
+    # 1. LLM Trace Logger (Independent file, no propagation)
+    llm_trace_logger = logging.getLogger("llm_trace")
+    llm_trace_logger.setLevel(logging.INFO)
+    llm_trace_logger.propagate = False
+    
+    llm_log_file = os.path.join(log_dir, "llm_trace.log")
+    llm_handler = logging.handlers.TimedRotatingFileHandler(
+        llm_log_file, when="midnight", interval=1, backupCount=30, encoding="utf-8"
+    )
+    llm_handler.setFormatter(formatter)
+    llm_trace_logger.addHandler(llm_handler)
+
+    # 2. Agent Decision Logger (Independent file, no propagation)
+    # Note: Simple output will still go to root logger (console/app.log) via manual calls in code
+    agent_logger = logging.getLogger("agent_decision")
+    agent_logger.setLevel(logging.INFO)
+    agent_logger.propagate = False
+    
+    agent_log_file = os.path.join(log_dir, "agent_decision.log")
+    agent_handler = logging.handlers.TimedRotatingFileHandler(
+        agent_log_file, when="midnight", interval=1, backupCount=30, encoding="utf-8"
+    )
+    agent_handler.setFormatter(formatter)
+    agent_logger.addHandler(agent_handler)
+
+    # Uvicorn loggers integration
     logging.getLogger("uvicorn").handlers = []
     logging.getLogger("uvicorn.access").handlers = []
     logging.getLogger("uvicorn.error").handlers = []
@@ -71,4 +92,3 @@ def setup_logging():
 
     # Log initialization
     logging.info(f"Logging initialized. Logs directory: {log_dir}")
-
