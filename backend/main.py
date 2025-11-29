@@ -5,6 +5,10 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 import os
 
+from config.logging_config import setup_logging
+# Initialize logging configuration
+setup_logging()
+
 from database.connection import engine, Base, SessionLocal
 from database.models import TradingConfig, User, Account, SystemConfig
 from config.settings import DEFAULT_TRADING_CONFIGS
