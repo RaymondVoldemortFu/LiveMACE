@@ -19,8 +19,10 @@ from services.ai_decision_service import (
     save_ai_decision, 
     get_active_ai_accounts, 
     _get_portfolio_data,
-    SUPPORTED_SYMBOLS
+    SUPPORTED_SYMBOLS,
+    call_agent_for_decision
 )
+from config.agent_config import AgentConfig
 
 
 logger = logging.getLogger(__name__)
@@ -108,7 +110,10 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
                     continue
 
                 # Call AI for trading decision
-                decision = call_ai_for_decision(account, portfolio, prices)
+                if AgentConfig.USE_AGENT:
+                    decision = call_agent_for_decision(account, portfolio, prices, db)
+                else:
+                    decision = call_ai_for_decision(account, portfolio, prices)
                 if not decision or not isinstance(decision, dict):
                     logger.warning(f"Failed to get AI decision for {account.name}, skipping")
                     continue

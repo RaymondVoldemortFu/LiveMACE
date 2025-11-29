@@ -1,4 +1,3 @@
-# services/agent/env_wrapper.py
 from .tools import Tool
 from sqlalchemy.orm import Session
 from services.market_data import get_last_price, get_market_status
@@ -6,8 +5,23 @@ from repositories.position_repo import list_positions
 from repositories.account_repo import get_account
 from services.order_executor_leverage import place_and_execute_crypto
 
-def register_default_tools(registry, db: Session, account_id: int):
 
+def map_operation_side(operation: str, direction: str):
+    """统一转换为内部订单系统使用的 side 字段."""
+    operation = operation.lower()
+    direction = direction.lower()
+
+    if operation == "open":
+        return "LONG" if direction == "long" else "SHORT"
+
+    if operation == "close":
+        return "SELL" if direction == "long" else "BUY"
+
+    return None
+
+
+def register_default_tools(registry, db: Session, account_id: int):
+    # === 行情工具 ===
     registry.register(
         Tool(
             name="get_market_snapshot",
@@ -18,12 +32,14 @@ def register_default_tools(registry, db: Session, account_id: int):
                 "required": ["symbol"]
             },
             func=lambda symbol: {
-                "price": get_last_price(symbol),
-                "status": get_market_status(symbol)
+                "symbol": symbol,
+                "price": float(get_last_price(symbol)),
+                "market_status": get_market_status(symbol)
             }
         )
     )
 
+    # === 账户工具 ===
     registry.register(
         Tool(
             name="get_account_state",
@@ -36,36 +52,23 @@ def register_default_tools(registry, db: Session, account_id: int):
         )
     )
 
-    def _place_order(symbol, side, size, leverage=1):
+    # === 下单工具（包含 operation + direction） ===
+    def _place_order(symbol, operation, direction, size, leverage=1):
         account = get_account(db, account_id)
         if not account:
             return {"error": "Account not found"}
-            
+
+        side = map_operation_side(operation, direction)
+        if side is None:
+            return {"error": f"Invalid operation={operation}, direction={direction}"}
+
         try:
-            # Handle side string normalization if needed, assuming 'buy'/'sell' from agent
-            # but place_and_execute_crypto expects 'LONG'/'SHORT'/'BUY'/'SELL' contextually?
-            # Re-checking place_and_execute_crypto logic:
-            # It takes `side` and directly uses it to create Order.
-            # OrderExecutor or Matching Engine usually interprets it.
-            # For Crypto leverage:
-            # LONG = Open Long
-            # SHORT = Open Short
-            # BUY = Close Short (Buy back)
-            # SELL = Close Long (Sell off)
-            
-            # But agents usually just say "buy" (to go long) or "sell" (to go short).
-            # If the agent is leverage-aware, it might say "long"/"short".
-            # The prompt says: "direction": "long" | "short", "operation": "open" | "close"
-            # If operation is separate, we need to map it.
-            # But the tool `paper_place_order` only has `side` parameter.
-            # Assuming `side` here corresponds to the order side directly.
-            
             order = place_and_execute_crypto(
                 db=db,
                 account=account,
                 symbol=symbol,
                 name=f"Agent Order {symbol}",
-                side=side.upper(),
+                side=side,
                 order_type="MARKET",
                 price=None,
                 quantity=size,
@@ -83,17 +86,19 @@ def register_default_tools(registry, db: Session, account_id: int):
                 "type": "object",
                 "properties": {
                     "symbol": {"type": "string"},
-                    "side": {"type": "string"},
+                    "operation": {"type": "string"},
+                    "direction": {"type": "string"},
                     "size": {"type": "number"},
                     "leverage": {"type": "number"}
                 },
-                "required": ["symbol", "side", "size"]
+                "required": ["symbol", "operation", "direction", "size"]
             },
             func=_place_order
         )
     )
 
     return registry
+
 
 def _serialize_account(account):
     if not account: return None
@@ -104,6 +109,7 @@ def _serialize_account(account):
         "frozen": float(account.frozen_cash),
     }
 
+
 def _serialize_position(pos):
     return {
         "symbol": pos.symbol,
@@ -111,8 +117,9 @@ def _serialize_position(pos):
         "avg_cost": float(pos.avg_cost),
         "leverage": pos.leverage,
         "side": pos.side,
-        "market": pos.market
+        "market": str(pos.market)
     }
+
 
 def _serialize_order(order):
     return {

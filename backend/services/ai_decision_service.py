@@ -15,6 +15,11 @@ from database.models import Position, Account, AIDecisionLog
 from services.asset_calculator import calc_positions_value
 from services.news_feed import fetch_latest_news
 
+from services.agent.core import *
+from services.agent.env_wrapper import *
+from services.agent.llm_client import *
+from services.agent.tools import *
+
 
 logger = logging.getLogger(__name__)
 
@@ -376,3 +381,37 @@ def get_active_ai_accounts(db: Session) -> List[Account]:
         return []
 
     return valid_accounts
+
+
+def call_agent_for_decision(
+    account: Account,
+    portfolio: Dict,
+    prices: Dict[str, float],
+    db: Session,
+) -> Optional[Dict]:
+    """基于 Agent（多轮+工具）的决策接口，保持与 call_ai_for_decision 兼容。"""
+
+    if _is_default_api_key(account.api_key):
+        logger.info(f"Skipping AI trading for account {account.name} - using default API key")
+        return None
+
+    try:
+        llm = LLMClient(
+            model=account.model,
+            api_key=account.api_key,
+            base_url=account.base_url,  # 注意要和 OpenAI SDK 预期的 base_url 对齐
+        )
+
+        registry = ToolRegistry()
+        register_default_tools(registry, db, account.id)
+
+        agent = TradingAgent(llm=llm, tools=registry, max_steps=4)
+
+        decision = agent.run(portfolio=portfolio, prices=prices)
+
+        logger.info(f"Agent decision for {account.name}: {decision}")
+        return decision
+
+    except Exception as e:
+        logger.error(f"call_agent_for_decision failed: {e}", exc_info=True)
+        return None
