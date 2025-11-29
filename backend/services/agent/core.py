@@ -1,4 +1,5 @@
 # services/agent/core.py
+import re
 import json
 import logging
 from typing import Dict, Any, List
@@ -49,13 +50,24 @@ class TradingAgent:
         ]
 
         for step in range(self.max_steps):
+            # Check if we need to remind the agent about remaining steps
+            remaining_steps = self.max_steps - step
+            request_messages = list(messages)
+            
+            if remaining_steps < AgentConfig.STEP_REMINDER_THRESHOLD:
+                logger.info(f"Adding step reminder (Remaining: {remaining_steps})")
+                request_messages.append({
+                    "role": "user", 
+                    "content": f"Reminder: You have {remaining_steps} steps remaining. You must output <FINAL_JSON> before running out of steps."
+                })
+
             # Requirement 1: Log raw LLM request
             llm_logger.info(f"--- Step {step+1}/{self.max_steps} Request ---")
-            llm_logger.info(json.dumps(messages, ensure_ascii=False, indent=2))
+            llm_logger.info(json.dumps(request_messages, ensure_ascii=False, indent=2))
             
             logger.info(f"Initiating LLM request (Step {step+1})")
 
-            resp = self.llm.call(messages, tools=self.tools.openai_tools)
+            resp = self.llm.call(request_messages, tools=self.tools.openai_tools)
             
             # Convert to dict for consistent handling and logging
             if hasattr(resp, "model_dump"):
@@ -110,39 +122,53 @@ class TradingAgent:
                 continue
 
             # 2) 没有工具调用，视为最终决策，尝试解析 JSON
-            if not content:
-                error_msg = "LLM returned empty content"
+            # 优先检查是否有 <FINAL_JSON> 标签
+            final_decision = None
+            if content:
+                match = re.search(r"<FINAL_JSON>(.*?)</FINAL_JSON>", content, re.DOTALL)
+                if match:
+                    json_str = match.group(1).strip()
+                    try:
+                        decision = json.loads(json_str)
+                        
+                        # Log final decision
+                        logger.info(f"Agent reached final decision: {decision.get('operation')} {decision.get('symbol', '')}")
+                        agent_logger.info(f"Final Decision Parsed: {json.dumps(decision, ensure_ascii=False)}")
+
+                        # 简单做一下字段兜底，保持与旧逻辑兼容
+                        if "leverage" not in decision or not decision["leverage"]:
+                            decision["leverage"] = 1
+                        if "direction" not in decision or not decision["direction"]:
+                            decision["direction"] = "long"
+                        else:
+                            decision["direction"] = decision["direction"].lower()
+
+                        return decision
+                    except json.JSONDecodeError as e:
+                        # 如果解析失败，使用默认 (Fallback HOLD)
+                        logger.error(f"Failed to parse decision JSON within <FINAL_JSON>: {e}. Returning fallback HOLD.")
+                        agent_logger.error(f"JSON Parse Error in <FINAL_JSON>: {e}. Content: {json_str}")
+                        # Return fallback directly
+                        return {
+                            "operation": "hold",
+                            "symbol": "",
+                            "direction": "long",
+                            "target_portion_of_balance": 0.0,
+                            "leverage": 1,
+                            "reason": "JSON Parse Error in <FINAL_JSON>, fallback hold",
+                        }
+
+            # 如果没有工具调用，且没有 <FINAL_JSON>，且没有内容 -> 异常
+            if not tool_calls and not content:
+                error_msg = "LLM returned empty content and no tool calls"
                 logger.error(error_msg)
                 agent_logger.error(error_msg)
                 raise ValueError(error_msg)
 
-            text = content.strip()
-            # 兼容 ```json ... ``` 包裹
-            if "```json" in text:
-                text = text.split("```json", 1)[1].split("```", 1)[0].strip()
-            elif text.startswith("```"):
-                text = text.strip("`").strip()
-
-            try:
-                decision = json.loads(text)
-                
-                # Log final decision
-                logger.info(f"Agent reached final decision: {decision.get('operation')} {decision.get('symbol', '')}")
-                agent_logger.info(f"Final Decision Parsed: {json.dumps(decision, ensure_ascii=False)}")
-
-                # 简单做一下字段兜底，保持与旧逻辑兼容
-                if "leverage" not in decision or not decision["leverage"]:
-                    decision["leverage"] = 1
-                if "direction" not in decision or not decision["direction"]:
-                    decision["direction"] = "long"
-                else:
-                    decision["direction"] = decision["direction"].lower()
-
-                return decision
-            except json.JSONDecodeError as e:
-                logger.error(f"Failed to parse decision JSON: {e}")
-                agent_logger.error(f"JSON Parse Error: {e}. Content: {text}")
-                raise
+            # 如果没有工具调用，且没有 <FINAL_JSON>，但有内容 -> 视为中间思考过程，继续循环
+            if not tool_calls:
+                logger.info("No tool calls and no <FINAL_JSON> found. Continuing conversation (thought step).")
+                continue
 
         # 超过 max_steps 还没给出最终决策，保守 hold
         logger.warning("Agent exceeded max steps, fallback to HOLD")

@@ -51,7 +51,7 @@ def register_default_tools(registry, db: Session, account_id: int):
             }
         )
     )
-
+    """
     # === 下单工具（包含 operation + direction） ===
     def _place_order(symbol, operation, direction, size, leverage=1):
         account = get_account(db, account_id)
@@ -98,7 +98,7 @@ def register_default_tools(registry, db: Session, account_id: int):
     )
 
     return registry
-
+    """
 
 def _serialize_account(account):
     if not account: return None
