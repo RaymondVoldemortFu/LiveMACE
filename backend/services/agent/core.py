@@ -5,40 +5,14 @@ from typing import Dict, Any, List
 from .llm_client import LLMClient
 from .tools import ToolRegistry
 from config.agent_config import AgentConfig
+from services.agent.prompts.system_prompts import TRADE_AGENT_PROMPT
 
 # Define loggers
 logger = logging.getLogger(__name__)
 llm_logger = logging.getLogger("llm_trace")
 agent_logger = logging.getLogger("agent_decision")
 
-SYSTEM_PROMPT = """
-你是一个加密货币交易 Agent。
-你可以使用以下工具：
-- get_market_snapshot: 查询单个币种的最新价格与市场状态
-- get_account_state: 查询账户资金与持仓情况
-（工具的具体参数和返回格式会在调用时提供）
-
-你的任务：
-- 结合账户持仓、可用资金、行情数据，在多个币种中选择是否进行交易。
-- 最终输出一个严格的 JSON 对象，格式如下：
-
-{
-  "operation": "open" | "close" | "hold",
-  "symbol": "BTC" | "ETH" | "SOL" | "BNB" | "XRP" | "DOGE",
-  "direction": "long" | "short",
-  "target_portion_of_balance": 0.2,
-  "leverage": 3,
-  "reason": "简要说明你的决策逻辑"
-}
-
-说明：
-- operation = "open": 开新仓，direction 决定 long/short，target_portion_of_balance 表示使用可用资金的比例（0~1）。
-- operation = "close": 平已有仓位，target_portion_of_balance 表示平仓比例（0~1，1=全平）。
-- operation = "hold": 不做任何操作，此时可以省略 direction / target_portion_of_balance / leverage。
-- 只能在有价格数据的币种中进行交易。
-- 只能对当前持有的仓位进行 close 操作。
-- 请严格输出 JSON，不要输出多余文字。
-"""
+SYSTEM_PROMPT = TRADE_AGENT_PROMPT
 
 class TradingAgent:
     def __init__(self, llm: LLMClient, tools: ToolRegistry, max_steps: int = AgentConfig.MAX_STEPS):
