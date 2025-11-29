@@ -406,7 +406,7 @@ def call_agent_for_decision(
         register_default_tools(registry, db, account.id)
 
         logger.info(f"Initiating agent decision for account: {account.name} (ID: {account.id})")
-        agent = TradingAgent(llm=llm, tools=registry, max_steps=4)
+        agent = TradingAgent(llm=llm, tools=registry, max_steps=AgentConfig.MAX_STEPS)
 
         decision = agent.run(portfolio=portfolio, prices=prices)
 

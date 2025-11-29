@@ -26,11 +26,7 @@ class LLMClient:
     def call(self, messages, tools=None):
         """
         统一的 LLM 调用入口，支持 tools（函数调用）
-        返回格式自动规整为:
-        {
-            "content": "...",
-            "tool_calls": [...]
-        }
+        直接返回 OpenAI 的 ChatCompletionMessage 对象，便于后续追加到 messages 历史中。
         """
 
         response = self.client.chat.completions.create(
@@ -41,9 +37,4 @@ class LLMClient:
             max_tokens=800,
         )
 
-        msg = response.choices[0].message
-
-        return {
-            "content": msg.content or "",
-            "tool_calls": msg.tool_calls or [],
-        }
+        return response.choices[0].message

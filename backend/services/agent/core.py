@@ -57,12 +57,21 @@ class TradingAgent:
 
             resp = self.llm.call(messages, tools=self.tools.openai_tools)
             
+            # Convert to dict for consistent handling and logging
+            if hasattr(resp, "model_dump"):
+                resp_dict = resp.model_dump()
+            else:
+                resp_dict = resp.dict()
+
             # Requirement 1: Log raw LLM response
             llm_logger.info(f"--- Step {step+1}/{self.max_steps} Response ---")
-            llm_logger.info(json.dumps(resp, ensure_ascii=False, indent=2))
+            llm_logger.info(json.dumps(resp_dict, ensure_ascii=False, indent=2))
 
-            tool_calls = resp["tool_calls"]
-            content = resp["content"]
+            # Important: Add assistant response to history
+            messages.append(resp_dict)
+
+            tool_calls = resp.tool_calls
+            content = resp.content
 
             # Requirement 2: Log LLM output content and tool calls
             agent_logger.info(f"--- Step {step+1} LLM Output ---")
