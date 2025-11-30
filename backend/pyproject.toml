@@ -17,6 +17,7 @@ dependencies = [
     "ccxt>=4.0.0",
     "openai>=2.8.1",
     "python-dotenv>=1.2.1",
+    "tavily>=1.1.0",
 ]
 
 [tool.uv]

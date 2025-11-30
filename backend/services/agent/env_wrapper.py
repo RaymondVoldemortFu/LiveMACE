@@ -4,6 +4,7 @@ from services.market_data import get_last_price, get_market_status
 from repositories.position_repo import list_positions
 from repositories.account_repo import get_account
 from services.order_executor_leverage import place_and_execute_crypto
+from services.agent.sub_agents.search_agent import SearchSubAgent
 
 
 def map_operation_side(operation: str, direction: str):
@@ -51,6 +52,51 @@ def register_default_tools(registry, db: Session, account_id: int):
             }
         )
     )
+
+    # === 搜索工具 (Sub-Agent) ===
+    search_agent = SearchSubAgent(
+        api_key=get_account(db, account_id).api_key,
+        base_url=get_account(db, account_id).base_url
+    )
+    registry.register(
+        Tool(
+            name="consult_search_agent",
+            description="网络搜索工具。当需要获取最新的市场新闻、宏观经济数据、项目动态或特定币种的非价格信息时使用。返回包含搜索结果摘要和来源的结构化数据。",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string", 
+                        "description": "具体的搜索查询语句。"
+                    },
+                    "topic": {
+                        "type": "string",
+                        "enum": ["general", "news", "finance"],
+                        "description": "搜索主题类别。"
+                    },
+                    "time_range": {
+                        "type": "string",
+                        "enum": ["day", "week", "month", "year", "none"],
+                        "description": "搜索时间范围。"
+                    },
+                    "search_depth": {
+                        "type": "string",
+                        "enum": ["basic", "advanced"],
+                        "description": "搜索深度。basic较快但结果较少，advanced较慢但结果更详细。",
+                        "default": "basic"
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "返回结果的最大数量。",
+                        "default": 5
+                    }
+                },
+                "required": ["query", "topic", "time_range"]
+            },
+            func=lambda query, topic, time_range, search_depth="basic", max_results=5: search_agent.run(query, topic, time_range, search_depth, max_results)
+        )
+    )
+
     """
     # === 下单工具（包含 operation + direction） ===
     def _place_order(symbol, operation, direction, size, leverage=1):
