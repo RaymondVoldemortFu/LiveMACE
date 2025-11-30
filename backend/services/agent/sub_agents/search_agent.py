@@ -9,6 +9,9 @@ from config.tool_config import ToolConfig
 from services.agent.prompts.sub_agent_prompts import SUB_AGENT_SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
+llm_logger = logging.getLogger("llm_trace")
+agent_logger = logging.getLogger("agent_decision")
+search_logger = logging.getLogger("search_results")
 
 
 class SearchSubAgent:
@@ -83,6 +86,9 @@ class SearchSubAgent:
         if not self.llm_client or not self.client:
             return {"error": "Sub-agent not fully initialized (missing LLM or Tavily key)."}
 
+        agent_logger.info(f"=== Starting Search Sub-Agent ===")
+        agent_logger.info(f"Query: {query}, Topic: {topic}, Time: {time_range}")
+
         messages = [
             {"role": "system", "content": SUB_AGENT_SYSTEM_PROMPT.format(max_steps=self.max_steps)},
             {"role": "user", "content": f"Query: {query}\nTopic: {topic}\nTime Range: {time_range}\nDepth: {search_depth}\nMax Results: {max_results}"}
@@ -124,7 +130,13 @@ class SearchSubAgent:
         ]
 
         for step in range(self.max_steps):
+            agent_logger.info(f"--- Sub-Agent Step {step+1}/{self.max_steps} ---")
+            
             try:
+                # Log Request
+                llm_logger.info(f"--- Sub-Agent Step {step+1} Request ---")
+                llm_logger.info(json.dumps(messages, ensure_ascii=False, indent=2))
+
                 response = self.llm_client.chat.completions.create(
                     model=self.model,
                     messages=messages,
@@ -133,28 +145,57 @@ class SearchSubAgent:
                 )
                 
                 msg = response.choices[0].message
-                messages.append(msg)
+                
+                # Handle message object for logging/history
+                msg_dict = msg.model_dump()
+                messages.append(msg_dict) # Use dict for history consistency if needed, but SDK objects work too. 
+                                          # Wait, previous core.py used dict. Let's stick to object if SDK supports it 
+                                          # or convert. OpenAI SDK usually wants objects or dicts. 
+                                          # Let's use dict for logging and appending to keep it clean.
+                
+                # Log Response
+                llm_logger.info(f"--- Sub-Agent Step {step+1} Response ---")
+                llm_logger.info(json.dumps(msg_dict, ensure_ascii=False, indent=2))
+                
+                agent_logger.info(f"Sub-Agent Content: {msg.content}")
 
                 # Check for tool calls
                 if msg.tool_calls:
+                    agent_logger.info(f"Sub-Agent requested {len(msg.tool_calls)} tools")
                     for tc in msg.tool_calls:
                         func_name = tc.function.name
                         args = json.loads(tc.function.arguments)
+                        agent_logger.info(f"Executing {func_name} with args: {tc.function.arguments}")
                         
                         result = None
                         if func_name == "search_tool":
-                            # Merge defaults with args if not present, though prompt should handle it
-                            # Defaulting arguments from the initial call if not overridden by sub-agent reasoning
-                            # Actually sub-agent should decide new params if needed, but we can provide smart defaults
                             t_query = args.get("query")
                             t_topic = args.get("topic", topic)
                             t_time = args.get("time_range", time_range)
                             t_depth = args.get("search_depth", search_depth)
                             t_max = args.get("max_results", max_results)
+                            
+                            # Log that we are searching, but put results in search_logger
+                            logger.info(f"Sub-Agent performing search: {t_query}")
                             result = self._search_tool(t_query, t_topic, t_time, t_depth, t_max)
                             
+                            # Log full search results to dedicated logger
+                            search_logger.info(f"--- Search Results for '{t_query}' ---")
+                            search_logger.info(json.dumps(result, ensure_ascii=False, indent=2))
+                            
+                            # In agent_logger, just note success
+                            agent_logger.info("Search completed (results logged to search_results.log)")
+                            
                         elif func_name == "extract_tool":
-                            result = self._extract_tool(args.get("url"))
+                            url = args.get("url")
+                            logger.info(f"Sub-Agent extracting: {url}")
+                            result = self._extract_tool(url)
+                            
+                            # Log full extraction results to dedicated logger
+                            search_logger.info(f"--- Extract Results for '{url}' ---")
+                            search_logger.info(json.dumps(result, ensure_ascii=False, indent=2))
+                            
+                            agent_logger.info("Extraction completed (results logged to search_results.log)")
                         
                         messages.append({
                             "role": "tool",
@@ -169,18 +210,22 @@ class SearchSubAgent:
                     if match:
                         try:
                             final_json = json.loads(match.group(1).strip())
+                            agent_logger.info(f"Sub-Agent Final Response: {json.dumps(final_json, ensure_ascii=False)}")
                             return final_json
                         except json.JSONDecodeError:
                             logger.error("Failed to parse final JSON from sub-agent.")
+                            agent_logger.error("Failed to parse final JSON from sub-agent.")
                             return {"summary": content, "sources": []} # Fallback
                     
                     # If no final tag but loop is ending or just chatter?
                     # If it's the last step and no final response, try to return content
                     if step == self.max_steps - 1:
+                         agent_logger.warning("Max steps reached without <FINAL_RESPONSE>")
                          return {"summary": content, "sources": []}
 
             except Exception as e:
                 logger.error(f"Sub-agent step failed: {e}")
+                agent_logger.error(f"Sub-agent step failed: {e}")
                 return {"error": str(e)}
 
         return {"error": "Max steps reached without final response."}

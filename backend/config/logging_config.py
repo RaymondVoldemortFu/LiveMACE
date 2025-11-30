@@ -81,6 +81,18 @@ def setup_logging():
     agent_handler.setFormatter(formatter)
     agent_logger.addHandler(agent_handler)
 
+    # 3. Search Results Logger (Independent file, no propagation)
+    search_logger = logging.getLogger("search_results")
+    search_logger.setLevel(logging.INFO)
+    search_logger.propagate = False
+    
+    search_log_file = os.path.join(log_dir, "search_results.log")
+    search_handler = logging.handlers.TimedRotatingFileHandler(
+        search_log_file, when="midnight", interval=1, backupCount=30, encoding="utf-8"
+    )
+    search_handler.setFormatter(formatter)
+    search_logger.addHandler(search_handler)
+
     # Uvicorn loggers integration
     logging.getLogger("uvicorn").handlers = []
     logging.getLogger("uvicorn.access").handlers = []
