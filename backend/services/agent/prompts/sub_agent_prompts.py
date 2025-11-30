@@ -23,13 +23,13 @@ SUB_AGENT_SYSTEM_PROMPT = """
 当你准备好返回最终结果时，请输出如下 JSON 格式（注意：必须包含在 <FINAL_RESPONSE> 标签中）：
 
 <FINAL_RESPONSE>
-{
+{{
   "summary": "对用户查询的完整总结回答...",
   "sources": [
-    {"title": "来源标题1", "url": "http://url1...", "snippet": "关键信息片段..."},
-    {"title": "来源标题2", "url": "http://url2...", "snippet": "关键信息片段..."}
+    {{"title": "来源标题1", "url": "http://url1...", "snippet": "关键信息片段..."}},
+    {{"title": "来源标题2", "url": "http://url2...", "snippet": "关键信息片段..."}}
   ]
-}
+}}
 </FINAL_RESPONSE>
 """
 
