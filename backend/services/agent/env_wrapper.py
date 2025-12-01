@@ -1,6 +1,7 @@
 from .tools import Tool
+from datetime import datetime
 from sqlalchemy.orm import Session
-from services.market_data import get_last_price, get_market_status
+from services.market_data import get_last_price, get_market_status, get_kline_data
 from repositories.position_repo import list_positions
 from repositories.account_repo import get_account
 from services.order_executor_leverage import place_and_execute_crypto
@@ -29,7 +30,9 @@ def register_default_tools(registry, db: Session, account_id: int):
             description="获取某个币种的最新行情数据",
             parameters={
                 "type": "object",
-                "properties": {"symbol": {"type": "string"}},
+                "properties": {
+                    "symbol": {"type": "string"}
+                },
                 "required": ["symbol"]
             },
             func=lambda symbol: {
@@ -37,6 +40,37 @@ def register_default_tools(registry, db: Session, account_id: int):
                 "price": float(get_last_price(symbol)),
                 "market_status": get_market_status(symbol)
             }
+        )
+    )
+
+    registry.register(
+        Tool(
+            name="get_kline_history",
+            description="获取指定加密货币在指定时间范围内的K线数据。时间分辨率支持: 1m, 5m, 15m, 30m, 1h, 4h, 1d。",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "symbol": {
+                        "type": "string",
+                        "description": "交易对符号, e.g. BTC"
+                    },
+                    "interval": {
+                        "type": "string",
+                        "enum": ["1m", "5m", "15m", "30m", "1h", "4h", "1d"],
+                        "description": "时间分辨率"
+                    },
+                    "start_time": {
+                        "type": "string",
+                        "description": "开始时间 (ISO 8601格式, e.g. 2023-01-01T00:00:00)"
+                    },
+                    "end_time": {
+                        "type": "string",
+                        "description": "结束时间 (ISO 8601格式), 可选"
+                    }
+                },
+                "required": ["symbol", "interval", "start_time"]
+            },
+            func=lambda symbol, interval, start_time, end_time=None: _get_kline_wrapper(symbol, interval, start_time, end_time)
         )
     )
 
@@ -66,7 +100,7 @@ def register_default_tools(registry, db: Session, account_id: int):
                 "type": "object",
                 "properties": {
                     "query": {
-                        "type": "string", 
+                        "type": "string",
                         "description": "具体的搜索查询语句。"
                     },
                     "topic": {
@@ -97,54 +131,6 @@ def register_default_tools(registry, db: Session, account_id: int):
         )
     )
 
-    """
-    # === 下单工具（包含 operation + direction） ===
-    def _place_order(symbol, operation, direction, size, leverage=1):
-        account = get_account(db, account_id)
-        if not account:
-            return {"error": "Account not found"}
-
-        side = map_operation_side(operation, direction)
-        if side is None:
-            return {"error": f"Invalid operation={operation}, direction={direction}"}
-
-        try:
-            order = place_and_execute_crypto(
-                db=db,
-                account=account,
-                symbol=symbol,
-                name=f"Agent Order {symbol}",
-                side=side,
-                order_type="MARKET",
-                price=None,
-                quantity=size,
-                leverage=leverage
-            )
-            return _serialize_order(order)
-        except Exception as e:
-            return {"error": str(e)}
-
-    registry.register(
-        Tool(
-            name="paper_place_order",
-            description="提交模拟订单（不会影响真实账户）",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "symbol": {"type": "string"},
-                    "operation": {"type": "string"},
-                    "direction": {"type": "string"},
-                    "size": {"type": "number"},
-                    "leverage": {"type": "number"}
-                },
-                "required": ["symbol", "operation", "direction", "size"]
-            },
-            func=_place_order
-        )
-    )
-
-    return registry
-    """
 
 def _serialize_account(account):
     if not account: return None
@@ -177,3 +163,28 @@ def _serialize_order(order):
         "status": order.status,
         "filled_quantity": float(order.filled_quantity)
     }
+
+
+def _get_kline_wrapper(symbol, interval, start_time, end_time=None):
+    start_ts = _parse_iso_time(start_time)
+    end_ts = _parse_iso_time(end_time) if end_time else None
+
+    if not start_ts:
+        return {"error": "Invalid start_time format. Please use ISO 8601 (e.g. 2023-01-01T00:00:00)."}
+
+    # Default limit 500 if not specified by loop, but underlying service has 100 default.
+    # We can pass a larger count if needed, or let it use default.
+    # If end_time is far away, we might need more than 100.
+    # Let's pass a larger count (e.g. 1000) to cover more ground.
+    return get_kline_data(symbol, period=interval, count=1000, start_time=start_ts, end_time=end_ts)
+
+
+def _parse_iso_time(time_str):
+    if not time_str: return None
+    try:
+        # Handle Z suffix replacement for fromisoformat compatibility in older python
+        ts = time_str.replace('Z', '+00:00')
+        dt = datetime.fromisoformat(ts)
+        return int(dt.timestamp() * 1000)
+    except ValueError:
+        return None

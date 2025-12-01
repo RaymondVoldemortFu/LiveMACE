@@ -45,7 +45,7 @@ class HyperliquidClient:
             logger.error(f"Error fetching price for {symbol}: {e}")
             return None
 
-    def get_kline_data(self, symbol: str, period: str = '1d', count: int = 100) -> List[Dict[str, Any]]:
+    def get_kline_data(self, symbol: str, period: str = '1d', count: int = 100, start_time: Optional[int] = None, end_time: Optional[int] = None) -> List[Dict[str, Any]]:
         """Get kline/candlestick data for a symbol"""
         try:
             if not self.exchange:
@@ -60,17 +60,26 @@ class HyperliquidClient:
                 '15m': '15m',
                 '30m': '30m',
                 '1h': '1h',
+                '4h': '4h', # not sure
                 '1d': '1d',
             }
             timeframe = timeframe_map.get(period, '1d')
             
             # Fetch OHLCV data
-            ohlcv = self.exchange.fetch_ohlcv(formatted_symbol, timeframe, limit=count)
+            # If start_time is provided, use it as 'since'
+            since = start_time if start_time else None
+            
+            ohlcv = self.exchange.fetch_ohlcv(formatted_symbol, timeframe, since=since, limit=count)
             
             # Convert to our format
             klines = []
             for candle in ohlcv:
                 timestamp_ms = candle[0]
+                
+                # Filter by end_time if provided
+                if end_time and timestamp_ms > end_time:
+                    continue
+                    
                 open_price = candle[1]
                 high_price = candle[2]
                 low_price = candle[3]
@@ -195,9 +204,9 @@ def get_last_price_from_hyperliquid(symbol: str) -> Optional[float]:
     return hyperliquid_client.get_last_price(symbol)
 
 
-def get_kline_data_from_hyperliquid(symbol: str, period: str = '1d', count: int = 100) -> List[Dict[str, Any]]:
+def get_kline_data_from_hyperliquid(symbol: str, period: str = '1d', count: int = 100, start_time: Optional[int] = None, end_time: Optional[int] = None) -> List[Dict[str, Any]]:
     """Get kline data from Hyperliquid"""
-    return hyperliquid_client.get_kline_data(symbol, period, count)
+    return hyperliquid_client.get_kline_data(symbol, period, count, start_time, end_time)
 
 
 def get_market_status_from_hyperliquid(symbol: str) -> Dict[str, Any]:
