@@ -93,6 +93,18 @@ def setup_logging():
     search_handler.setFormatter(formatter)
     search_logger.addHandler(search_handler)
 
+    # 4. Docker Exec Logger (Independent file, no propagation)
+    docker_logger = logging.getLogger("docker_exec")
+    docker_logger.setLevel(logging.INFO)
+    docker_logger.propagate = False
+    
+    docker_log_file = os.path.join(log_dir, "docker_exec.log")
+    docker_handler = logging.handlers.TimedRotatingFileHandler(
+        docker_log_file, when="midnight", interval=1, backupCount=30, encoding="utf-8"
+    )
+    docker_handler.setFormatter(formatter)
+    docker_logger.addHandler(docker_handler)
+
     # Uvicorn loggers integration
     logging.getLogger("uvicorn").handlers = []
     logging.getLogger("uvicorn.access").handlers = []

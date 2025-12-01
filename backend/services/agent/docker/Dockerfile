@@ -11,8 +11,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     coreutils \
     grep \
     sed \
-    awk \
+    gawk \
     && rm -rf /var/lib/apt/lists/*
+
 
 # Set work directory
 WORKDIR /workspace

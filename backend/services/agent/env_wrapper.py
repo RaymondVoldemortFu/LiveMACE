@@ -43,11 +43,14 @@ def register_default_tools(registry, db: Session, account_id: int):
             }
         )
     )
-    """
+
+    # === 虚拟环境工具 (Docker) ===
+    container_service = ContainerService()
+
     registry.register(
         Tool(
             name="get_kline_history",
-            description="获取指定加密货币在指定时间范围内的K线数据。时间分辨率支持: 1m, 5m, 15m, 30m, 1h, 4h, 1d。",
+            description="获取指定加密货币在指定时间范围内的K线数据并保存到虚拟环境的文件中。返回文件路径和读取建议。",
             parameters={
                 "type": "object",
                 "properties": {
@@ -71,10 +74,11 @@ def register_default_tools(registry, db: Session, account_id: int):
                 },
                 "required": ["symbol", "interval", "start_time"]
             },
-            func=lambda symbol, interval, start_time, end_time=None: _get_kline_wrapper(symbol, interval, start_time, end_time)
+            func=lambda symbol, interval, start_time, end_time=None: _get_kline_and_save(
+                container_service, account_id, symbol, interval, start_time, end_time
+            )
         )
     )
-    """
 
     # === 账户工具 ===
     registry.register(
@@ -133,13 +137,10 @@ def register_default_tools(registry, db: Session, account_id: int):
         )
     )
 
-    # === 虚拟环境工具 (Docker) ===
-    container_service = ContainerService()
-
     registry.register(
         Tool(
             name="execute_shell_command",
-            description="在虚拟Linux环境中执行Shell命令。不支持交互式命令。返回(exit_code, output)。",
+            description="在虚拟Linux环境中执行Shell命令。返回(exit_code, output)。",
             parameters={
                 "type": "object",
                 "properties": {
@@ -212,6 +213,33 @@ def _run_python_helper(service, account_id, content):
     return {
         "exit_code": exit_code,
         "output": output
+    }
+
+
+def _get_kline_and_save(service, account_id, symbol, interval, start_time, end_time=None):
+    data = _get_kline_wrapper(symbol, interval, start_time, end_time)
+    
+    if isinstance(data, dict) and "error" in data:
+        return data
+    
+    import json
+    content = json.dumps(data, ensure_ascii=False, indent=2)
+    
+    # Generate filename
+    timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
+    filename = f"/workspace/kline_{symbol}_{interval}_{timestamp}.json"
+    
+    # Save to container
+    write_res = service.write_file(account_id, filename, content)
+    
+    if write_res != "Success":
+        return {"error": f"Failed to save K-line data to container: {write_res}"}
+        
+    return {
+        "status": "success",
+        "file_path": filename,
+        "message": f"K-line data saved to {filename}. You can use 'read_file' to view it (truncated) or 'run_python_script' to analyze it.",
+        "data_preview": str(data)[:200] + "..." # Show a small preview
     }
 
 

@@ -4,7 +4,7 @@ import os
 import tarfile
 import io
 from typing import Optional, Tuple
-from backend.config.agent_config import AgentConfig
+from config.agent_config import AgentConfig
 
 logger = logging.getLogger(__name__)
 
@@ -106,8 +106,15 @@ class ContainerService:
             stderr = exec_log.output[1] if exec_log.output[1] else b""
             
             output = stdout.decode('utf-8', errors='replace') + stderr.decode('utf-8', errors='replace')
+            
+            # Log execution details to docker_exec logger
+            docker_logger = logging.getLogger("docker_exec")
+            docker_logger.info(f"Account: {account_id} | Cmd: {cmd} | Exit: {exit_code} | Output:\n{output.strip()}")
+            
             return exit_code, output
         except Exception as e:
+            docker_logger = logging.getLogger("docker_exec")
+            docker_logger.error(f"Account: {account_id} | Cmd: {cmd} | Error: {str(e)}")
             return -1, str(e)
 
     def read_file(self, account_id: int, file_path: str) -> str:
@@ -171,4 +178,18 @@ class ContainerService:
             return "Success"
         except Exception as e:
             return f"Error writing file: {e}"
+
+    def shutdown(self):
+        """
+        Stops all active containers and cleans up resources.
+        """
+        logger.info("Shutting down ContainerService...")
+        for account_id, container in list(self.active_containers.items()):
+            try:
+                container.remove(force=True)
+                logger.info(f"Removed container {container.id[:12]} for account {account_id}")
+            except Exception as e:
+                logger.error(f"Failed to remove container for account {account_id}: {e}")
+        self.active_containers.clear()
+        logger.info("ContainerService shutdown complete.")
 

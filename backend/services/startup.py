@@ -10,6 +10,7 @@ from services.auto_trader import (
     AI_TRADE_JOB_ID
 )
 from services.scheduler import start_scheduler, setup_market_tasks, task_scheduler, start_margin_monitor
+from services.container_service import ContainerService
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +18,13 @@ logger = logging.getLogger(__name__)
 def initialize_services():
     """Initialize all services"""
     try:
+        # Initialize Docker Container Service
+        try:
+            ContainerService()
+            logger.info("Docker Container Service initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize Docker Container Service: {e}")
+
         # Start the scheduler
         start_scheduler()
         logger.info("Scheduler service started")
@@ -67,6 +75,14 @@ def shutdown_services():
     try:
         from services.scheduler import stop_scheduler
         stop_scheduler()
+        
+        # Shutdown Docker Container Service
+        try:
+            ContainerService().shutdown()
+            logger.info("Docker Container Service shutdown successfully")
+        except Exception as e:
+            logger.error(f"Failed to shutdown Docker Container Service: {e}")
+            
         logger.info("All services have been shut down")
         
     except Exception as e:
