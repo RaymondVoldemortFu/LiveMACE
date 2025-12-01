@@ -6,6 +6,7 @@ from repositories.position_repo import list_positions
 from repositories.account_repo import get_account
 from services.order_executor_leverage import place_and_execute_crypto
 from services.agent.sub_agents.search_agent import SearchSubAgent
+from services.container_service import ContainerService
 
 
 def map_operation_side(operation: str, direction: str):
@@ -42,7 +43,7 @@ def register_default_tools(registry, db: Session, account_id: int):
             }
         )
     )
-
+    """
     registry.register(
         Tool(
             name="get_kline_history",
@@ -73,6 +74,7 @@ def register_default_tools(registry, db: Session, account_id: int):
             func=lambda symbol, interval, start_time, end_time=None: _get_kline_wrapper(symbol, interval, start_time, end_time)
         )
     )
+    """
 
     # === 账户工具 ===
     registry.register(
@@ -130,6 +132,87 @@ def register_default_tools(registry, db: Session, account_id: int):
             func=lambda query, topic, time_range, search_depth="basic", max_results=5: search_agent.run(query, topic, time_range, search_depth, max_results)
         )
     )
+
+    # === 虚拟环境工具 (Docker) ===
+    container_service = ContainerService()
+
+    registry.register(
+        Tool(
+            name="execute_shell_command",
+            description="在虚拟Linux环境中执行Shell命令。不支持交互式命令。返回(exit_code, output)。",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string", "description": "要执行的Shell命令"}
+                },
+                "required": ["command"]
+            },
+            func=lambda command: container_service.execute_command(account_id, command)
+        )
+    )
+
+    registry.register(
+        Tool(
+            name="read_file",
+            description="读取虚拟环境中的文件内容。内容长度受限。",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string", "description": "文件绝对路径"}
+                },
+                "required": ["file_path"]
+            },
+            func=lambda file_path: container_service.read_file(account_id, file_path)
+        )
+    )
+
+    registry.register(
+        Tool(
+            name="write_file",
+            description="向虚拟环境中的文件写入内容。如果文件不存在会自动创建，如果目录不存在也会创建。",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string", "description": "文件绝对路径"},
+                    "content": {"type": "string", "description": "写入的内容"}
+                },
+                "required": ["file_path", "content"]
+            },
+            func=lambda file_path, content: container_service.write_file(account_id, file_path, content)
+        )
+    )
+
+    registry.register(
+        Tool(
+            name="run_python_script",
+            description="在虚拟环境中运行Python脚本。会自动保存为临时文件并执行。",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "script_content": {"type": "string", "description": "Python脚本内容"}
+                },
+                "required": ["script_content"]
+            },
+            func=lambda script_content: _run_python_helper(container_service, account_id, script_content)
+        )
+    )
+
+
+def _run_python_helper(service, account_id, content):
+    # Save to a temporary file
+    timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
+    filename = f"/tmp/script_{timestamp}.py"
+    write_res = service.write_file(account_id, filename, content)
+    
+    # Simple check, though write_file returns "Success" or error msg
+    if write_res != "Success":
+        return {"error": f"Failed to write script: {write_res}"}
+    
+    exit_code, output = service.execute_command(account_id, f"python3 {filename}")
+    return {
+        "exit_code": exit_code,
+        "output": output
+    }
 
 
 def _serialize_account(account):

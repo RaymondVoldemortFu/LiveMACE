@@ -19,6 +19,7 @@ from services.agent.core import *
 from services.agent.env_wrapper import *
 from services.agent.llm_client import *
 from services.agent.tools import *
+from services.container_service import ContainerService
 
 
 logger = logging.getLogger(__name__)
@@ -395,6 +396,10 @@ def call_agent_for_decision(
         logger.info(f"Skipping AI trading for account {account.name} - using default API key")
         return None
 
+    # Lease a container for the agent session
+    container_service = ContainerService()
+    container_service.lease_container(account.id)
+
     try:
         llm = LLMClient(
             model=account.model,
@@ -416,3 +421,6 @@ def call_agent_for_decision(
     except Exception as e:
         logger.error(f"call_agent_for_decision failed: {e}", exc_info=True)
         return None
+    finally:
+        # Always release the container
+        container_service.release_container(account.id)
