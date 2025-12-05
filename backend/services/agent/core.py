@@ -2,6 +2,7 @@
 import re
 import json
 import logging
+from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List, Callable, Optional
 from .llm_client import LLMClient
 from .tools import ToolRegistry
@@ -36,8 +37,15 @@ class TradingAgent:
         agent_logger.info(f"Portfolio: {json.dumps(portfolio, ensure_ascii=False)}")
         agent_logger.info(f"Prices: {json.dumps(prices, ensure_ascii=False)}")
 
+        # Get current UTC+8 time
+        tz_utc_8 = timezone(timedelta(hours=8))
+        current_time = datetime.now(tz_utc_8).strftime("%Y-%m-%d %H:%M:%S")
+        
+        # Add time context to system prompt
+        system_prompt_with_time = f"{SYSTEM_PROMPT}\n\nCurrent Time (UTC+8): {current_time}"
+
         messages: List[Dict[str, Any]] = [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt_with_time},
             {
                 "role": "user",
                 "content": json.dumps(
