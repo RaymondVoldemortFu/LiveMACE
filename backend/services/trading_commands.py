@@ -173,7 +173,7 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
                     save_ai_decision(db, account, decision, portfolio, executed=False)
                     continue
 
-                if target_portion <= 0 or target_portion > 1:
+                if target_portion < 0 or target_portion > 1:
                     logger.warning(f"Invalid target_portion {target_portion} from AI for {account.name}, skipping")
                     _log_trade_execution(operation, symbol, target_portion, price, leverage, False, f"Invalid target_portion: {target_portion}")
                     save_ai_decision(db, account, decision, portfolio, executed=False)
@@ -247,8 +247,15 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
                     else:
                         position_quantity = float(position.available_quantity)
                     
-                    # Calculate quantity to close (support fractional for crypto)
-                    quantity = position_quantity * target_portion
+                    # Calculate quantity to close
+                    # If target_portion is 0.0, it means CLOSE EVERYTHING (Target is 0%)
+                    if target_portion == 0.0:
+                        quantity = position_quantity
+                    else:
+                        # For now, interpret target_portion as "ratio of position to close" if > 0
+                        # This is a temporary behavior to support partial closes until full target-balance logic is implemented
+                        # TODO: Implement full target-balance logic for partial closes
+                        quantity = position_quantity * target_portion
                     
                     # Round to reasonable precision (6 decimal places for crypto)
                     quantity = round(quantity, 6)
