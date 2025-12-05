@@ -105,6 +105,18 @@ def setup_logging():
     docker_handler.setFormatter(formatter)
     docker_logger.addHandler(docker_handler)
 
+    # 5. Trade Execution Logger (Independent file, no propagation)
+    trade_logger = logging.getLogger("trade_execution")
+    trade_logger.setLevel(logging.INFO)
+    trade_logger.propagate = False
+    
+    trade_log_file = os.path.join(log_dir, "trade_execution.log")
+    trade_handler = logging.handlers.TimedRotatingFileHandler(
+        trade_log_file, when="midnight", interval=1, backupCount=30, encoding="utf-8"
+    )
+    trade_handler.setFormatter(formatter)
+    trade_logger.addHandler(trade_handler)
+
     # Uvicorn loggers integration
     logging.getLogger("uvicorn").handlers = []
     logging.getLogger("uvicorn.access").handlers = []

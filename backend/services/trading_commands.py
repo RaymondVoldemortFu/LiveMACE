@@ -26,8 +26,25 @@ from config.agent_config import AgentConfig
 
 
 logger = logging.getLogger(__name__)
+trade_logger = logging.getLogger("trade_execution")
 
 AI_TRADING_SYMBOLS: List[str] = ["BTC", "ETH", "SOL", "BNB", "XRP", "DOGE"]
+
+
+def _log_trade_execution(operation: str, symbol: str, target_portion: float, price: float, leverage: int, executed: bool, reason: str = ""):
+    """Log trade execution details to specific trade logger"""
+    status = "Yes" if executed else "No"
+    op_str = operation.upper()
+    price_str = f"${price:.2f}" if price else "N/A"
+    
+    # Format: ACTION SYMBOL PORTION PRICE LEVERAGE EXECUTED - REASON
+    # Matching user example: CLOSE BTC 28.66% ... 
+    msg = f"{op_str:<6} {symbol:<5} {target_portion:.2%} {price_str} {leverage}x {status}"
+    
+    if not executed:
+        msg += f" - Reason: {reason}"
+        
+    trade_logger.info(msg)
 
 
 def _get_market_prices(symbols: List[str]) -> Dict[str, float]:
@@ -126,42 +143,46 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
 
                 logger.info(f"AI decision for {account.name}: {operation} {symbol} {direction} (portion: {target_portion:.2%}) - {reason}")
 
+                # Get current price early for logging
+                price = prices.get(symbol, 0.0)
+                leverage = int(decision.get("leverage", 1)) or 1
+
                 # Validate decision
                 if operation not in ["open", "close", "hold"]:
                     logger.warning(f"Invalid operation '{operation}' from AI for {account.name}, skipping")
-                    # Save invalid decision for debugging
+                    _log_trade_execution(operation, symbol, target_portion, price, leverage, False, f"Invalid operation: {operation}")
                     save_ai_decision(db, account, decision, portfolio, executed=False)
                     continue
                 
                 if operation == "hold":
                     logger.info(f"AI decided to HOLD for {account.name}")
+                    _log_trade_execution(operation, symbol, target_portion, price, leverage, True, reason)
                     # Save hold decision
                     save_ai_decision(db, account, decision, portfolio, executed=True)
                     continue
 
                 if symbol not in SUPPORTED_SYMBOLS:
                     logger.warning(f"Invalid symbol '{symbol}' from AI for {account.name}, skipping")
-                    # Save invalid decision for debugging
+                    _log_trade_execution(operation, symbol, target_portion, price, leverage, False, f"Invalid symbol: {symbol}")
                     save_ai_decision(db, account, decision, portfolio, executed=False)
                     continue
                 
                 if direction not in ["long", "short"]:
                     logger.warning(f"Invalid direction '{direction}' from AI for {account.name}, skipping")
-                    # Save invalid decision for debugging
+                    _log_trade_execution(operation, symbol, target_portion, price, leverage, False, f"Invalid direction: {direction}")
                     save_ai_decision(db, account, decision, portfolio, executed=False)
                     continue
 
                 if target_portion <= 0 or target_portion > 1:
                     logger.warning(f"Invalid target_portion {target_portion} from AI for {account.name}, skipping")
-                    # Save invalid decision for debugging
+                    _log_trade_execution(operation, symbol, target_portion, price, leverage, False, f"Invalid target_portion: {target_portion}")
                     save_ai_decision(db, account, decision, portfolio, executed=False)
                     continue
 
-                # Get current price
-                price = prices.get(symbol)
-                if not price or price <= 0:
+                # Check price validity
+                if price <= 0:
                     logger.warning(f"Invalid price for {symbol} for {account.name}, skipping")
-                    # Save decision with execution failure
+                    _log_trade_execution(operation, symbol, target_portion, price, leverage, False, "Invalid/Missing price")
                     save_ai_decision(db, account, decision, portfolio, executed=False)
                     continue
 
@@ -176,6 +197,7 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
                     
                     if existing_position and float(existing_position.quantity) > 0:
                         logger.warning(f"Cannot open {direction} position on {symbol} - already have a {existing_position.side} position. Only ONE position per coin allowed. Close existing position first.")
+                        _log_trade_execution(operation, symbol, target_portion, price, leverage, False, f"Position exists: {existing_position.side}")
                         save_ai_decision(db, account, decision, portfolio, executed=False)
                         continue
                     
@@ -190,7 +212,7 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
                     
                     if quantity <= 0:
                         logger.info(f"Calculated {direction.upper()} quantity <= 0 for {symbol} for {account.name}, skipping")
-                        # Save decision with execution failure
+                        _log_trade_execution(operation, symbol, target_portion, price, leverage, False, "Calculated quantity <= 0")
                         save_ai_decision(db, account, decision, portfolio, executed=False)
                         continue
                     
@@ -207,7 +229,7 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
                     
                     if not position or float(position.quantity) <= 0:
                         logger.warning(f"No position available to close for {symbol} for {account.name}, skipping")
-                        # Save decision with execution failure
+                        _log_trade_execution(operation, symbol, target_portion, price, leverage, False, "No position to close")
                         save_ai_decision(db, account, decision, portfolio, executed=False)
                         continue
                     
@@ -215,6 +237,7 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
                     position_side = (position.side or "LONG").lower()
                     if position_side != direction:
                         logger.warning(f"Cannot close {direction} position on {symbol} - current position is {position_side.upper()}. Direction mismatch!")
+                        _log_trade_execution(operation, symbol, target_portion, price, leverage, False, f"Direction mismatch: {direction} vs {position_side}")
                         save_ai_decision(db, account, decision, portfolio, executed=False)
                         continue
                     
@@ -235,6 +258,7 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
                     
                     if quantity <= 0:
                         logger.info(f"Calculated close quantity <= 0 for {symbol} for {account.name}, skipping")
+                        _log_trade_execution(operation, symbol, target_portion, price, leverage, False, "Calculated quantity <= 0")
                         save_ai_decision(db, account, decision, portfolio, executed=False)
                         continue
                     
@@ -244,12 +268,12 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
                 else:
                     continue
 
-                leverage = int(decision.get("leverage", 1)) or 1
                 # Create and execute order using leverage-aware function
                 name = SUPPORTED_SYMBOLS[symbol]
                 
                 order = None
                 executed = False
+                fail_reason = ""
                 try:
                     order = place_and_execute_crypto(
                         db=db,
@@ -267,9 +291,13 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
                         f"✅ AI order executed: account={account.name} {operation.upper()} {direction.upper()} {side} {symbol} {order.order_no} quantity={quantity} leverage={leverage}x reason='{reason}'"
                     )
                     executed = True
+                    _log_trade_execution(operation, symbol, target_portion, price, leverage, True, reason)
+
                 except Exception as e:
                     logger.error(f"Failed to execute order for {account.name}: {e}")
                     executed = False
+                    fail_reason = str(e)
+                    _log_trade_execution(operation, symbol, target_portion, price, leverage, False, f"Execution failed: {fail_reason}")
                 
                 # Save decision with final execution status (only called once)
                 order_id = order.id if order else None
