@@ -63,6 +63,9 @@ You can call the following tools to retrieve data, manage the virtual environmen
 - get_account_state  
   Read the current account funding state and all open positions.
 
+- get_history_decisions
+  Get the recent trading decision history for this account to understand past actions and reasoning
+
 - consult_search_agent  
   Use a search sub-agent to perform web/news queries.
   Use it for: crypto/project news, macro data, regulatory news, funding events, sentiment, and any other external information.

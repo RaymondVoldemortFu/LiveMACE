@@ -21,6 +21,7 @@ from services.agent.core import *
 from services.agent.env_wrapper import *
 from services.agent.llm_client import *
 from services.agent.tools import *
+from services.agent.history_tool import HistoryTool
 from services.container_service import ContainerService
 
 
@@ -456,6 +457,9 @@ def call_agent_for_decision(
 
         registry = ToolRegistry()
         register_default_tools(registry, db, account.id)
+        
+        # Register the new history tool
+        registry.register(HistoryTool(db, account.id))
 
         logger.info(f"Initiating agent decision for account: {account.name} (ID: {account.id})")
         agent = TradingAgent(llm=llm, tools=registry, max_steps=AgentConfig.MAX_STEPS)
