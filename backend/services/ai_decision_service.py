@@ -11,7 +11,9 @@ from typing import Dict, Optional, List
 import requests
 from sqlalchemy.orm import Session
 
-from database.models import Position, Account, AIDecisionLog
+from database.models import Position, Account, AIDecisionLog, AgentTrace
+import uuid
+import asyncio
 from services.asset_calculator import calc_positions_value
 from services.news_feed import fetch_latest_news
 
@@ -319,6 +321,7 @@ def save_ai_decision(db: Session, account: Account, decision: Dict, portfolio: D
         symbol = symbol_raw.upper() if symbol_raw else None
         target_portion = float(decision.get("target_portion_of_balance", 0)) if decision.get("target_portion_of_balance") is not None else 0.0
         reason = decision.get("reason", "No reason provided")
+        trace_id = decision.get("trace_id")
 
         # Calculate previous portion for the symbol
         prev_portion = 0.0
@@ -349,7 +352,8 @@ def save_ai_decision(db: Session, account: Account, decision: Dict, portfolio: D
             total_balance=Decimal(str(portfolio["total_assets"])),
             executed="true" if executed else "false",
             order_id=order_id,
-            leverage=leverage_val
+            leverage=leverage_val,
+            trace_id=trace_id
         )
 
         db.add(decision_log)
@@ -400,6 +404,49 @@ def call_agent_for_decision(
     container_service = ContainerService()
     container_service.lease_container(account.id)
 
+    trace_id = str(uuid.uuid4())
+    step_counter = 0
+
+    def on_step(message: Dict[str, Any]):
+        nonlocal step_counter
+        step_counter += 1
+        try:
+            role = message.get("role", "unknown")
+            content = message.get("content")
+            
+            # Handle tool calls serialization
+            tool_calls_data = message.get("tool_calls")
+            tool_calls_str = None
+            if tool_calls_data:
+                tool_calls_list = []
+                for t in tool_calls_data:
+                    if hasattr(t, "model_dump"):
+                        tool_calls_list.append(t.model_dump())
+                    elif hasattr(t, "dict"):
+                         tool_calls_list.append(t.dict())
+                    else:
+                        tool_calls_list.append(str(t))
+                tool_calls_str = json.dumps(tool_calls_list, ensure_ascii=False)
+
+            # For tool output, content is the output
+            tool_output_str = None
+            if role == "tool":
+                tool_output_str = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
+
+            trace = AgentTrace(
+                trace_id=trace_id,
+                account_id=account.id,
+                step_number=step_counter,
+                role=role,
+                content=str(content) if content is not None else None,
+                tool_calls=tool_calls_str,
+                tool_output=tool_output_str
+            )
+            db.add(trace)
+            db.commit()
+        except Exception as e:
+            logger.error(f"Failed to save agent trace: {e}")
+
     try:
         llm = LLMClient(
             model=account.model,
@@ -413,7 +460,10 @@ def call_agent_for_decision(
         logger.info(f"Initiating agent decision for account: {account.name} (ID: {account.id})")
         agent = TradingAgent(llm=llm, tools=registry, max_steps=AgentConfig.MAX_STEPS)
 
-        decision = agent.run(portfolio=portfolio, prices=prices)
+        decision = agent.run(portfolio=portfolio, prices=prices, on_step=on_step)
+
+        if decision:
+            decision["trace_id"] = trace_id
 
         logger.info(f"Agent decision for {account.name}: {decision}")
         return decision

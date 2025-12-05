@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { PieChart, Settings, TrendingUp, BarChart3 } from 'lucide-react'
+import { useState } from 'react'
+import { PieChart, Settings, TrendingUp, BarChart3, Bot } from 'lucide-react'
 import SettingsDialog from './SettingsDialog'
 
 interface SidebarProps {
@@ -41,6 +41,18 @@ export default function Sidebar({ currentPage = 'comprehensive', onPageChange, o
           </button>
 
           <button
+            className={`flex items-center justify-center w-10 h-10 rounded-lg transition-colors ${
+              currentPage === 'agent-status'
+                ? 'bg-secondary/80 text-secondary-foreground'
+                : 'hover:bg-muted text-muted-foreground'
+            }`}
+            onClick={() => onPageChange?.('agent-status')}
+            title="Agent Status"
+          >
+            <Bot className="w-5 h-5" />
+          </button>
+
+          <button
             className="flex items-center justify-center w-10 h-10 rounded-lg hover:bg-muted transition-colors text-muted-foreground"
             onClick={() => setSettingsOpen(true)}
             title="Settings"
@@ -61,7 +73,7 @@ export default function Sidebar({ currentPage = 'comprehensive', onPageChange, o
             title="Open Alpha Arena"
           >
             <BarChart3 className="w-5 h-5" />
-            <span className="text-xs mt-1">Open Alpha Arena</span>
+            <span className="text-xs mt-1">Arena</span>
           </button>
           <button
             className={`flex flex-col items-center justify-center w-12 h-12 rounded-lg transition-colors ${
@@ -74,6 +86,18 @@ export default function Sidebar({ currentPage = 'comprehensive', onPageChange, o
           >
             <PieChart className="w-5 h-5" />
             <span className="text-xs mt-1">Portfolio</span>
+          </button>
+           <button
+            className={`flex flex-col items-center justify-center w-12 h-12 rounded-lg transition-colors ${
+              currentPage === 'agent-status'
+                ? 'bg-secondary/80 text-secondary-foreground'
+                : 'hover:bg-muted text-muted-foreground'
+            }`}
+            onClick={() => onPageChange?.('agent-status')}
+            title="Agent Status"
+          >
+            <Bot className="w-5 h-5" />
+            <span className="text-xs mt-1">Agent</span>
           </button>
           <button
             className={`flex flex-col items-center justify-center w-12 h-12 rounded-lg transition-colors ${

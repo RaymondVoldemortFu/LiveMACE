@@ -236,11 +236,29 @@ class AIDecisionLog(Base):
     executed = Column(String(10), nullable=False, default="false")  # whether the decision was executed
     order_id = Column(Integer, ForeignKey("orders.id"), nullable=True)  # linked order if executed
     leverage = Column(Integer, nullable=False, default=1)
+    trace_id = Column(String(36), nullable=True)  # UUID for linking to detailed traces
     created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
 
     # Relationships
     account = relationship("Account")
     order = relationship("Order")
+
+
+class AgentTrace(Base):
+    """Detailed execution trace of the agent"""
+    __tablename__ = "agent_traces"
+
+    id = Column(Integer, primary_key=True, index=True)
+    trace_id = Column(String(36), nullable=False, index=True)  # Shared ID for a session
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False)
+    step_number = Column(Integer, nullable=False)
+    role = Column(String(20), nullable=False)  # user, assistant, tool, system
+    content = Column(String(50000), nullable=True)  # Large text content
+    tool_calls = Column(String(50000), nullable=True)  # JSON string
+    tool_output = Column(String(50000), nullable=True)  # JSON string
+    created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
+
+    account = relationship("Account")
 
 
 # CRYPTO market trading configuration constants

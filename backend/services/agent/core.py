@@ -2,7 +2,7 @@
 import re
 import json
 import logging
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Callable, Optional
 from .llm_client import LLMClient
 from .tools import ToolRegistry
 from config.agent_config import AgentConfig
@@ -21,11 +21,12 @@ class TradingAgent:
         self.tools = tools
         self.max_steps = max_steps
 
-    def run(self, portfolio: Dict[str, Any], prices: Dict[str, float]) -> Dict[str, Any]:
+    def run(self, portfolio: Dict[str, Any], prices: Dict[str, float], on_step: Optional[Callable[[Dict], None]] = None) -> Dict[str, Any]:
         """
         输入:
             portfolio: 和原 call_ai_for_decision 中一致的结构
             prices: symbol -> price 的字典
+            on_step: Optional callback function called after each step with the message dict
         输出:
             与原先 call_ai_for_decision 返回值同结构的决策 dict
         """
@@ -81,6 +82,8 @@ class TradingAgent:
 
             # Important: Add assistant response to history
             messages.append(resp_dict)
+            if on_step:
+                on_step(resp_dict)
 
             tool_calls = resp.tool_calls
             content = resp.content
@@ -111,14 +114,15 @@ class TradingAgent:
                     # Log tool result
                     agent_logger.info(f"Tool '{name}' result: {json.dumps(result, ensure_ascii=False)}")
 
-                    messages.append(
-                        {
-                            "role": "tool",
-                            "tool_call_id": tc.id,
-                            "name": name,
-                            "content": json.dumps(result, ensure_ascii=False),
-                        }
-                    )
+                    tool_msg = {
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "name": name,
+                        "content": json.dumps(result, ensure_ascii=False),
+                    }
+                    messages.append(tool_msg)
+                    if on_step:
+                        on_step(tool_msg)
                 continue
 
             # 2) 没有工具调用，视为最终决策，尝试解析 JSON

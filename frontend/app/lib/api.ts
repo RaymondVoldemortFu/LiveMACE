@@ -285,3 +285,41 @@ export const deleteAIAccount = (id: number) => {
   console.warn("deleteAIAccount is deprecated. Use default mode or new trading account APIs.")
   return Promise.resolve()
 }
+
+// Agent Trace API
+export interface AgentStep {
+  step_number: number
+  role: string
+  content: string | null
+  tool_calls: any | null
+  tool_output: any | null
+  created_at: string
+}
+
+export interface AgentTrace {
+  trace_id: string
+  steps: AgentStep[]
+}
+
+export async function getLatestTraceId(accountId: number): Promise<{ trace_id: string | null }> {
+  const response = await apiRequest(`/agent/latest/${accountId}`)
+  return response.json()
+}
+
+export async function getAgentTrace(traceId: string): Promise<AgentTrace> {
+  const response = await apiRequest(`/agent/trace/${traceId}`)
+  return response.json()
+}
+
+export interface TraceSummary {
+  trace_id: string
+  timestamp: string
+  operation: string
+  symbol: string | null
+  reason: string
+}
+
+export async function getTraceHistory(accountId: number): Promise<TraceSummary[]> {
+  const response = await apiRequest(`/agent/history/${accountId}`)
+  return response.json()
+}

@@ -17,6 +17,7 @@ import Header from '@/components/layout/Header'
 import Sidebar from '@/components/layout/Sidebar'
 import Portfolio from '@/components/portfolio/Portfolio'
 import ComprehensiveView from '@/components/portfolio/ComprehensiveView'
+import AgentStatusView from '@/components/agent/AgentStatusView'
 import { AIDecision, getAccounts } from '@/lib/api'
 
 interface User {
@@ -308,6 +309,10 @@ function App() {
             accounts={accounts}
             loadingAccounts={accountsLoading}
           />
+        )}
+        
+        {currentPage === 'agent-status' && (
+          <AgentStatusView accounts={accounts} />
         )}
       </main>
     )
