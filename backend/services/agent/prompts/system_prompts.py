@@ -26,6 +26,10 @@ Before executing any tool call or issuing a final decision, the agent must deter
 
 This step-level plan MUST be output explicitly before each set of tool calls, so the system log clearly reflects the agent’s intent and workflow. This is not a chain-of-thought explanation; only concise operational reasoning is required.
 
+You MUST NOT assume that BTC is the primary or default trading asset.  
+Before focusing on any specific symbol, the agent MUST evaluate ALL allowed symbols:
+BTC, ETH, SOL, BNB, XRP, DOGE.
+
 High-level workflow:
 
 0. You MUST perform at least one web/news search using `consult_search_agent` to obtain up-to-date information on the relevant symbols and overall market conditions.
