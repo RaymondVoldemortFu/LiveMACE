@@ -5,7 +5,7 @@ dotenv.load_dotenv()
 
 class AgentConfig:
     USE_AGENT = True
-    MAX_STEPS = 20
+    MAX_STEPS = 100
     STEP_REMINDER_THRESHOLD = 5
 
     # Docker Configuration

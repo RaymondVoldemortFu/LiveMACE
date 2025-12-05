@@ -97,19 +97,23 @@ class ContainerService:
         try:
             # cmd should be a string or list. 
             # To support shell features (pipes, etc.), run with bash -c
+            # Use -u for python to prevent buffering, but also generally capture output
+            # demux=False to merge stdout and stderr for a complete shell response
             exec_log = container.exec_run(
                 ["/bin/bash", "-c", cmd],
-                demux=True # Return (stdout, stderr)
+                demux=False
             )
             exit_code = exec_log.exit_code
-            stdout = exec_log.output[0] if exec_log.output[0] else b""
-            stderr = exec_log.output[1] if exec_log.output[1] else b""
             
-            output = stdout.decode('utf-8', errors='replace') + stderr.decode('utf-8', errors='replace')
+            # Output is bytes when demux=False
+            output = exec_log.output.decode('utf-8', errors='replace') if exec_log.output else ""
             
             # Log execution details to docker_exec logger
             docker_logger = logging.getLogger("docker_exec")
-            docker_logger.info(f"Account: {account_id} | Cmd: {cmd} | Exit: {exit_code} | Output:\n{output.strip()}")
+            if output.strip():
+                 docker_logger.info(f"Account: {account_id} | Cmd: {cmd} | Exit: {exit_code} | Output:\n{output.strip()}")
+            else:
+                 docker_logger.info(f"Account: {account_id} | Cmd: {cmd} | Exit: {exit_code} | Output: (Empty)")
             
             return exit_code, output
         except Exception as e:

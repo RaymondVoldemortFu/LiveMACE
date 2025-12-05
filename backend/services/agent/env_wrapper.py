@@ -186,11 +186,11 @@ def register_default_tools(registry, db: Session, account_id: int):
     registry.register(
         Tool(
             name="run_python_script",
-            description="在虚拟环境中运行Python脚本。会自动保存为临时文件并执行。",
+            description="在虚拟环境中运行Python脚本。会自动保存为临时文件并执行。\n重要提示：脚本必须使用 print() 函数输出结果，否则将看不到任何输出。脚本不会像REPL那样自动打印最后一行表达式的值。",
             parameters={
                 "type": "object",
                 "properties": {
-                    "script_content": {"type": "string", "description": "Python脚本内容"}
+                    "script_content": {"type": "string", "description": "Python脚本内容。务必包含 print() 语句来输出分析结果。"}
                 },
                 "required": ["script_content"]
             },
@@ -200,19 +200,61 @@ def register_default_tools(registry, db: Session, account_id: int):
 
 
 def _run_python_helper(service, account_id, content):
-    # Save to a temporary file
+    # Save to workspace
     timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
-    filename = f"/tmp/script_{timestamp}.py"
-    write_res = service.write_file(account_id, filename, content)
+    filename = f"script_{timestamp}.py"
+    filepath = f"/workspace/{filename}"
+    
+    write_res = service.write_file(account_id, filepath, content)
     
     # Simple check, though write_file returns "Success" or error msg
     if write_res != "Success":
         return {"error": f"Failed to write script: {write_res}"}
     
-    exit_code, output = service.execute_command(account_id, f"python3 {filename}")
+    # Use python3 -u for unbuffered output to ensure stdout is captured
+    # Run in /workspace directory
+    # We want to capture the output of the script, so we don't need to be too fancy with the shell command
+    # but we do need to make sure the script runs.
+    cmd = f"cd /workspace && python3 -u {filename}"
+    
+    exit_code, output = service.execute_command(account_id, cmd)
+    
+    # Fallback: if output is empty and exit code is 0, it might be that the script didn't print anything.
+    # But looking at the user's log, the script ends with "analysis_result", which in a python shell would print,
+    # but in a script execution (python file.py) does NOT print anything unless printed explicitly.
+    # We should wrap the user content to ensure the last expression is printed if it's not a print statement?
+    # Or better, just tell the user (agent) via system prompt or tool description that they must print() the result.
+    # However, to be helpful, if the output is empty, we can check if the file exists and maybe cat it? No.
+    
+    # Let's try to capture the result by modifying how we run it? 
+    # No, simplicity is better. The issue is likely that the agent wrote a script that *returns* a value
+    # (like the last line `analysis_result`) but didn't `print()` it.
+    # Python scripts don't output the last expression like a REPL.
+    # We can auto-wrap the content? 
+    # Actually, looking at the log:
+    # `analysis_result = {...} \n analysis_result` -> This does NOTHING in a .py file.
+    
+    # Solution: We should modify the tool description to explicitly say "You must print() the final result to see it."
+    # AND/OR we can try to be smart and wrap the last line in print() if it looks like an expression? 
+    # Too risky. 
+    
+    # Alternative: Run it as `python3 -c "exec(open('filename').read()); print(locals().get('analysis_result', ''))"`? 
+    # Too complex.
+    
+    # BEST FIX: Update tool description to remind the Agent to PRINT the output.
+    # AND for the current execution, we can't easily "fix" the user's logic without parsing python.
+    
+    # However, the user asked to "fix all possible issues". 
+    # One issue is definitely that `python3 script.py` doesn't print the last expression.
+    # Let's try to append a print statement if we can detect it's missing?
+    # No, that's hard.
+    
+    # Let's just ensure we capture EVERYTHING by redirecting stderr to stdout (already done by demux=False if working, or by 2>&1).
+    # Docker's exec_run with demux=False should combine them.
+    
     return {
         "exit_code": exit_code,
-        "output": output
+        "output": output if output.strip() else "(No output captured. Did you forget to print() the result?)"
     }
 
 
