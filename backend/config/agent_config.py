@@ -5,6 +5,7 @@ dotenv.load_dotenv()
 
 class AgentConfig:
     USE_AGENT = True
+    AGENT_TYPE = "react"  # default agent architecture
     MAX_STEPS = 100
     STEP_REMINDER_THRESHOLD = 5
 

@@ -37,7 +37,8 @@ class TaskScheduler:
     def shutdown(self):
         """Shutdown the scheduler"""
         if self.scheduler and self.scheduler.running:
-            self.scheduler.shutdown()
+            # wait=False ensures we don't block shutdown waiting for tasks to finish
+            self.scheduler.shutdown(wait=False)
             self._started = False
             logger.info("Scheduler shutdown")
     
@@ -538,48 +539,51 @@ def _ensure_market_data_ready() -> None:
 
 def reset_auto_trading_job():
     """Reset the auto trading job after account configuration changes"""
-    try:
-        # Import constants from auto_trader module
-        from services.auto_trader import AI_TRADE_JOB_ID
-        from services.trading_commands import place_ai_driven_crypto_order
-        
-        # Define interval (5 minutes)
-        AI_TRADE_INTERVAL_SECONDS = 300
-        
-        # Ensure market data is ready before scheduling trading tasks
-        _ensure_market_data_ready()
+    # Import constants from auto_trader module
+    from services.auto_trader import AI_TRADE_JOB_ID
+    from services.trading_commands import place_ai_driven_crypto_order
+    import threading
+    
+    # Define interval (5 minutes)
+    AI_TRADE_INTERVAL_SECONDS = 300
 
-        # Ensure scheduler is started
-        if not task_scheduler.is_running():
-            task_scheduler.start()
-            logger.info("Started scheduler for auto trading job reset")
+    def _setup_job_async():
+        try:
+            # Ensure market data is ready before scheduling trading tasks
+            # This can take time, so we do it in this background thread
+            _ensure_market_data_ready()
 
-        # Remove existing auto trading job if it exists
-        if task_scheduler.scheduler and task_scheduler.scheduler.get_job(AI_TRADE_JOB_ID):
-            task_scheduler.remove_task(AI_TRADE_JOB_ID)
-            logger.info(f"Removed existing auto trading job: {AI_TRADE_JOB_ID}")
-        
-        # Re-add the auto trading job with updated configuration
-        task_scheduler.add_interval_task(
-            task_func=lambda: place_ai_driven_crypto_order(max_ratio=0.2),
-            interval_seconds=AI_TRADE_INTERVAL_SECONDS,
-            task_id=AI_TRADE_JOB_ID
-        )
-        
-        # Trigger one immediate execution in background so API calls don't block
-        import threading
-        def _run_once():
+            # Ensure scheduler is started
+            if not task_scheduler.is_running():
+                task_scheduler.start()
+                logger.info("Started scheduler for auto trading job reset")
+
+            # Remove existing auto trading job if it exists
+            if task_scheduler.scheduler and task_scheduler.scheduler.get_job(AI_TRADE_JOB_ID):
+                task_scheduler.remove_task(AI_TRADE_JOB_ID)
+                logger.info(f"Removed existing auto trading job: {AI_TRADE_JOB_ID}")
+            
+            # Re-add the auto trading job with updated configuration
+            task_scheduler.add_interval_task(
+                task_func=lambda: place_ai_driven_crypto_order(max_ratio=0.2),
+                interval_seconds=AI_TRADE_INTERVAL_SECONDS,
+                task_id=AI_TRADE_JOB_ID
+            )
+            
+            # Trigger one immediate execution
             try:
-                logger.info("Triggering immediate AI trade after account save/update")
+                logger.info("Triggering immediate AI trade after setup")
                 place_ai_driven_crypto_order(max_ratio=0.2)
             except Exception as run_err:
                 logger.error(f"Immediate AI trade failed: {run_err}")
-        threading.Thread(target=_run_once, name="ai_trade_run_once", daemon=True).start()
 
-        # Log current jobs for verification
-        jobs = task_scheduler.get_job_info()
-        logger.info(f"Auto trading job reset successfully - interval: {AI_TRADE_INTERVAL_SECONDS}s; Jobs: {jobs}")
-        
-    except Exception as e:
-        logger.error(f"Failed to reset auto trading job: {e}")
-        raise
+            # Log current jobs for verification
+            jobs = task_scheduler.get_job_info()
+            logger.info(f"Auto trading job reset successfully - interval: {AI_TRADE_INTERVAL_SECONDS}s; Jobs: {jobs}")
+
+        except Exception as e:
+            logger.error(f"Failed to reset auto trading job in background: {e}")
+
+    # Start the setup in a daemon thread so it doesn't block startup or request handling
+    threading.Thread(target=_setup_job_async, name="auto_trade_setup", daemon=True).start()
+    logger.info("Initiated background auto trading job reset")

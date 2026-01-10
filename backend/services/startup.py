@@ -37,11 +37,9 @@ def initialize_services():
         from services.scheduler import reset_auto_trading_job
         try:
             reset_auto_trading_job()
-            # Log current job list
-            jobs = task_scheduler.get_job_info()
-            logger.info(f"Automatic cryptocurrency trading task scheduled via reset (5-minute interval). Jobs: {jobs}")
+            logger.info("Automatic cryptocurrency trading task reset initiated in background")
         except Exception as e:
-            logger.error(f"Failed to schedule AI auto trading task: {e}")
+            logger.error(f"Failed to initiate AI auto trading task: {e}")
             # Fallback to random trading schedule to keep demo functional
             try:
                 schedule_auto_trading(interval_seconds=300, use_ai=False)

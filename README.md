@@ -50,16 +50,16 @@ Open:
 - Frontend: http://localhost:5621
 - Backend WS: ws://localhost:5611/ws
 
-Important: The frontend source is currently configured for port  5621. To use the workspace defaults (5611), update the following in frontend/app/main.tsx:
+Important: The frontend source is currently configured for port 5621. To use the workspace defaults (5611), update the following in frontend/app/main.tsx:
 - WebSocket URL: ws://localhost:5611/ws
 - API_BASE: http://127.0.0.1:5611
 
-Alternatively, run the backend on  5621:
+Alternatively, run the backend on 5611:
 ```bash
 # from repo root
 cd backend
 uv sync
-uv run uvicorn main:app --reload --port  5621 --host 0.0.0.0
+uv run uvicorn main:app --reload --port 5611 --host 0.0.0.0
 ```
 
 ### Build
