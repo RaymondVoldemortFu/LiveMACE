@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DECIMAL, TIMESTAMP, ForeignKey, UniqueConstraint, Float, Date, DateTime
+from sqlalchemy import Column, Integer, String, DECIMAL, TIMESTAMP, ForeignKey, UniqueConstraint, Float, Date, DateTime, Text, JSON
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 import datetime
@@ -65,6 +65,7 @@ class Account(Base):
     user = relationship("User", back_populates="accounts")
     positions = relationship("Position", back_populates="account")
     orders = relationship("Order", back_populates="account")
+    memories = relationship("AgentMemory", back_populates="account")
 
 
 class UserAuthSession(Base):
@@ -259,6 +260,30 @@ class AgentTrace(Base):
     created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
 
     account = relationship("Account")
+
+
+class AgentMemory(Base):
+    """Memory storage for agents"""
+    __tablename__ = "agent_memories"
+
+    id = Column(Integer, primary_key=True, index=True)
+    memory_id = Column(String(36), unique=True, nullable=False, index=True)  # ID from Mem0 or UUID
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False)
+    trace_id = Column(String(36), nullable=True, index=True)  # Linked conversation/trace ID
+    
+    content = Column(Text, nullable=False)  # The actual memory text
+    metadata_json = Column(JSON, nullable=True)  # Extra metadata (key-value)
+    
+    # Vector DB Info (optional, if we want to track it)
+    vector_id = Column(String(100), nullable=True)
+    
+    created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
+    updated_at = Column(TIMESTAMP, server_default=func.current_timestamp(), onupdate=func.current_timestamp())
+    
+    # Expiration logic
+    expires_at = Column(DateTime, nullable=True)
+    
+    account = relationship("Account", back_populates="memories")
 
 
 # CRYPTO market trading configuration constants

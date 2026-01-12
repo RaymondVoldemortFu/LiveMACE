@@ -3,7 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Button } from "@/components/ui/button"
 import { getLatestTraceId, getAgentTrace, getTraceHistory, AgentTrace, AgentStep, TraceSummary } from '@/lib/api'
-import { Bot, User, Terminal, AlertCircle, RefreshCcw, History, Clock } from 'lucide-react'
+import { Bot, User, Terminal, AlertCircle, RefreshCcw, History, Clock, Brain } from 'lucide-react'
 import {
   Sheet,
   SheetContent,
@@ -105,6 +105,23 @@ export default function AgentStatusView({ accounts }: AgentStatusViewProps) {
     }
 
     const renderStep = (step: AgentStep) => {
+        if (step.role === 'memory') {
+            return (
+                <div key={step.step_number} className="flex flex-col mb-4 items-center">
+                    <div className="flex items-center gap-2 mb-1">
+                        <div className="w-8 h-8 rounded-full flex items-center justify-center bg-orange-500 text-white">
+                            <Brain size={16} />
+                        </div>
+                        <span className="text-xs text-muted-foreground">MEMORY</span>
+                        <span className="text-xs text-muted-foreground">{new Date(step.created_at).toLocaleTimeString()}</span>
+                    </div>
+                    <div className="max-w-[80%] rounded-lg p-3 bg-orange-50 border border-orange-200 text-xs text-muted-foreground whitespace-pre-wrap">
+                        {step.content}
+                    </div>
+                </div>
+            )
+        }
+
         if (step.role === 'system') return null
         
         const isUser = step.role === 'user'

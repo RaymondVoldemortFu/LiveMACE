@@ -56,7 +56,7 @@ interface Trade { id: number; order_id: number; account_id: number; symbol: stri
 
 const PAGE_TITLES: Record<string, string> = {
   portfolio: 'Crypto Paper Trading',
-  comprehensive: 'Open Alpha Arena',
+  comprehensive: '同花顺Bench',
 }
 
 function App() {

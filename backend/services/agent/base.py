@@ -10,7 +10,7 @@ class BaseAgent(ABC):
         self.tools = tools
 
     @abstractmethod
-    def run(self, portfolio: Dict[str, Any], prices: Dict[str, float], on_step: Optional[Callable[[Dict], None]] = None) -> Dict[str, Any]:
+    def run(self, portfolio: Dict[str, Any], prices: Dict[str, float], on_step: Optional[Callable[[Dict], None]] = None, trace_id: Optional[str] = None) -> Dict[str, Any]:
         """Execute the agent's decision making process."""
         pass
 

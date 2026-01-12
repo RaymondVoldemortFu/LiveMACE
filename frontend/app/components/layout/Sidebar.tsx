@@ -23,7 +23,7 @@ export default function Sidebar({ currentPage = 'comprehensive', onPageChange, o
                 : 'hover:bg-muted text-muted-foreground'
             }`}
             onClick={() => onPageChange?.('comprehensive')}
-            title="Open Alpha Arena"
+            title="同花顺Bench"
           >
             <BarChart3 className="w-5 h-5" />
           </button>
@@ -70,7 +70,7 @@ export default function Sidebar({ currentPage = 'comprehensive', onPageChange, o
                 : 'hover:bg-muted text-muted-foreground'
             }`}
             onClick={() => onPageChange?.('comprehensive')}
-            title="Open Alpha Arena"
+            title="同花顺Bench"
           >
             <BarChart3 className="w-5 h-5" />
             <span className="text-xs mt-1">Arena</span>
