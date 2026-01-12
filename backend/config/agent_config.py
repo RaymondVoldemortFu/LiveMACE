@@ -17,7 +17,7 @@ class AgentConfig:
     DOCKERFILE_PATH = os.path.join(os.path.dirname(__file__), "../services/agent/docker")
 
     # Memory Configuration
-    MEMORY_ENABLED = True
+    MEMORY_ENABLED = False
     MEMORY_PROVIDER = "mem0"
     MEMORY_VECTOR_PROVIDER = "aliyun"
     MEMORY_EMBEDDING_MODEL = "text-embedding-v3" # Example model name, update as needed

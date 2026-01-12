@@ -461,8 +461,17 @@ def call_agent_for_decision(
         # Register the new history tool
         registry.register(HistoryTool(db, account.id))
 
-        logger.info(f"Initiating agent decision for account: {account.name} (ID: {account.id})")
-        agent = TradingAgent(llm=llm, tools=registry, max_steps=AgentConfig.MAX_STEPS, user_id=str(account.id))
+        logger.info(f"Initiating agent decision for account: {account.name} (ID: {account.id}) Type: {getattr(account, 'agent_type', 'react')}")
+        
+        # Use factory to create agent based on account config
+        agent_type = getattr(account, "agent_type", None)
+        agent = create_agent(
+            agent_type=agent_type,
+            llm=llm, 
+            tools=registry, 
+            max_steps=AgentConfig.MAX_STEPS, 
+            user_id=str(account.id)
+        )
 
         decision = agent.run(portfolio=portfolio, prices=prices, on_step=on_step, trace_id=trace_id)
 

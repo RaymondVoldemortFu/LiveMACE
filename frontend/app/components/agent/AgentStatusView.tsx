@@ -127,20 +127,52 @@ export default function AgentStatusView({ accounts }: AgentStatusViewProps) {
         const isUser = step.role === 'user'
         const isTool = step.role === 'tool'
         
+        // Check for agent name in content (Multi-Agent)
+        let displayContent = step.content
+        let agentName = null
+        if (step.content && step.content.startsWith('[')) {
+            const match = step.content.match(/^\[(.*?)\]/)
+            if (match) {
+                agentName = match[1]
+                displayContent = step.content.substring(match[0].length).trim()
+            }
+        }
+
         return (
             <div key={step.step_number} className={`flex flex-col mb-4 ${isUser ? 'items-end' : 'items-start'}`}>
                 <div className={`flex items-center gap-2 mb-1 ${isUser ? 'flex-row-reverse' : ''}`}>
-                    <div className={`w-8 h-8 rounded-full flex items-center justify-center ${isUser ? 'bg-blue-500 text-white' : isTool ? 'bg-purple-500 text-white' : 'bg-green-500 text-white'}`}>
-                        {isUser ? <User size={16} /> : isTool ? <Terminal size={16} /> : <Bot size={16} />}
+                    <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
+                        isUser ? 'bg-blue-500 text-white' : 
+                        isTool ? 'bg-purple-500 text-white' : 
+                        agentName === 'Manager' ? 'bg-indigo-600 text-white' :
+                        agentName === 'TradingAgent' ? 'bg-emerald-600 text-white' :
+                        agentName === 'NewsAgent' ? 'bg-amber-500 text-white' :
+                        agentName === 'CoderAgent' ? 'bg-pink-600 text-white' :
+                        'bg-green-500 text-white'
+                    }`}>
+                        {isUser ? <User size={16} /> : 
+                         isTool ? <Terminal size={16} /> : 
+                         <Bot size={16} />}
                     </div>
                     <span className="text-xs text-muted-foreground">{step.role.toUpperCase()}</span>
+                    {agentName && (
+                         <span className={`text-xs px-1.5 py-0.5 rounded-full text-white ${
+                            agentName === 'Manager' ? 'bg-indigo-600' :
+                            agentName === 'TradingAgent' ? 'bg-emerald-600' :
+                            agentName === 'NewsAgent' ? 'bg-amber-500' :
+                            agentName === 'CoderAgent' ? 'bg-pink-600' :
+                            'bg-gray-500'
+                         }`}>
+                            {agentName}
+                        </span>
+                    )}
                     <span className="text-xs text-muted-foreground">{new Date(step.created_at).toLocaleTimeString()}</span>
                 </div>
                 
                 <div className={`max-w-[80%] rounded-lg p-3 ${isUser ? 'bg-primary text-primary-foreground' : 'bg-muted border'} overflow-hidden break-words`}>
-                    {step.content && (
+                    {displayContent && (
                         <div className="whitespace-pre-wrap text-sm break-words">
-                            {step.content}
+                            {displayContent}
                         </div>
                     )}
                     

@@ -42,6 +42,7 @@ async def list_all_accounts(db: Session = Depends(get_db)):
                 "username": user.username if user else "unknown",
                 "name": account.name,
                 "account_type": account.account_type,
+                "agent_type": getattr(account, "agent_type", "react"),
                 "initial_capital": float(account.initial_capital),
                 "current_cash": float(account.current_cash),
                 "frozen_cash": float(account.frozen_cash),
@@ -91,6 +92,7 @@ async def get_specific_account_overview(account_id: int, db: Session = Depends(g
                 "id": account.id,
                 "name": account.name,
                 "account_type": account.account_type,
+                "agent_type": getattr(account, "agent_type", "react"),
                 "current_cash": float(account.current_cash),
                 "frozen_cash": float(account.frozen_cash),
             },
@@ -137,6 +139,7 @@ async def get_account_overview(db: Session = Depends(get_db)):
                 "id": account.id,
                 "name": account.name,
                 "account_type": account.account_type,
+                "agent_type": getattr(account, "agent_type", "react"),
                 "current_cash": float(account.current_cash),
                 "frozen_cash": float(account.frozen_cash),
             },
@@ -178,6 +181,7 @@ async def create_new_account(payload: dict, db: Session = Depends(get_db)):
             version="v1",
             name=payload["name"],
             account_type=payload.get("account_type", "AI"),
+            agent_type=payload.get("agent_type", "react"),
             model=payload.get("model", "gpt-4-turbo"),
             base_url=payload.get("base_url", "https://api.openai.com/v1"),
             api_key=payload.get("api_key", ""),
@@ -246,6 +250,10 @@ async def update_account_settings(account_id: int, payload: dict, db: Session = 
             account.model = payload["model"] if payload["model"] else None
             logger.info(f"Updated model to: {account.model}")
         
+        if "agent_type" in payload:
+            account.agent_type = payload["agent_type"]
+            logger.info(f"Updated agent_type to: {account.agent_type}")
+        
         if "base_url" in payload:
             account.base_url = payload["base_url"]
             logger.info(f"Updated base_url to: {account.base_url}")
@@ -275,6 +283,7 @@ async def update_account_settings(account_id: int, payload: dict, db: Session = 
             "username": user.username if user else "unknown",
             "name": account.name,
             "account_type": account.account_type,
+            "agent_type": getattr(account, "agent_type", "react"),
             "initial_capital": float(account.initial_capital),
             "current_cash": float(account.current_cash),
             "frozen_cash": float(account.frozen_cash),

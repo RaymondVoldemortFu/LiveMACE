@@ -150,6 +150,7 @@ export interface TradingAccount {
   model?: string  // AI model (e.g., "gpt-4-turbo")
   base_url?: string  // API endpoint
   api_key?: string  // API key (masked in responses)
+  agent_type?: string // "react" or "multi_agent"
   initial_capital: number
   current_cash: number
   frozen_cash: number
@@ -162,6 +163,7 @@ export interface TradingAccountCreate {
   model?: string
   base_url?: string
   api_key?: string
+  agent_type?: string
   initial_capital?: number
   account_type?: string
 }
@@ -171,6 +173,7 @@ export interface TradingAccountUpdate {
   model?: string
   base_url?: string
   api_key?: string
+  agent_type?: string
 }
 
 
@@ -236,6 +239,7 @@ export async function createAccount(account: TradingAccountCreate): Promise<Trad
       base_url: account.base_url,
       api_key: account.api_key,
       account_type: account.account_type || 'AI',
+      agent_type: account.agent_type || 'react',
       initial_capital: account.initial_capital || 10000
     })
   })
@@ -249,7 +253,8 @@ export async function updateAccount(accountId: number, account: TradingAccountUp
       name: account.name,
       model: account.model,
       base_url: account.base_url,
-      api_key: account.api_key
+      api_key: account.api_key,
+      agent_type: account.agent_type
     })
   })
   return response.json()

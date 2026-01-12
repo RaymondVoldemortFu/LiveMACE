@@ -5,9 +5,9 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime
 from sqlalchemy.orm import Session
 
-from backend.config.agent_config import AgentConfig
-from backend.database.models import AgentMemory
-from backend.database.connection import SessionLocal
+from config.agent_config import AgentConfig
+from database.models import AgentMemory
+from database.connection import SessionLocal
 
 # Try importing mem0, handle if not installed
 try:
@@ -42,6 +42,7 @@ class MemoryInterface(ABC):
 
 class Mem0AgentMemory(MemoryInterface):
     def __init__(self):
+        self.client = None
         if not MEM0_AVAILABLE:
             logger.error("mem0ai package is not installed. Memory features will be disabled.")
             return
@@ -192,6 +193,9 @@ class Mem0AgentMemory(MemoryInterface):
 
 def get_memory_service() -> MemoryInterface:
     if AgentConfig.MEMORY_ENABLED:
+        if not MEM0_AVAILABLE:
+            logger.warning("AgentConfig.MEMORY_ENABLED is True, but mem0ai is not installed. Memory will be disabled.")
+            return None
         return Mem0AgentMemory()
     return None
 

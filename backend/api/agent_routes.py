@@ -11,7 +11,9 @@ router = APIRouter(prefix="/api/agent", tags=["agent"])
 @router.get("/trace/{trace_id}")
 def get_agent_trace(trace_id: str, db: Session = Depends(get_db)):
     """Get detailed execution trace for a specific session"""
-    traces = db.query(AgentTrace).filter(AgentTrace.trace_id == trace_id).order_by(AgentTrace.step_number).all()
+    # Query first to get data, avoiding lazy loading issues if session closes
+    traces_query = db.query(AgentTrace).filter(AgentTrace.trace_id == trace_id).order_by(AgentTrace.step_number)
+    traces = traces_query.all()
     
     if not traces:
         # check if it exists in decision logs (maybe empty trace?)

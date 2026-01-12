@@ -9,6 +9,13 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Plus, Pencil } from 'lucide-react'
 import { 
   getAccounts as getAccounts,
@@ -51,12 +58,14 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
     model: '',
     base_url: '',
     api_key: 'default-key-please-update-in-settings',
+    agent_type: 'react',
   })
   const [editAccount, setEditAccount] = useState<AIAccountCreate>({
     name: '',
     model: '',
     base_url: '',
     api_key: 'default-key-please-update-in-settings',
+    agent_type: 'react',
   })
 
   const loadAccounts = async () => {
@@ -126,7 +135,7 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
 
       console.log('Creating account with data:', newAccount)
       await createAccount(newAccount)
-      setNewAccount({ name: '', model: '', base_url: '', api_key: 'default-key-please-update-in-settings' })
+      setNewAccount({ name: '', model: '', base_url: '', api_key: 'default-key-please-update-in-settings', agent_type: 'react' })
       setShowAddForm(false)
       await loadAccounts()
 
@@ -197,7 +206,7 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
       console.log('Updating account with data:', editAccount)
       await updateAccount(editingId, editAccount)
       setEditingId(null)
-      setEditAccount({ name: '', model: '', base_url: '', api_key: '' })
+      setEditAccount({ name: '', model: '', base_url: '', api_key: '', agent_type: 'react' })
       setTestResult(null)
       await loadAccounts()
       
@@ -224,12 +233,13 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
       model: account.model || '',
       base_url: account.base_url || '',
       api_key: account.api_key || '',
+      agent_type: account.agent_type || 'react',
     })
   }
 
   const cancelEdit = () => {
     setEditingId(null)
-    setEditAccount({ name: '', model: '', base_url: '', api_key: 'default-key-please-update-in-settings' })
+    setEditAccount({ name: '', model: '', base_url: '', api_key: 'default-key-please-update-in-settings', agent_type: 'react' })
     setTestResult(null)
     setError(null)
   }
@@ -279,12 +289,24 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
                             value={editAccount.name || ''}
                             onChange={(e) => setEditAccount({ ...editAccount, name: e.target.value })}
                           />
-                          <Input
+                          <Select
+                            value={editAccount.agent_type || 'react'}
+                            onValueChange={(value) => setEditAccount({ ...editAccount, agent_type: value })}
+                          >
+                            <SelectTrigger>
+                              <SelectValue placeholder="Agent Type" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="react">ReAct Agent</SelectItem>
+                              <SelectItem value="multi_agent">Multi-Agent System</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <Input
                             placeholder="Model"
                             value={editAccount.model || ''}
                             onChange={(e) => setEditAccount({ ...editAccount, model: e.target.value })}
                           />
-                        </div>
                         <Input
                           placeholder="Base URL"
                           value={editAccount.base_url || ''}
@@ -319,7 +341,7 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
                         <div className="space-y-1 flex-1">
                           <div className="font-medium">{account.name}</div>
                           <div className="text-xs text-muted-foreground">
-                            {account.model ? `Model: ${account.model}` : 'No model configured'}
+                            {account.model ? `Model: ${account.model}` : 'No model configured'} • {account.agent_type === 'multi_agent' ? 'Multi-Agent' : 'ReAct'}
                           </div>
                           {account.base_url && (
                             <div className="text-xs text-muted-foreground truncate">
@@ -363,12 +385,24 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
                     value={newAccount.name || ''}
                     onChange={(e) => setNewAccount({ ...newAccount, name: e.target.value })}
                   />
-                  <Input
+                  <Select
+                    value={newAccount.agent_type || 'react'}
+                    onValueChange={(value) => setNewAccount({ ...newAccount, agent_type: value })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Agent Type" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="react">ReAct Agent</SelectItem>
+                      <SelectItem value="multi_agent">Multi-Agent System</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <Input
                     placeholder="Model (e.g., gpt-4)"
                     value={newAccount.model || ''}
                     onChange={(e) => setNewAccount({ ...newAccount, model: e.target.value })}
                   />
-                </div>
                 <Input
                   placeholder="Base URL (e.g., https://api.openai.com/v1)"
                   value={newAccount.base_url || ''}
