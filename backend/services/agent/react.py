@@ -8,7 +8,7 @@ from .tools import ToolRegistry
 from config.agent_config import AgentConfig
 from services.agent.prompts.system_prompts import TRADE_AGENT_PROMPT
 from .base import BaseAgent
-from .memory import get_memory_service
+from .memory_tools import memory_add_tool, memory_search_tool
 
 # Define loggers
 logger = logging.getLogger(__name__)
@@ -22,7 +22,12 @@ class ReActAgent(BaseAgent):
         super().__init__(llm, tools)
         self.max_steps = max_steps
         self.user_id = user_id
-        self.memory = get_memory_service()
+
+        # Register memory tools if memory is enabled
+        if AgentConfig.MEMORY_ENABLED:
+            self.tools.register(memory_add_tool)
+            self.tools.register(memory_search_tool)
+            logger.info("Memory tools registered: memory_add, memory_search")
 
     def run(self, portfolio: Dict[str, Any], prices: Dict[str, float], on_step: Optional[Callable[[Dict], None]] = None, trace_id: Optional[str] = None) -> Dict[str, Any]:
         """
@@ -43,40 +48,9 @@ class ReActAgent(BaseAgent):
         # Get current UTC+8 time
         tz_utc_8 = timezone(timedelta(hours=8))
         current_time = datetime.now(tz_utc_8).strftime("%Y-%m-%d %H:%M:%S")
-        
+
         # Add time context to system prompt
         system_prompt_with_time = f"{SYSTEM_PROMPT}\n\nCurrent Time (UTC+8): {current_time}"
-
-        # 0. Retrieve Memory
-        if self.memory and self.user_id:
-            try:
-                # Construct query from portfolio summary or recent context
-                query = f"Trading context: {len(portfolio.get('positions', {}))} positions. Market: {list(prices.keys())}"
-                retrieved_memories = self.memory.search(query, user_id=self.user_id)
-                
-                if retrieved_memories:
-                    # Depending on Mem0 version, structure might vary. Assuming dict with 'memory' or 'text'
-                    memory_texts = []
-                    for m in retrieved_memories:
-                         text = m.get('memory') or m.get('text') or m.get('content')
-                         if text:
-                             memory_texts.append(f"- {text}")
-                    
-                    if memory_texts:
-                        memory_block = "\n".join(memory_texts)
-                        system_prompt_with_time += f"\n\nRelevant Memories:\n{memory_block}"
-                        agent_logger.info(f"Retrieved memories: {memory_block}")
-                        
-                        # Notify step for UI
-                        if on_step:
-                            on_step({
-                                "role": "memory",
-                                "content": f"Retrieved Memories:\n{memory_block}",
-                                "metadata": {"type": "memory"}
-                            })
-
-            except Exception as e:
-                logger.error(f"Failed to retrieve memory: {e}")
 
         messages: List[Dict[str, Any]] = [
             {"role": "system", "content": system_prompt_with_time},
@@ -232,21 +206,5 @@ class ReActAgent(BaseAgent):
                     "leverage": 1,
                     "reason": "max_steps reached, fallback hold",
                 }
-
-        finally:
-            # Save Memory
-            if self.memory and self.user_id:
-                try:
-                    conversation_text = ""
-                    for msg in messages:
-                        role = msg.get('role', 'unknown')
-                        content = msg.get('content', '')
-                        if role != "system" and content:
-                             conversation_text += f"{role}: {content}\n"
-                    
-                    if conversation_text:
-                        self.memory.add(conversation_text, user_id=self.user_id, metadata={"trace_id": trace_id} if trace_id else {})
-                except Exception as e:
-                    logger.error(f"Failed to save conversation to memory: {e}")
 
         return decision
