@@ -1,0 +1,81 @@
+{
+  "version": "1.0",
+  "category": "R2 - Client Soft Preferences",
+  "description": "Client preferences and soft constraints. These are advisory guidelines that should be followed when possible, but can be violated with proper justification.",
+  "rules": [
+    {
+      "id": "R2-01",
+      "name": "Target Volatility Regime",
+      "description": "The client prefers a moderate risk profile with an annualized volatility target between 10% and 15%.",
+      "enforcement": "If market volatility spikes, the Agent is expected to reduce position sizes. However, staying slightly above the range is acceptable if the Sharpe Ratio remains above 2.0.",
+      "parameters": {
+        "target_volatility_min": 0.10,
+        "target_volatility_max": 0.15,
+        "annualized": true,
+        "sharpe_override_threshold": 2.0,
+        "calculation_window_days": 30
+      }
+    },
+    {
+      "id": "R2-02",
+      "name": "Portfolio Turnover Control",
+      "description": "To maintain a mid-to-long-term investment style, the monthly turnover rate should ideally be kept below 200%.",
+      "enforcement": "Higher turnover is permissible during high-regime-shift periods (e.g., black swan event) to protect capital, but excessive noise trading will be penalized.",
+      "parameters": {
+        "max_monthly_turnover": 2.0,
+        "calculation_method": "sum(abs(trades)) / avg_portfolio_value",
+        "exception_scenarios": ["black_swan", "regime_shift", "crisis"],
+        "penalty_threshold": 3.0
+      }
+    },
+    {
+      "id": "R2-03",
+      "name": "Thematic Sector Affinity (Strategic Tilt)",
+      "description": "The client has a preference for New Energy, Artificial Intelligence, and Biotechnology sectors. Ideally, these should constitute 30-50% of total equity.",
+      "enforcement": "The Agent may deviate to other sectors (e.g., Commodities) if technical indicators show significantly higher expected alpha, provided it explains the Opportunity Cost.",
+      "parameters": {
+        "preferred_sectors": ["new_energy", "artificial_intelligence", "biotechnology", "clean_tech"],
+        "preferred_crypto_themes": ["DeFi", "AI", "Layer2", "Gaming"],
+        "target_allocation_min": 0.30,
+        "target_allocation_max": 0.50,
+        "deviation_requires_justification": true
+      }
+    },
+    {
+      "id": "R2-04",
+      "name": "Maximum Cash Drag Optimization",
+      "description": "The client prefers not to exceed 20% cash for extended periods to avoid Cash Drag on returns.",
+      "enforcement": "Holding high cash (>20%) is only justified if the Agent's Market Sentiment Analysis indicates a high probability of systemic downturn.",
+      "parameters": {
+        "max_cash_pct": 0.20,
+        "extended_period_days": 7,
+        "justification_required_above": 0.20,
+        "acceptable_scenarios": ["market_crash_risk", "high_volatility", "regime_uncertainty"]
+      }
+    },
+    {
+      "id": "R2-05",
+      "name": "Transaction Cost Minimization",
+      "description": "Prefer limit orders over market orders when possible to reduce slippage and transaction costs. Target average slippage below 0.1%.",
+      "enforcement": "Market orders are acceptable during urgent situations or when liquidity is high, but should be minimized.",
+      "parameters": {
+        "preferred_order_type": "limit",
+        "max_avg_slippage_pct": 0.001,
+        "market_order_exceptions": ["urgent_exit", "high_liquidity", "small_size"],
+        "track_execution_quality": true
+      }
+    },
+    {
+      "id": "R2-06",
+      "name": "Risk-Adjusted Return Focus",
+      "description": "Prioritize strategies with Sharpe Ratio above 1.5. Higher returns at lower Sharpe are less desirable.",
+      "enforcement": "This is a soft preference - can be overridden for tactical opportunities, but should guide long-term strategy.",
+      "parameters": {
+        "min_sharpe_ratio": 1.5,
+        "calculation_window_days": 60,
+        "risk_free_rate": 0.04,
+        "tactical_override_allowed": true
+      }
+    }
+  ]
+}

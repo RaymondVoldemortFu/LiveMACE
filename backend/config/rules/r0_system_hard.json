@@ -1,0 +1,61 @@
+{
+  "version": "1.0",
+  "category": "R0 - System Hard Constraints",
+  "description": "Critical system-level rules that cannot be violated under any circumstances. Violations will trigger automatic order rejection or system intervention.",
+  "rules": [
+    {
+      "id": "R0-01",
+      "name": "Maximum Leverage Limit",
+      "description": "The total effective leverage of the portfolio must not exceed 5x to prevent excessive risk exposure.",
+      "enforcement": "Any order that would cause the leverage to exceed this threshold will be automatically rejected by the risk engine.",
+      "parameters": {
+        "max_leverage": 5,
+        "calculation_method": "total_notional_value / total_equity"
+      }
+    },
+    {
+      "id": "R0-02",
+      "name": "Maintenance Margin & Mandatory Liquidation",
+      "description": "The account must maintain a minimum Margin Level of 10% to prevent forced liquidation.",
+      "enforcement": "If the margin level drops below 10%, the system will trigger an immediate liquidation of the highest-risk positions until the requirement is restored.",
+      "parameters": {
+        "min_margin_level": 0.10,
+        "auto_liquidation_threshold": 0.10,
+        "calculation_method": "available_margin / used_margin"
+      }
+    },
+    {
+      "id": "R0-03",
+      "name": "Intraday Maximum Drawdown (Hard Stop)",
+      "description": "If the intraday equity loss exceeds 5% relative to the previous day's closing equity, a Hard Stop is triggered.",
+      "enforcement": "All active orders will be canceled, and the Agent's trading permissions will be suspended for the remainder of the session.",
+      "parameters": {
+        "max_drawdown_pct": 0.05,
+        "reference_point": "previous_day_close",
+        "suspension_duration": "end_of_day"
+      }
+    },
+    {
+      "id": "R0-04",
+      "name": "Maximum Single Order Notional Value",
+      "description": "The notional value of any single order must not exceed 20% of the total account equity.",
+      "enforcement": "This rule prevents concentration risk and 'fat-finger' errors. Non-compliant orders will be blocked.",
+      "parameters": {
+        "max_order_pct": 0.20,
+        "calculation_method": "order_notional / total_equity"
+      }
+    },
+    {
+      "id": "R0-05",
+      "name": "Liquidity & Market Impact Guard",
+      "description": "A single order cannot exceed 10% of the asset's Average Daily Volume (ADV) over the trailing 5-minute window. Trading is prohibited for low-liquidity assets when order size exceeds $10,000.",
+      "enforcement": "Prevents excessive slippage and market manipulation risks.",
+      "parameters": {
+        "max_adv_pct": 0.10,
+        "time_window_minutes": 5,
+        "low_liquidity_threshold_usd": 10000,
+        "min_liquidity_score": 0.3
+      }
+    }
+  ]
+}
