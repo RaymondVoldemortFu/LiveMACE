@@ -68,143 +68,142 @@ class ReActAgent(BaseAgent):
 
         decision = None
 
-        try:
-            for step in range(self.max_steps):
-                # Check if we need to remind the agent about remaining steps
-                remaining_steps = self.max_steps - step
-                request_messages = list(messages)
-                
-                if remaining_steps < AgentConfig.STEP_REMINDER_THRESHOLD:
-                    logger.info(f"Adding step reminder (Remaining: {remaining_steps})")
-                    request_messages.append({
-                        "role": "user", 
-                        "content": f"Reminder: You have {remaining_steps} steps remaining. You must output <FINAL_JSON> before running out of steps."
-                    })
+        for step in range(self.max_steps):
+            # Check if we need to remind the agent about remaining steps
+            remaining_steps = self.max_steps - step
+            request_messages = list(messages)
 
-                # Requirement 1: Log raw LLM request
-                llm_logger.info(f"--- Step {step+1}/{self.max_steps} Request ---")
-                llm_logger.info(json.dumps(request_messages, ensure_ascii=False, indent=2))
-                
-                logger.info(f"Initiating LLM request (Step {step+1})")
+            if remaining_steps < AgentConfig.STEP_REMINDER_THRESHOLD:
+                logger.info(f"Adding step reminder (Remaining: {remaining_steps})")
+                request_messages.append({
+                    "role": "user",
+                    "content": f"Reminder: You have {remaining_steps} steps remaining. You must output <FINAL_JSON> before running out of steps."
+                })
 
-                resp = self.llm.call(request_messages, tools=self.tools.openai_tools)
-                
-                # Convert to dict for consistent handling and logging
-                if hasattr(resp, "model_dump"):
-                    resp_dict = resp.model_dump()
-                else:
-                    resp_dict = resp.dict()
+            # Requirement 1: Log raw LLM request
+            llm_logger.info(f"--- Step {step+1}/{self.max_steps} Request ---")
+            llm_logger.info(json.dumps(request_messages, ensure_ascii=False, indent=2))
 
-                # Requirement 1: Log raw LLM response
-                llm_logger.info(f"--- Step {step+1}/{self.max_steps} Response ---")
-                llm_logger.info(json.dumps(resp_dict, ensure_ascii=False, indent=2))
+            logger.info(f"Initiating LLM request (Step {step+1})")
 
-                # Important: Add assistant response to history
-                messages.append(resp_dict)
-                if on_step:
-                    on_step(resp_dict)
+            resp = self.llm.call(request_messages, tools=self.tools.openai_tools)
 
-                tool_calls = resp.tool_calls
-                content = resp.content
+            # Convert to dict for consistent handling and logging
+            if hasattr(resp, "model_dump"):
+                resp_dict = resp.model_dump()
+            else:
+                resp_dict = resp.dict()
 
-                # Requirement 2: Log LLM output content and tool calls
-                agent_logger.info(f"--- Step {step+1} LLM Output ---")
-                agent_logger.info(f"Content: {content}")
-                if tool_calls:
-                    agent_logger.info(f"Tool Calls: {json.dumps([t.model_dump() if hasattr(t, 'model_dump') else str(t) for t in tool_calls], ensure_ascii=False)}")
+            # Requirement 1: Log raw LLM response
+            llm_logger.info(f"--- Step {step+1}/{self.max_steps} Response ---")
+            llm_logger.info(json.dumps(resp_dict, ensure_ascii=False, indent=2))
 
-                # 1) 有工具调用：执行工具并把结果回传给模型
-                if tool_calls:
-                    logger.info(f"LLM requested {len(tool_calls)} tool calls")
-                    for tc in tool_calls:
-                        name = tc.function.name
-                        args_str = tc.function.arguments or "{}"
-                        args = json.loads(args_str)
-                        
-                        # Console output (Simple)
-                        logger.info(f"Executing tool: {name}")
-                        
-                        # File output (Detailed)
-                        agent_logger.info(f"Executing tool '{name}' with args: {args_str}")
+            # Important: Add assistant response to history
+            messages.append(resp_dict)
+            if on_step:
+                on_step(resp_dict)
 
-                        tool = self.tools.get(name)
-                        result = tool(**args)
-                        
-                        # Log tool result
-                        agent_logger.info(f"Tool '{name}' result: {json.dumps(result, ensure_ascii=False)}")
+            tool_calls = resp.tool_calls
+            content = resp.content
 
-                        tool_msg = {
-                            "role": "tool",
-                            "tool_call_id": tc.id,
-                            "name": name,
-                            "content": json.dumps(result, ensure_ascii=False),
+            # Requirement 2: Log LLM output content and tool calls
+            agent_logger.info(f"--- Step {step+1} LLM Output ---")
+            agent_logger.info(f"Content: {content}")
+            if tool_calls:
+                agent_logger.info(f"Tool Calls: {json.dumps([t.model_dump() if hasattr(t, 'model_dump') else str(t) for t in tool_calls], ensure_ascii=False)}")
+
+            # 1) 有工具调用：执行工具并把结果回传给模型
+            if tool_calls:
+                logger.info(f"LLM requested {len(tool_calls)} tool calls")
+                for tc in tool_calls:
+                    name = tc.function.name
+                    args_str = tc.function.arguments or "{}"
+                    args = json.loads(args_str)
+
+                    # Console output (Simple)
+                    logger.info(f"Executing tool: {name}")
+
+                    # File output (Detailed)
+                    agent_logger.info(f"Executing tool '{name}' with args: {args_str}")
+
+                    tool = self.tools.get(name)
+                    result = tool(**args)
+
+                    # Log tool result
+                    agent_logger.info(f"Tool '{name}' result: {json.dumps(result, ensure_ascii=False)}")
+
+                    tool_msg = {
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "name": name,
+                        "content": json.dumps(result, ensure_ascii=False),
+                    }
+                    messages.append(tool_msg)
+                    if on_step:
+                        on_step(tool_msg)
+                continue
+
+            # 2) 没有工具调用，视为最终决策，尝试解析 JSON
+            # 优先检查是否有 <FINAL_JSON> 标签
+            if content:
+                match = re.search(r"<FINAL_JSON>(.*?)</FINAL_JSON>", content, re.DOTALL)
+                if match:
+                    json_str = match.group(1).strip()
+                    try:
+                        decision = json.loads(json_str)
+
+                        # Log final decision
+                        logger.info(f"Agent reached final decision: {decision.get('operation')} {decision.get('symbol', '')}")
+                        agent_logger.info(f"Final Decision Parsed: {json.dumps(decision, ensure_ascii=False)}")
+
+                        # 简单做一下字段兜底，保持与旧逻辑兼容
+                        if "leverage" not in decision or not decision["leverage"]:
+                            decision["leverage"] = 1
+                        if "direction" not in decision or not decision["direction"]:
+                            decision["direction"] = "long"
+                        else:
+                            decision["direction"] = decision["direction"].lower()
+
+                        break # Decision found, exit loop
+                    except json.JSONDecodeError as e:
+                        # 如果解析失败，使用默认 (Fallback HOLD)
+                        logger.error(f"Failed to parse decision JSON within <FINAL_JSON>: {e}. Returning fallback HOLD.")
+                        agent_logger.error(f"JSON Parse Error in <FINAL_JSON>: {e}. Content: {json_str}")
+                        # Return fallback directly
+                        decision = {
+                            "operation": "hold",
+                            "symbol": "",
+                            "direction": "long",
+                            "target_portion_of_balance": 0.0,
+                            "leverage": 1,
+                            "reason": "JSON Parse Error in <FINAL_JSON>, fallback hold",
                         }
-                        messages.append(tool_msg)
-                        if on_step:
-                            on_step(tool_msg)
-                    continue
+                        break
 
-                # 2) 没有工具调用，视为最终决策，尝试解析 JSON
-                # 优先检查是否有 <FINAL_JSON> 标签
-                if content:
-                    match = re.search(r"<FINAL_JSON>(.*?)</FINAL_JSON>", content, re.DOTALL)
-                    if match:
-                        json_str = match.group(1).strip()
-                        try:
-                            decision = json.loads(json_str)
-                            
-                            # Log final decision
-                            logger.info(f"Agent reached final decision: {decision.get('operation')} {decision.get('symbol', '')}")
-                            agent_logger.info(f"Final Decision Parsed: {json.dumps(decision, ensure_ascii=False)}")
+            # 如果没有工具调用，且没有 <FINAL_JSON>，且没有内容 -> 异常
+            if not tool_calls and not content:
+                error_msg = "LLM returned empty content and no tool calls"
+                logger.error(error_msg)
+                agent_logger.error(error_msg)
+                raise ValueError(error_msg)
 
-                            # 简单做一下字段兜底，保持与旧逻辑兼容
-                            if "leverage" not in decision or not decision["leverage"]:
-                                decision["leverage"] = 1
-                            if "direction" not in decision or not decision["direction"]:
-                                decision["direction"] = "long"
-                            else:
-                                decision["direction"] = decision["direction"].lower()
-                            
-                            break # Decision found, exit loop
-                        except json.JSONDecodeError as e:
-                            # 如果解析失败，使用默认 (Fallback HOLD)
-                            logger.error(f"Failed to parse decision JSON within <FINAL_JSON>: {e}. Returning fallback HOLD.")
-                            agent_logger.error(f"JSON Parse Error in <FINAL_JSON>: {e}. Content: {json_str}")
-                            # Return fallback directly
-                            decision = {
-                                "operation": "hold",
-                                "symbol": "",
-                                "direction": "long",
-                                "target_portion_of_balance": 0.0,
-                                "leverage": 1,
-                                "reason": "JSON Parse Error in <FINAL_JSON>, fallback hold",
-                            }
-                            break
+            # 如果没有工具调用，且没有 <FINAL_JSON>，但有内容 -> 视为中间思考过程，继续循环
+            if not tool_calls:
+                logger.info("No tool calls and no <FINAL_JSON> found. Continuing conversation (thought step).")
+                continue
 
-                # 如果没有工具调用，且没有 <FINAL_JSON>，且没有内容 -> 异常
-                if not tool_calls and not content:
-                    error_msg = "LLM returned empty content and no tool calls"
-                    logger.error(error_msg)
-                    agent_logger.error(error_msg)
-                    raise ValueError(error_msg)
-
-                # 如果没有工具调用，且没有 <FINAL_JSON>，但有内容 -> 视为中间思考过程，继续循环
-                if not tool_calls:
-                    logger.info("No tool calls and no <FINAL_JSON> found. Continuing conversation (thought step).")
-                    continue
-            
-            # If loop finished without break (max steps reached)
-            if decision is None:
-                # 超过 max_steps 还没给出最终决策，保守 hold
-                logger.warning("Agent exceeded max steps, fallback to HOLD")
-                agent_logger.warning("Exceeded max steps, returning fallback HOLD decision")
-                decision = {
-                    "operation": "hold",
-                    "symbol": "",
-                    "direction": "long",
-                    "target_portion_of_balance": 0.0,
-                    "leverage": 1,
-                    "reason": "max_steps reached, fallback hold",
-                }
+        # If loop finished without break (max steps reached)
+        if decision is None:
+            # 超过 max_steps 还没给出最终决策，保守 hold
+            logger.warning("Agent exceeded max steps, fallback to HOLD")
+            agent_logger.warning("Exceeded max steps, returning fallback HOLD decision")
+            decision = {
+                "operation": "hold",
+                "symbol": "",
+                "direction": "long",
+                "target_portion_of_balance": 0.0,
+                "leverage": 1,
+                "reason": "max_steps reached, fallback hold",
+            }
 
         return decision
