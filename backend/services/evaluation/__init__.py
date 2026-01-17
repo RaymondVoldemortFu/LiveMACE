@@ -1,5 +1,6 @@
 from .base import BaseEvaluator
 from .data_loader import EvaluationDataLoader
+from .checkpoint_service import run_checkpoint_job
 
-__all__ = ["BaseEvaluator", "EvaluationDataLoader"]
+__all__ = ["BaseEvaluator", "EvaluationDataLoader", "run_checkpoint_job"]
 

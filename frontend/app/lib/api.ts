@@ -70,6 +70,62 @@ export async function getPopularCryptos() {
   return response.json()
 }
 
+// Evaluation (periodic checkpoints) API
+export interface EvalLeaderboardItem {
+  account_id: number
+  agent_name?: string | null
+  agent_type?: string | null
+  equity_start?: number | null
+  equity_end?: number | null
+  pnl?: number | null
+  return_rate: number
+}
+
+export interface EvalLeaderboardResponse {
+  interval_seconds: number
+  period_end: string | null
+  order_by: 'return' | 'pnl'
+  items: EvalLeaderboardItem[]
+}
+
+export interface EvalAccountCheckpointItem {
+  period_start: string
+  period_end: string
+  equity_start?: number | null
+  equity_end?: number | null
+  pnl?: number | null
+  return_rate: number
+  created_at?: string
+}
+
+export interface EvalAccountCheckpointsResponse {
+  account_id: number
+  account_name: string
+  interval_seconds: number
+  items: EvalAccountCheckpointItem[]
+}
+
+export async function getEvalLeaderboard(
+  intervalSeconds: number = 3600,
+  orderBy: 'return' | 'pnl' = 'pnl'
+): Promise<EvalLeaderboardResponse> {
+  const response = await apiRequest(
+    `/evaluation/checkpoints/leaderboard?interval_seconds=${intervalSeconds}&order_by=${orderBy}`
+  )
+  return response.json()
+}
+
+export async function getEvalAccountCheckpoints(
+  accountId: number,
+  intervalSeconds: number = 3600,
+  limit: number = 10
+): Promise<EvalAccountCheckpointsResponse> {
+  const response = await apiRequest(
+    `/evaluation/checkpoints/account/${accountId}?interval_seconds=${intervalSeconds}&limit=${limit}`
+  )
+  return response.json()
+}
+
 // AI Decision Log interfaces and functions
 export interface AIDecision {
   id: number
