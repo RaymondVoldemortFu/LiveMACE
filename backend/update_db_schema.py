@@ -5,22 +5,19 @@ import os
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from database.connection import engine, Base
-from database import models
+from database.models import (
+    AgentTrace, AIDecisionLog, Account, AgentMemory,
+    AccountSnapshot, AssetMetadata, RuleEvaluationResult
+)
 from sqlalchemy import text
 
 def update_schema():
     print("Updating database schema...")
     
-    # 1. Create all tables (AgentTrace, AgentMemory, etc.) if they don't exist
+    # 1. Create all tables (AgentTrace, AgentMemory, AccountSnapshot, AssetMetadata, RuleEvaluationResult, etc.) if they don't exist
     print("Creating tables if not exist...")
-    required_tables = [
-        models.AgentTrace.__table__,
-        models.AgentMemory.__table__,
-        models.AIDecisionLog.__table__,
-        models.Account.__table__,
-        models.AgentPeriodCheckpoint.__table__,
-    ]
-    Base.metadata.create_all(bind=engine, tables=required_tables)
+    Base.metadata.create_all(bind=engine)
+    print("Tables created successfully (including account_snapshots, asset_metadata, rule_evaluation_results)")
     
     with engine.connect() as conn:
         try:
@@ -47,6 +44,16 @@ def update_schema():
                 print("Column agent_type added.")
             else:
                 print("Column agent_type already exists.")
+            
+            # 4. Verify new tables exist
+            print("\nVerifying new tables...")
+            tables_to_check = ['account_snapshots', 'asset_metadata', 'rule_evaluation_results']
+            for table_name in tables_to_check:
+                result = conn.execute(text(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{table_name}'"))
+                if result.fetchone():
+                    print(f"✓ Table {table_name} exists")
+                else:
+                    print(f"✗ Table {table_name} not found")
 
             # 4. Add volatility column to AgentPeriodCheckpoint if it doesn't exist
             print("Checking for volatility column in agent_period_checkpoints...")
