@@ -2,6 +2,7 @@
 
 import logging
 import threading
+import os
 
 from services.auto_trader import (
     place_ai_driven_crypto_order,
@@ -60,6 +61,28 @@ def initialize_services():
         # Start margin monitoring for leveraged positions (every 5 seconds)
         start_margin_monitor(interval_seconds=5)
         logger.info("Margin monitor started (5-second interval)")
+
+        # Start periodic evaluation checkpoint job (PnL/return per time slice)
+        # The job is idempotent per (account, interval, period_end), so we can poll frequently.
+        try:
+            from services.evaluation.checkpoint_service import run_checkpoint_job
+
+            interval_seconds = int(os.getenv("EVAL_CHECKPOINT_INTERVAL_SECONDS", "3600"))
+            poll_seconds = int(os.getenv("EVAL_CHECKPOINT_POLL_SECONDS", "30"))
+
+            def _run_eval_checkpoint_job():
+                return run_checkpoint_job(interval_seconds=interval_seconds)
+
+            task_scheduler.add_interval_task(
+                task_func=_run_eval_checkpoint_job,
+                interval_seconds=poll_seconds,
+                task_id="eval_checkpoint_job",
+            )
+            logger.info(
+                f"Evaluation checkpoint job started: interval={interval_seconds}s, poll={poll_seconds}s"
+            )
+        except Exception as e:
+            logger.error(f"Failed to start evaluation checkpoint job: {e}")
         
         logger.info("All services initialized successfully")
         

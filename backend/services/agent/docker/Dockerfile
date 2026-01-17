@@ -8,19 +8,47 @@ ENV PYTHONUNBUFFERED=1
 # Install minimal system dependencies
 # Required for numpy / pandas / scipy / matplotlib / sklearn
 # =============================
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    gfortran \
-    libopenblas-dev \
-    liblapack-dev \
-    libffi-dev \
-    libstdc++6 \
-    bash \
-    coreutils \
-    grep \
-    sed \
-    gawk \
-    && rm -rf /var/lib/apt/lists/*
+# =============================
+# Install minimal system dependencies
+# Required for numpy / pandas / scipy / matplotlib / sklearn
+# - Switch APT mirrors to Aliyun (mitigate deb.debian.org 502)
+# - Works with both legacy sources.list and modern debian.sources
+# =============================
+RUN set -eux; \
+        if [ -f /etc/apt/sources.list ]; then \
+            sed -i \
+                -e 's|http://deb.debian.org/debian|https://mirrors.aliyun.com/debian|g' \
+                -e 's|https://deb.debian.org/debian|https://mirrors.aliyun.com/debian|g' \
+                -e 's|http://security.debian.org/debian-security|https://mirrors.aliyun.com/debian-security|g' \
+                -e 's|https://security.debian.org/debian-security|https://mirrors.aliyun.com/debian-security|g' \
+                /etc/apt/sources.list; \
+        fi; \
+        if [ -d /etc/apt/sources.list.d ]; then \
+            for f in /etc/apt/sources.list.d/*.sources; do \
+                [ -e "$f" ] || continue; \
+                sed -i \
+                    -e 's|http://deb.debian.org/debian|https://mirrors.aliyun.com/debian|g' \
+                    -e 's|https://deb.debian.org/debian|https://mirrors.aliyun.com/debian|g' \
+                    -e 's|http://security.debian.org/debian-security|https://mirrors.aliyun.com/debian-security|g' \
+                    -e 's|https://security.debian.org/debian-security|https://mirrors.aliyun.com/debian-security|g' \
+                    "$f"; \
+            done; \
+        fi; \
+        printf 'Acquire::Retries "8";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' > /etc/apt/apt.conf.d/80retries; \
+        apt-get update -y; \
+        apt-get install -y --no-install-recommends --fix-missing \
+                build-essential \
+                gfortran \
+                libopenblas-dev \
+                liblapack-dev \
+                libffi-dev \
+                libstdc++6 \
+                bash \
+                coreutils \
+                grep \
+                sed \
+                gawk; \
+        rm -rf /var/lib/apt/lists/*
 
 # =============================
 # Install scientific Python packages

@@ -5,7 +5,7 @@ import os
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from database.connection import engine, Base
-from database.models import AgentTrace, AIDecisionLog, Account, AgentMemory
+from database.models import AgentTrace, AIDecisionLog, Account, AgentMemory, AgentPeriodCheckpoint
 from sqlalchemy import text
 
 def update_schema():
