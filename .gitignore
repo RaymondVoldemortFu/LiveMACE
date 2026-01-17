@@ -310,5 +310,9 @@ backend/tests/
 .vscode/
 backend/.DS_Store
 
+database_setup_guide.md
+QUICKSTART.md
+verify_setup.py
+
 toolenv
 data.db-journal
