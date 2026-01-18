@@ -313,6 +313,7 @@ backend/.DS_Store
 database_setup_guide.md
 QUICKSTART.md
 verify_setup.py
-
+CURRENCY_*.md
+backend/test_*.py
 toolenv
 data.db-journal
