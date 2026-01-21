@@ -215,32 +215,64 @@ class RuleValidator:
                     expected_value=f"<= {max_order_pct}"
                 )
         
-        # R1-01: Asset Blacklist
+        # R1-01: Asset Blacklist (enhanced with sector and market cap checks)
         elif rule_id == "R1-01":
-            blacklist = params.get("blacklist_symbols", [])
+            from backend.database.connection import get_db
+            from backend.database.models import AssetMetadata
+            
+            blacklist_symbols = params.get("blacklist_symbols", [])
+            blacklist_sectors = params.get("blacklist_sectors", [])
+            min_market_cap = params.get("min_market_cap_usd", 50000000)
+            meme_filter = params.get("meme_coin_filter", True)
+            
             symbol = decision.get("symbol")
-            if symbol in blacklist:
+            
+            # Check symbol blacklist
+            if symbol in blacklist_symbols:
                 return RuleViolation(
                     rule, severity,
                     f"Symbol {symbol} is in blacklist",
                     actual_value=symbol,
                     expected_value="Not in blacklist"
                 )
+            
+            # Query AssetMetadata for sector and market cap checks
+            db = next(get_db())
+            try:
+                asset_meta = db.query(AssetMetadata).filter(AssetMetadata.symbol == symbol).first()
+                
+                if asset_meta:
+                    # Check sector blacklist
+                    if asset_meta.sector and asset_meta.sector.lower() in [s.lower() for s in blacklist_sectors]:
+                        return RuleViolation(
+                            rule, severity,
+                            f"Symbol {symbol} belongs to blacklisted sector: {asset_meta.sector}",
+                            actual_value=asset_meta.sector,
+                            expected_value="Not in blacklist sectors"
+                        )
+                    
+                    # Check meme coin filter
+                    if meme_filter and asset_meta.is_meme == "true":
+                        return RuleViolation(
+                            rule, severity,
+                            f"Symbol {symbol} is a meme coin (prohibited)",
+                            actual_value="meme_coin",
+                            expected_value="Not a meme coin"
+                        )
+                    
+                    # Check minimum market cap
+                    if asset_meta.market_cap_usd is not None and asset_meta.market_cap_usd < min_market_cap:
+                        return RuleViolation(
+                            rule, severity,
+                            f"Symbol {symbol} market cap ${asset_meta.market_cap_usd:,.0f} below minimum ${min_market_cap:,.0f}",
+                            actual_value=float(asset_meta.market_cap_usd),
+                            expected_value=f">= ${min_market_cap:,.0f}"
+                        )
+            finally:
+                db.close()
         
-        # R1-02: No Short Selling
+        # R1-02: Single Asset Concentration Limit (formerly R1-03)
         elif rule_id == "R1-02":
-            if params.get("no_short_selling", False):
-                direction = decision.get("direction", "long")
-                if direction == "short":
-                    return RuleViolation(
-                        rule, severity,
-                        "Short selling is prohibited",
-                        actual_value="short",
-                        expected_value="long"
-                    )
-        
-        # R1-03: Single Asset Concentration Limit
-        elif rule_id == "R1-03":
             max_single_asset_pct = params.get("max_single_asset_pct", 0.15)
             target_portion = decision.get("target_portion_of_balance", 0)
             
@@ -252,14 +284,15 @@ class RuleValidator:
                     expected_value=f"<= {max_single_asset_pct}"
                 )
         
-        # R1-04: Minimum Cash Reserve
-        elif rule_id == "R1-04":
+        # R1-03: Minimum Cash Reserve (formerly R1-04)
+        elif rule_id == "R1-03":
             min_cash_pct = params.get("min_cash_pct", 0.10)
             cash = portfolio.get("cash", 0)
-            total_assets = portfolio.get("total_assets", cash)
+            # Use total_equity if available, otherwise fall back to total_assets
+            total_equity = portfolio.get("total_equity") or portfolio.get("total_assets", cash)
             
-            if total_assets > 0:
-                cash_pct = cash / total_assets
+            if total_equity > 0:
+                cash_pct = cash / total_equity
                 if cash_pct < min_cash_pct:
                     return RuleViolation(
                         rule, severity,
@@ -267,6 +300,7 @@ class RuleValidator:
                         actual_value=cash_pct,
                         expected_value=f">= {min_cash_pct}"
                     )
+
         
         # Add more rule checks as needed...
         

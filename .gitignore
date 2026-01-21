@@ -314,5 +314,6 @@ verify_setup.py
 backend/test_*.py
 test_*.py
 docs_local/*
+test_local/*
 toolenv
 data.db-journal

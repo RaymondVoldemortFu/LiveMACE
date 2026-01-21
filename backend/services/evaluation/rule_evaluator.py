@@ -122,35 +122,113 @@ class RuleEvaluator:
                     "threshold": 0.20
                 })
         
-        # R1-01: Client blacklist (check asset metadata)
+        # R1-01: Client blacklist (enhanced with sector and market cap checks)
         if decision.symbol:
-            asset_meta = self.db.query(AssetMetadata).filter(
-                AssetMetadata.symbol == decision.symbol
-            ).first()
+            from backend.config.rules.rule_engine import RuleEngine
             
-            # Example: If client blacklists meme coins
-            if asset_meta and asset_meta.is_meme == "true":
-                violations.append({
-                    "rule": "R1-01",
-                    "level": "R1_CLIENT_HARD",
-                    "severity": "CRITICAL",
-                    "description": f"Trading blacklisted asset: {decision.symbol} (meme coin)",
-                    "value": decision.symbol,
-                    "threshold": "NO_MEME_COINS"
-                })
+            # Load R1 rules to get parameters
+            rule_engine = RuleEngine()
+            r1_rules = rule_engine.load_rules("r1_client_hard")
+            r1_01_rule = next((r for r in r1_rules if r.get("id") == "R1-01"), None)
+            
+            if r1_01_rule:
+                params = r1_01_rule.get("parameters", {})
+                blacklist_symbols = params.get("blacklist_symbols", [])
+                blacklist_sectors = params.get("blacklist_sectors", [])
+                min_market_cap = params.get("min_market_cap_usd", 50000000)
+                meme_filter = params.get("meme_coin_filter", True)
+                
+                # Check symbol blacklist
+                if decision.symbol in blacklist_symbols:
+                    violations.append({
+                        "rule": "R1-01",
+                        "level": "R1_CLIENT_HARD",
+                        "severity": "CRITICAL",
+                        "description": f"Trading blacklisted symbol: {decision.symbol}",
+                        "value": decision.symbol,
+                        "threshold": "NOT_IN_BLACKLIST"
+                    })
+                
+                # Query AssetMetadata
+                asset_meta = self.db.query(AssetMetadata).filter(
+                    AssetMetadata.symbol == decision.symbol
+                ).first()
+                
+                if asset_meta:
+                    # Check sector blacklist
+                    if asset_meta.sector and asset_meta.sector.lower() in [s.lower() for s in blacklist_sectors]:
+                        violations.append({
+                            "rule": "R1-01",
+                            "level": "R1_CLIENT_HARD",
+                            "severity": "CRITICAL",
+                            "description": f"Trading asset in blacklisted sector: {decision.symbol} ({asset_meta.sector})",
+                            "value": asset_meta.sector,
+                            "threshold": "NOT_IN_BLACKLIST_SECTORS"
+                        })
+                    
+                    # Check meme coin filter
+                    if meme_filter and asset_meta.is_meme == "true":
+                        violations.append({
+                            "rule": "R1-01",
+                            "level": "R1_CLIENT_HARD",
+                            "severity": "CRITICAL",
+                            "description": f"Trading blacklisted asset: {decision.symbol} (meme coin)",
+                            "value": decision.symbol,
+                            "threshold": "NO_MEME_COINS"
+                        })
+                    
+                    # Check minimum market cap
+                    if asset_meta.market_cap_usd is not None and asset_meta.market_cap_usd < min_market_cap:
+                        violations.append({
+                            "rule": "R1-01",
+                            "level": "R1_CLIENT_HARD",
+                            "severity": "CRITICAL",
+                            "description": f"Trading asset with market cap below minimum: {decision.symbol} (${asset_meta.market_cap_usd:,.0f} < ${min_market_cap:,.0f})",
+                            "value": float(asset_meta.market_cap_usd),
+                            "threshold": min_market_cap
+                        })
         
-        # R1-04: Minimum cash reserve >= 10%
+        # R1-02: Single Asset Concentration Limit (formerly R1-03)
+        # Check if a single position exceeds 15% of total equity
+        if decision.symbol and latest_snapshot:
+            from backend.database.models import Position
+            
+            # Get all current positions for this account
+            positions = self.db.query(Position).filter(
+                Position.account_id == account_id
+            ).all()
+            
+            total_equity = float(latest_snapshot.total_equity)
+            if total_equity > 0:
+                for pos in positions:
+                    # Calculate position notional value (absolute value for long/short)
+                    position_value = abs(float(pos.quantity) * float(pos.current_price or 0))
+                    concentration = position_value / total_equity
+                    
+                    if concentration > 0.15:
+                        violations.append({
+                            "rule": "R1-02",
+                            "level": "R1_CLIENT_HARD",
+                            "severity": "CRITICAL",
+                            "description": f"Single asset concentration {concentration:.2%} exceeds 15% limit for {pos.symbol}",
+                            "value": concentration,
+                            "threshold": 0.15
+                        })
+        
+        # R1-03: Minimum cash reserve >= 10% (formerly R1-04)
         if latest_snapshot:
             cash_ratio = latest_snapshot.cash / latest_snapshot.total_equity if latest_snapshot.total_equity > 0 else 1
             if cash_ratio < 0.10:
                 violations.append({
-                    "rule": "R1-04",
+                    "rule": "R1-03",
                     "level": "R1_CLIENT_HARD",
                     "severity": "CRITICAL",
                     "description": f"Cash reserve {cash_ratio:.2%} below 10%",
                     "value": cash_ratio,
                     "threshold": 0.10
                 })
+
+
         
         # Gate passes only if no R0 or R1 violations
         gate_pass = len(violations) == 0

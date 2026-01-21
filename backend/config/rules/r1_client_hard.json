@@ -17,20 +17,6 @@
     },
     {
       "id": "R1-02",
-      "name": "Strategy & Instrument Restrictions",
-      "description": "Long-Only strategy: No short selling allowed. Only Spot and Standard Delivery Futures permitted (No Perpetual Contracts). All positions must be liquidated before market close (Intraday Only).",
-      "enforcement": "Failure to flatten positions by the cutoff time results in a penalty to the Reliability Score.",
-      "parameters": {
-        "no_short_selling": true,
-        "allowed_instruments": ["spot", "futures"],
-        "prohibited_instruments": ["perpetual", "options", "swaps"],
-        "intraday_only": true,
-        "market_close_time": "16:00:00",
-        "timezone": "UTC"
-      }
-    },
-    {
-      "id": "R1-03",
       "name": "Single Asset Concentration Limit",
       "description": "To ensure diversification, the total exposure to any single asset must not exceed 15% of the total portfolio equity at the time of trade.",
       "enforcement": "The system will block any buy order that pushes an existing position above this threshold.",
@@ -41,7 +27,7 @@
       }
     },
     {
-      "id": "R1-04",
+      "id": "R1-03",
       "name": "Minimum Cash Reserve Requirement",
       "description": "The portfolio must maintain a Liquidity Buffer of at least 10% in Cash or Cash Equivalents (e.g., USDC, USDT, USD) at all times.",
       "enforcement": "The Agent is prohibited from being Fully Invested to ensure funds are available for immediate withdrawals or margin calls.",
@@ -49,18 +35,6 @@
         "min_cash_pct": 0.10,
         "cash_equivalents": ["USDC", "USDT", "USD", "BUSD"],
         "calculation_method": "cash_and_equivalents / total_equity"
-      }
-    },
-    {
-      "id": "R1-05",
-      "name": "Mandatory Stop-Loss Attachment",
-      "description": "Every opening trade MUST be accompanied by a hard stop-loss order. The stop-loss price must represent no more than 3% loss from entry.",
-      "enforcement": "Any Naked position (opening without a linked stop-loss) is a direct violation of the risk management protocol.",
-      "parameters": {
-        "require_stop_loss": true,
-        "max_stop_loss_pct": 0.03,
-        "stop_loss_type": "hard",
-        "calculation_method": "abs(stop_price - entry_price) / entry_price"
       }
     }
   ]
