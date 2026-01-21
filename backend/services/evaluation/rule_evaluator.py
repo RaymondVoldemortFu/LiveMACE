@@ -79,38 +79,46 @@ class RuleEvaluator:
             })
         
         # R0-03: Intraday drawdown <= 5%
-        # Need to check account snapshots for equity calculation
-        latest_snapshot = self.db.query(AccountSnapshot).filter(
-            AccountSnapshot.account_id == account_id
+        # Compare current equity to previous day's closing equity
+        from datetime import datetime, timedelta
+        
+        # Get today's start (00:00:00)
+        today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        
+        # Get the last snapshot from previous day
+        prev_day_snapshot = self.db.query(AccountSnapshot).filter(
+            AccountSnapshot.account_id == account_id,
+            AccountSnapshot.ts < today_start
         ).order_by(AccountSnapshot.ts.desc()).first()
         
-        if latest_snapshot:
-            initial_equity = latest_snapshot.total_equity
-            current_equity = account.total_asset
-            drawdown = (initial_equity - current_equity) / initial_equity if initial_equity > 0 else 0
+        if prev_day_snapshot:
+            prev_day_equity = float(prev_day_snapshot.total_equity)
+            current_equity = float(account.total_asset)
             
-            if drawdown > 0.05:
-                violations.append({
-                    "rule": "R0-03",
-                    "level": "R0_SYSTEM_HARD",
-                    "severity": "CRITICAL",
-                    "description": f"Intraday drawdown {drawdown:.2%} exceeds 5%",
-                    "value": drawdown,
-                    "threshold": 0.05
-                })
+            if prev_day_equity > 0:
+                drawdown = (prev_day_equity - current_equity) / prev_day_equity
+                
+                if drawdown > 0.05:
+                    violations.append({
+                        "rule": "R0-03",
+                        "level": "R0_SYSTEM_HARD",
+                        "severity": "CRITICAL",
+                        "description": f"Intraday drawdown {drawdown:.2%} exceeds 5% (prev: {prev_day_equity:.2f}, current: {current_equity:.2f})",
+                        "value": drawdown,
+                        "threshold": 0.05
+                    })
         
         # R0-04: Single order size <= 20% of total equity
-        if decision.operation in ['buy', 'sell'] and latest_snapshot:
-            order_value = abs(decision.leverage or 1) * float(account.current_cash) * 0.2  # Approximate
-            max_order_value = latest_snapshot.total_equity * 0.20
+        if decision.operation in ['open', 'buy'] and decision.target_portion_of_balance:
+            target_portion = float(decision.target_portion_of_balance)
             
-            if order_value > max_order_value:
+            if target_portion > 0.20:
                 violations.append({
                     "rule": "R0-04",
                     "level": "R0_SYSTEM_HARD",
                     "severity": "CRITICAL",
-                    "description": f"Order size exceeds 20% of total equity",
-                    "value": order_value / latest_snapshot.total_equity,
+                    "description": f"Order size {target_portion:.2%} exceeds 20% of total equity",
+                    "value": target_portion,
                     "threshold": 0.20
                 })
         

@@ -184,6 +184,23 @@ class RuleValidator:
                         expected_value=f">= {min_margin_level}"
                     )
         
+        # R0-03: Intraday Maximum Drawdown
+        elif rule_id == "R0-03":
+            max_drawdown_pct = params.get("max_drawdown_pct", 0.05)
+            # Check if portfolio has previous day close equity for comparison
+            prev_day_close_equity = portfolio.get("prev_day_close_equity")
+            current_equity = portfolio.get("total_equity") or portfolio.get("total_assets", 0)
+            
+            if prev_day_close_equity and prev_day_close_equity > 0:
+                drawdown = (prev_day_close_equity - current_equity) / prev_day_close_equity
+                if drawdown > max_drawdown_pct:
+                    return RuleViolation(
+                        rule, severity,
+                        f"Intraday drawdown {drawdown:.2%} exceeds maximum {max_drawdown_pct:.2%}",
+                        actual_value=drawdown,
+                        expected_value=f"<= {max_drawdown_pct}"
+                    )
+        
         # R0-04: Maximum Single Order Notional Value
         elif rule_id == "R0-04":
             max_order_pct = params.get("max_order_pct", 0.20)

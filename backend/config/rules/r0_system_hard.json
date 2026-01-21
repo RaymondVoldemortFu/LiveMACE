@@ -44,18 +44,6 @@
         "max_order_pct": 0.20,
         "calculation_method": "order_notional / total_equity"
       }
-    },
-    {
-      "id": "R0-05",
-      "name": "Liquidity & Market Impact Guard",
-      "description": "A single order cannot exceed 10% of the asset's Average Daily Volume (ADV) over the trailing 5-minute window. Trading is prohibited for low-liquidity assets when order size exceeds $10,000.",
-      "enforcement": "Prevents excessive slippage and market manipulation risks.",
-      "parameters": {
-        "max_adv_pct": 0.10,
-        "time_window_minutes": 5,
-        "low_liquidity_threshold_usd": 10000,
-        "min_liquidity_score": 0.3
-      }
     }
   ]
 }
