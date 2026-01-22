@@ -16,6 +16,7 @@ from config.agent_config import AgentConfig
 from .rule_engine import RuleEngine
 from .rule_validator import RuleValidator
 from .compliance_auditor import ComplianceAuditor
+from .llm_auditor import LLMAuditor
 from .prompts import RULE_AWARE_SYSTEM_PROMPT, RULE_AWARE_REMINDER_PROMPT
 
 logger = logging.getLogger(__name__)
@@ -37,7 +38,8 @@ class RuleAwareAgent(BaseAgent):
         tools: ToolRegistry, 
         rule_engine: RuleEngine,
         max_steps: int = AgentConfig.MAX_STEPS,
-        user_id: str = None
+        user_id: str = None,
+        enable_llm_audit: bool = False
     ):
         """
         Initialize Rule-Aware Agent
@@ -48,6 +50,7 @@ class RuleAwareAgent(BaseAgent):
             rule_engine: Rule engine with loaded rules
             max_steps: Maximum reasoning steps
             user_id: User ID for memory
+            enable_llm_audit: Whether to enable LLM-based audit scoring
         """
         super().__init__(llm, tools)
         self.max_steps = max_steps
@@ -59,9 +62,15 @@ class RuleAwareAgent(BaseAgent):
         self.rule_validator = RuleValidator(rule_engine)
         self.compliance_auditor = ComplianceAuditor(rule_engine, self.rule_validator)
         
+        # LLM-based audit (optional)
+        self.enable_llm_audit = enable_llm_audit
+        self.llm_auditor = LLMAuditor(llm) if enable_llm_audit else None
+        
         # Log loaded rules
         rule_summary = self.rule_engine.get_rule_summary()
         logger.info(f"Rule-Aware Agent initialized with rules: {rule_summary}")
+        if enable_llm_audit:
+            logger.info("LLM-based audit scoring enabled")
     
     def run(
         self, 
@@ -205,6 +214,42 @@ class RuleAwareAgent(BaseAgent):
                         # Add audit to decision output
                         decision["compliance_audit"] = compliance_audit.to_dict()
                         decision["agent_reasoning"] = parsed_output["reasoning"]
+                        
+                        # Perform LLM-based audit if enabled
+                        if self.enable_llm_audit and self.llm_auditor:
+                            try:
+                                logger.info("Performing LLM-based audit scoring...")
+                                
+                                # Prepare data for LLM audit
+                                rule_documents = self.rule_engine.format_rules_for_prompt()
+                                market_state = {
+                                    "portfolio": portfolio,
+                                    "prices": prices
+                                }
+                                
+                                # Run LLM audit
+                                llm_audit_result = self.llm_auditor.audit_agent_reasoning(
+                                    rules=rule_documents,
+                                    market_state=market_state,
+                                    agent_output=msg_content
+                                )
+                                
+                                # Add LLM audit to decision
+                                decision["llm_audit"] = llm_audit_result
+                                
+                                # Log formatted report
+                                audit_report = self.llm_auditor.format_audit_report(llm_audit_result)
+                                agent_logger.info("=== LLM Audit Report ===")
+                                agent_logger.info(audit_report)
+                                
+                                logger.info(f"LLM Audit completed - Score: {llm_audit_result.get('final_normalized_score', 0):.2f}")
+                                
+                            except Exception as e:
+                                logger.error(f"LLM audit failed: {e}", exc_info=True)
+                                decision["llm_audit"] = {
+                                    "error": str(e),
+                                    "final_normalized_score": 0.0
+                                }
                         
                         # Check if decision passed compliance
                         if compliance_audit.final_status == "FAIL":
