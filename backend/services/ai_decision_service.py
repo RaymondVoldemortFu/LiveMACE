@@ -408,13 +408,16 @@ def call_agent_for_decision(
     trace_id = str(uuid.uuid4())
     step_counter = 0
 
+    # Cache account.id to avoid Session detachment issues
+    account_id = account.id
+
     def on_step(message: Dict[str, Any]):
         nonlocal step_counter
         step_counter += 1
         try:
             role = message.get("role", "unknown")
             content = message.get("content")
-            
+
             # Handle tool calls serialization
             tool_calls_data = message.get("tool_calls")
             tool_calls_str = None
@@ -436,7 +439,7 @@ def call_agent_for_decision(
 
             trace = AgentTrace(
                 trace_id=trace_id,
-                account_id=account.id,
+                account_id=account_id,  # Use cached account_id instead of account.id
                 step_number=step_counter,
                 role=role,
                 content=str(content) if content is not None else None,
