@@ -13,6 +13,8 @@ from ..llm_client import LLMClient
 from ..tools import ToolRegistry
 from ..memory import get_memory_service
 from config.agent_config import AgentConfig
+from database.connection import get_db
+from database.models import Account
 
 from .rule_engine import RuleEngine
 from .rule_validator import RuleValidator
@@ -40,7 +42,8 @@ class RuleAwareAgent(BaseAgent):
         rule_engine: RuleEngine,
         max_steps: int = AgentConfig.MAX_STEPS,
         user_id: str = None,
-        enable_llm_audit: bool = False
+        enable_llm_audit: bool = False,
+        account_id: int = None
     ):
         """
         Initialize Rule-Aware Agent
@@ -52,10 +55,12 @@ class RuleAwareAgent(BaseAgent):
             max_steps: Maximum reasoning steps
             user_id: User ID for memory
             enable_llm_audit: Whether to enable LLM-based audit scoring
+            account_id: Account ID for updating audit statistics
         """
         super().__init__(llm, tools)
         self.max_steps = max_steps
         self.user_id = user_id
+        self.account_id = account_id
         self.memory = get_memory_service()
         
         # Rule compliance components
@@ -262,6 +267,10 @@ class RuleAwareAgent(BaseAgent):
                                 
                                 logger.info(f"LLM Audit completed - Score: {llm_audit_result.get('final_normalized_score', 0):.2f}")
                                 
+                                # Update account audit statistics
+                                if self.account_id:
+                                    self._update_account_audit_stats(llm_audit_result)
+                                
                             except Exception as e:
                                 logger.error(f"LLM audit failed: {e}", exc_info=True)
                                 decision["llm_audit"] = {
@@ -384,3 +393,68 @@ class RuleAwareAgent(BaseAgent):
             "leverage": 1,
             "reason": reason
         }
+    
+    def _update_account_audit_stats(self, audit_result: Dict[str, Any]) -> None:
+        """
+        Update account's cumulative audit statistics
+        
+        Args:
+            audit_result: LLM audit result with scores
+        """
+        try:
+            # Skip if audit failed
+            if "error" in audit_result:
+                logger.warning(f"Skipping audit stats update due to audit error: {audit_result.get('error')}")
+                return
+            
+            # Extract scores
+            final_score = audit_result.get("final_normalized_score", 0.0)
+            coverage_score = audit_result.get("coverage", {}).get("score", 0)
+            conflict_score = audit_result.get("conflict", {}).get("score", 0)
+            
+            # Update database
+            db = next(get_db())
+            try:
+                account = db.query(Account).filter(Account.id == self.account_id).first()
+                if not account:
+                    logger.error(f"Account {self.account_id} not found, cannot update audit stats")
+                    return
+                
+                # Get current values
+                count = account.llm_audit_count or 0
+                
+                # Calculate new averages using incremental formula:
+                # new_avg = (old_avg * count + new_value) / (count + 1)
+                if count == 0:
+                    # First audit
+                    account.llm_audit_avg_score = final_score
+                    account.llm_audit_avg_coverage = float(coverage_score)
+                    account.llm_audit_avg_conflict = float(conflict_score)
+                else:
+                    # Incremental update
+                    old_avg_score = account.llm_audit_avg_score or 0.0
+                    old_avg_coverage = account.llm_audit_avg_coverage or 0.0
+                    old_avg_conflict = account.llm_audit_avg_conflict or 0.0
+                    
+                    account.llm_audit_avg_score = (old_avg_score * count + final_score) / (count + 1)
+                    account.llm_audit_avg_coverage = (old_avg_coverage * count + coverage_score) / (count + 1)
+                    account.llm_audit_avg_conflict = (old_avg_conflict * count + conflict_score) / (count + 1)
+                
+                # Increment count
+                account.llm_audit_count = count + 1
+                
+                # Commit changes
+                db.commit()
+                
+                logger.info(f"Updated account {self.account_id} audit stats - "
+                          f"Count: {account.llm_audit_count}, "
+                          f"Avg Score: {account.llm_audit_avg_score:.3f}, "
+                          f"Avg Coverage: {account.llm_audit_avg_coverage:.2f}, "
+                          f"Avg Conflict: {account.llm_audit_avg_conflict:.2f}")
+                
+            finally:
+                db.close()
+                
+        except Exception as e:
+            logger.error(f"Failed to update account audit stats: {e}", exc_info=True)
+

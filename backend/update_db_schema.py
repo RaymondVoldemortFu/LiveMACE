@@ -45,7 +45,27 @@ def update_schema():
             else:
                 print("Column agent_type already exists.")
             
-            # 4. Verify new tables exist
+            # 4. Add LLM audit statistics fields to Accounts if they don't exist
+            print("\nChecking for LLM audit statistics fields in accounts...")
+            result = conn.execute(text("PRAGMA table_info(accounts)"))
+            columns = [row[1] for row in result]
+            
+            llm_audit_fields = {
+                "llm_audit_count": "INTEGER NOT NULL DEFAULT 0",
+                "llm_audit_avg_score": "REAL",
+                "llm_audit_avg_coverage": "REAL",
+                "llm_audit_avg_conflict": "REAL"
+            }
+            
+            for field_name, field_type in llm_audit_fields.items():
+                if field_name not in columns:
+                    print(f"Adding {field_name} column to accounts...")
+                    conn.execute(text(f"ALTER TABLE accounts ADD COLUMN {field_name} {field_type}"))
+                    print(f"Column {field_name} added.")
+                else:
+                    print(f"Column {field_name} already exists.")
+            
+            # 5. Verify new tables exist
             print("\nVerifying new tables...")
             tables_to_check = ['account_snapshots', 'asset_metadata', 'rule_evaluation_results']
             for table_name in tables_to_check:

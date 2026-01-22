@@ -57,6 +57,12 @@ class Account(Base):
     margin_used = Column(DECIMAL(18, 2), nullable=False, default=0.00)
     maintenance_margin_ratio = Column(Float, nullable=False, default=0.5)  # 50% of initial margin
     
+    # LLM Audit Statistics (累计审计评分统计)
+    llm_audit_count = Column(Integer, nullable=False, default=0)  # 累计审计次数
+    llm_audit_avg_score = Column(Float, nullable=True)  # 累计平均审计分数 (0.0-1.0)
+    llm_audit_avg_coverage = Column(Float, nullable=True)  # 累计平均覆盖率分数 (1.0-5.0)
+    llm_audit_avg_conflict = Column(Float, nullable=True)  # 累计平均冲突处理分数 (1.0-5.0)
+    
     created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
     updated_at = Column(
         TIMESTAMP, server_default=func.current_timestamp(), onupdate=func.current_timestamp()

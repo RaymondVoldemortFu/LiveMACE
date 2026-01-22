@@ -89,6 +89,16 @@ async def get_specific_account_overview(account_id: int, db: Session = Depends(g
             Order.status == "PENDING"
         ).count()
         
+        # Get LLM audit statistics
+        llm_audit_stats = None
+        if hasattr(account, 'llm_audit_count') and account.llm_audit_count > 0:
+            llm_audit_stats = {
+                "count": account.llm_audit_count,
+                "avg_score": round(account.llm_audit_avg_score, 3) if account.llm_audit_avg_score else None,
+                "avg_coverage": round(account.llm_audit_avg_coverage, 2) if account.llm_audit_avg_coverage else None,
+                "avg_conflict": round(account.llm_audit_avg_conflict, 2) if account.llm_audit_avg_conflict else None
+            }
+        
         return {
             "account": {
                 "id": account.id,
@@ -102,12 +112,14 @@ async def get_specific_account_overview(account_id: int, db: Session = Depends(g
             "positions_value": positions_value,
             "positions_count": positions_count,
             "pending_orders": pending_orders,
+            "llm_audit_stats": llm_audit_stats
         }
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Failed to get account {account_id} overview: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to get account overview: {str(e)}")
+
 
 
 @router.get("/overview")
