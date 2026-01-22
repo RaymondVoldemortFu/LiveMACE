@@ -264,26 +264,26 @@ class AgentTrace(Base):
 
 
 class AgentMemory(Base):
-    """Memory storage for agents"""
+    """Memory storage for agents with local vector embeddings"""
     __tablename__ = "agent_memories"
 
     id = Column(Integer, primary_key=True, index=True)
-    memory_id = Column(String(36), unique=True, nullable=False, index=True)  # ID from Mem0 or UUID
+    memory_id = Column(String(36), unique=True, nullable=False, index=True)  # UUID
     account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False)
     trace_id = Column(String(36), nullable=True, index=True)  # Linked conversation/trace ID
-    
+
     content = Column(Text, nullable=False)  # The actual memory text
     metadata_json = Column(JSON, nullable=True)  # Extra metadata (key-value)
-    
-    # Vector DB Info (optional, if we want to track it)
-    vector_id = Column(String(100), nullable=True)
-    
+
+    # Local vector embedding (stored as JSON array for similarity search)
+    embedding = Column(JSON, nullable=True)  # Vector embedding as JSON array [0.1, 0.2, ...]
+
     created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
     updated_at = Column(TIMESTAMP, server_default=func.current_timestamp(), onupdate=func.current_timestamp())
-    
+
     # Expiration logic
     expires_at = Column(DateTime, nullable=True)
-    
+
     account = relationship("Account", back_populates="memories")
 
 

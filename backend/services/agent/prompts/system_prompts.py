@@ -91,6 +91,22 @@ You can call the following tools to retrieve data, manage the virtual environmen
   - Risk/return calculations
   - Any non-trivial quantitative or data processing tasks
 
+- memory_search (if enabled)  
+  Search your long-term memory for relevant past experiences, insights, and lessons learned.
+  Use this when you need to recall:
+  - Similar market situations you've encountered before
+  - Trading patterns or strategies that worked or failed
+  - Important lessons from past decisions
+  Example: "What did I learn about trading BTC during high volatility?"
+
+- memory_add (if enabled)  
+  Store important experiences, insights, or lessons learned to your long-term memory.
+  Use this when you:
+  - Discover a useful trading pattern or market behavior
+  - Learn from a successful or failed trade
+  - Want to remember important information for future decisions
+  Example: Store "When BTC drops 5% with high volume, it often rebounds within 2 hours"
+
 ========================
 MULTI-TURN INTERACTION RULES
 ========================

@@ -70,7 +70,7 @@ def memory_add(experience: str, user_id: str, metadata: Optional[str] = None) ->
         return f"✗ {error_msg}"
 
 
-def memory_search(query: str, user_id: str, limit: int = 5) -> str:
+def memory_search(query: str, user_id: str, limit: int = 2) -> str:
     """
     Search for relevant memories based on a query.
 
@@ -95,8 +95,8 @@ def memory_search(query: str, user_id: str, limit: int = 5) -> str:
         if not memory_service:
             return "Memory service is not available."
 
-        # Limit to max 10
-        limit = min(limit, 10)
+        # Limit to max 5
+        limit = min(limit, 5)
 
         # Search memories
         results = memory_service.search(
@@ -189,8 +189,8 @@ memory_search_tool = Tool(
             },
             "limit": {
                 "type": "integer",
-                "description": "Maximum number of memories to return (default: 5, max: 10)",
-                "default": 5
+                "description": "Maximum number of memories to return (default: 2, max: 5)",
+                "default": 2
             }
         },
         "required": ["query", "user_id"]
