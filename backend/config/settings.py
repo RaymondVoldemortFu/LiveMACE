@@ -27,4 +27,37 @@ DEFAULT_TRADING_CONFIGS: Dict[str, MarketConfig] = {
         min_order_quantity=1,  # Can trade fractional amounts
         lot_size=1,
     ),
+    "US": MarketConfig(
+        market="US",
+        min_commission=1.0,  # $1.0 minimum
+        commission_rate=0.0003, # Low fee
+        exchange_rate=1.0,
+        min_order_quantity=1,
+        lot_size=1,
+    )
 }
+
+SUPPORTED_STOCKS = [
+    # Information Technology
+    "AAPL", "MSFT", "NVDA", "AVGO",
+    # Communication Services
+    "GOOGL", "META", "NFLX",
+    # Consumer Discretionary
+    "AMZN", "TSLA", "NKE",
+    # Consumer Staples
+    "PG", "KO", "WMT",
+    # Health Care
+    "JNJ", "PFE", "UNH",
+    # Financials
+    "JPM", "BAC", "V",
+    # Industrials
+    "BA", "CAT", "UNP",
+    # Energy
+    "XOM", "CVX",
+    # Utilities
+    "NEE", "DUK",
+    # Real Estate
+    "AMT", "PLD",
+    # Materials
+    "LIN", "DD"
+]

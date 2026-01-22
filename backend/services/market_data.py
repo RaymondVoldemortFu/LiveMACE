@@ -7,8 +7,19 @@ from .hyperliquid_market_data import (
     get_all_symbols_from_hyperliquid,
     hyperliquid_client,
 )
+from .yfinance_market_data import (
+    get_last_price_from_yfinance,
+    get_kline_data_from_yfinance,
+    get_market_status_from_yfinance,
+    get_all_symbols_from_yfinance,
+)
+from config.settings import SUPPORTED_STOCKS
 
 logger = logging.getLogger(__name__)
+
+
+def is_stock(symbol: str) -> bool:
+    return symbol in SUPPORTED_STOCKS
 
 
 def get_last_price(symbol: str, market: str = "CRYPTO") -> float:
@@ -22,6 +33,19 @@ def get_last_price(symbol: str, market: str = "CRYPTO") -> float:
         return cached_price
     
     logger.info(f"Getting real-time price for {key} from API...")
+
+    if is_stock(symbol):
+        try:
+            price = get_last_price_from_yfinance(symbol)
+            if price and price > 0:
+                logger.info(f"Got price for {key} from YFinance: {price}")
+                cache_price(symbol, market, price)
+                return price
+            # If stock is supported but no price found (e.g. market closed and no history?), return None or raise
+            raise Exception(f"YFinance returned invalid price: {price}")
+        except Exception as e:
+             logger.error(f"Failed to get price from YFinance: {e}")
+             raise Exception(f"Unable to get price for {key}: {e}")
 
     try:
         price = get_last_price_from_hyperliquid(symbol)
@@ -39,6 +63,15 @@ def get_last_price(symbol: str, market: str = "CRYPTO") -> float:
 def get_kline_data(symbol: str, market: str = "CRYPTO", period: str = "1d", count: int = 100, start_time: Any = None, end_time: Any = None) -> List[Dict[str, Any]]:
     key = f"{symbol}.{market}"
 
+    if is_stock(symbol):
+        try:
+            data = get_kline_data_from_yfinance(symbol, period, count, start_time, end_time)
+            logger.info(f"Got K-line data for {key} from YFinance, total {len(data)} items")
+            return data
+        except Exception as e:
+            logger.error(f"Failed to get K-line data from YFinance: {e}")
+            raise Exception(f"Unable to get K-line data for {key}: {e}")
+
     try:
         data = get_kline_data_from_hyperliquid(symbol, period, count, start_time, end_time)
         if data is not None:
@@ -53,6 +86,14 @@ def get_kline_data(symbol: str, market: str = "CRYPTO", period: str = "1d", coun
 def get_market_status(symbol: str, market: str = "CRYPTO") -> Dict[str, Any]:
     key = f"{symbol}.{market}"
 
+    if is_stock(symbol):
+        try:
+            status = get_market_status_from_yfinance(symbol)
+            return status
+        except Exception as e:
+             logger.error(f"Failed to get market status from YFinance: {e}")
+             raise Exception(f"Unable to get market status for {key}: {e}")
+
     try:
         status = get_market_status_from_hyperliquid(symbol)
         logger.info(f"Retrieved market status for {key} from Hyperliquid: {status.get('market_status')}")
@@ -66,8 +107,11 @@ def get_all_symbols() -> List[str]:
     """Get all available trading pairs"""
     try:
         symbols = get_all_symbols_from_hyperliquid()
-        logger.info(f"Got {len(symbols)} trading pairs from Hyperliquid")
-        return symbols
+        stock_symbols = get_all_symbols_from_yfinance()
+        
+        all_symbols = symbols + stock_symbols
+        logger.info(f"Got {len(all_symbols)} trading pairs (Crypto + Stocks)")
+        return all_symbols
     except Exception as hl_err:
         logger.error(f"Failed to get trading pairs list: {hl_err}")
         return ['BTC/USD', 'ETH/USD', 'SOL/USD']  # default trading pairs

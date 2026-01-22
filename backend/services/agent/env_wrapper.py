@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from services.market_data import get_last_price, get_market_status, get_kline_data
 from repositories.position_repo import list_positions
 from repositories.account_repo import get_account
-from services.order_executor_leverage import place_and_execute_crypto
+from services.order_executor_leverage import place_and_execute_order
 from services.agent.sub_agents.search_agent import SearchSubAgent
 from services.container_service import ContainerService
 

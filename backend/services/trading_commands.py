@@ -11,9 +11,9 @@ from sqlalchemy.orm import Session
 from database.connection import SessionLocal
 from database.models import Position, Account
 from services.asset_calculator import calc_positions_value
-from services.market_data import get_last_price
+from services.market_data import get_last_price, is_stock
 from services.order_matching import create_order, check_and_execute_order
-from services.order_executor_leverage import place_and_execute_crypto
+from services.order_executor_leverage import place_and_execute_order
 from services.ai_decision_service import (
     call_ai_for_decision, 
     save_ai_decision, 
@@ -28,7 +28,7 @@ from config.agent_config import AgentConfig
 logger = logging.getLogger(__name__)
 trade_logger = logging.getLogger("trade_execution")
 
-AI_TRADING_SYMBOLS: List[str] = ["BTC", "ETH", "SOL", "BNB", "XRP", "DOGE"]
+AI_TRADING_SYMBOLS: List[str] = list(SUPPORTED_SYMBOLS.keys())
 
 
 def _log_trade_execution(operation: str, symbol: str, target_portion: float, price: float, leverage: int, executed: bool, reason: str = ""):
@@ -52,7 +52,8 @@ def _get_market_prices(symbols: List[str]) -> Dict[str, float]:
     prices = {}
     for symbol in symbols:
         try:
-            price = float(get_last_price(symbol, "CRYPTO"))
+            market = "US" if is_stock(symbol) else "CRYPTO"
+            price = float(get_last_price(symbol, market))
             if price > 0:
                 prices[symbol] = price
         except Exception as err:
@@ -62,7 +63,7 @@ def _get_market_prices(symbols: List[str]) -> Dict[str, float]:
 
 def _select_side(db: Session, account: Account, symbol: str, max_value: float) -> Optional[Tuple[str, int]]:
     """Select random trading side and quantity for legacy random trading"""
-    market = "CRYPTO"
+    market = "US" if is_stock(symbol) else "CRYPTO"
     try:
         price = float(get_last_price(symbol, market))
     except Exception as err:
@@ -100,7 +101,7 @@ def _select_side(db: Session, account: Account, symbol: str, max_value: float) -
 
 
 def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
-    """Place crypto order based on AI model decision for all active accounts"""
+    """Place crypto/stock order based on AI model decision for all active accounts"""
     db = SessionLocal()
     try:
         accounts = get_active_ai_accounts(db)
@@ -186,12 +187,14 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
                     save_ai_decision(db, account, decision, portfolio, executed=False)
                     continue
 
+                market = "US" if is_stock(symbol) else "CRYPTO"
+
                 # Calculate quantity based on operation
                 if operation == "open":
                     # Check if there's already a position on this coin (ONE position per coin rule)
                     existing_position = (
                         db.query(Position)
-                        .filter(Position.account_id == account.id, Position.symbol == symbol, Position.market == "CRYPTO")
+                        .filter(Position.account_id == account.id, Position.symbol == symbol, Position.market == market)
                         .first()
                     )
                     
@@ -223,7 +226,7 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
                     # Close a position - calculate quantity based on position and target portion
                     position = (
                         db.query(Position)
-                        .filter(Position.account_id == account.id, Position.symbol == symbol, Position.market == "CRYPTO")
+                        .filter(Position.account_id == account.id, Position.symbol == symbol, Position.market == market)
                         .first()
                     )
                     
@@ -282,7 +285,7 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
                 executed = False
                 fail_reason = ""
                 try:
-                    order = place_and_execute_crypto(
+                    order = place_and_execute_order(
                         db=db,
                         account=account,
                         symbol=symbol,
@@ -291,7 +294,8 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
                         order_type="MARKET",
                         price=None,
                         quantity=quantity,
-                        leverage=leverage
+                        leverage=leverage,
+                        market=market
                     )
                     
                     logger.info(
@@ -353,6 +357,9 @@ def place_random_crypto_order(max_ratio: float = 0.2) -> None:
 
         side, quantity = side_info
         name = SUPPORTED_SYMBOLS[symbol]
+        
+        # Determine market based on symbol
+        market = "US" if is_stock(symbol) else "CRYPTO"
 
         order = create_order(
             db=db,
@@ -363,6 +370,7 @@ def place_random_crypto_order(max_ratio: float = 0.2) -> None:
             order_type="MARKET",
             price=None,
             quantity=quantity,
+            market=market
         )
 
         db.commit()

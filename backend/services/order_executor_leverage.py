@@ -8,11 +8,16 @@ from database.models import (
     CRYPTO_MIN_ORDER_QUANTITY, CRYPTO_LOT_SIZE, CRYPTO_MAINTENANCE_MARGIN_RATIO
 )
 from .market_data import get_last_price
+from config.settings import DEFAULT_TRADING_CONFIGS
 
 
-def _calc_crypto_fee(notional: Decimal, leverage: int = 1) -> Decimal:
-    """Calculate taker fee for CRYPTO market"""
-    return notional * Decimal(str(CRYPTO_TAKER_FEE_RATE))
+def _calc_fee(notional: Decimal, market: str = "CRYPTO", leverage: int = 1) -> Decimal:
+    """Calculate taker fee based on market config"""
+    config = DEFAULT_TRADING_CONFIGS.get(market, DEFAULT_TRADING_CONFIGS["CRYPTO"])
+    fee_rate = Decimal(str(config.commission_rate))
+    fee = notional * fee_rate
+    min_comm = Decimal(str(config.min_commission))
+    return max(fee, min_comm)
 
 
 def _calculate_position_interest(position: Position) -> Decimal:
@@ -34,7 +39,7 @@ def _calculate_position_interest(position: Position) -> Decimal:
     return interest
 
 
-def place_and_execute_crypto(
+def place_and_execute_order(
     db: Session,
     account: Account,
     symbol: str,
@@ -43,34 +48,43 @@ def place_and_execute_crypto(
     order_type: str,
     price: float | None,
     quantity: float,
-    leverage: int = 1
+    leverage: int = 1,
+    market: str = "CRYPTO"
 ) -> Order:
     """
-    Place and execute a CRYPTO order with leverage support.
+    Place and execute an order with leverage support.
     
     Args:
         account: Trading account
-        symbol: Trading pair (e.g., 'BTC/USDT')
+        symbol: Trading pair (e.g., 'BTC/USDT' or 'AAPL')
+        name: Asset name
         side: 'LONG' (open long) / 'SHORT' (open short) / 'BUY' (close short) / 'SELL' (close long)
+        order_type: 'MARKET' or 'LIMIT'
+        price: Price for limit order, or None for market
+        quantity: Amount
         leverage: Leverage multiplier (1 = spot, 2-50 = leveraged)
-        quantity: Amount in base currency (e.g., BTC amount for BTC/USDT)
+        market: "CRYPTO" or "US" (stock)
     
     Returns:
         Executed Order
     """
-    if leverage < 1 or leverage > CRYPTO_MAX_LEVERAGE:
-        raise ValueError(f"Leverage must be between 1 and {CRYPTO_MAX_LEVERAGE}")
+    # Validation
+    if leverage < 1:
+        raise ValueError("Leverage must be >= 1")
+        
+    config = DEFAULT_TRADING_CONFIGS.get(market, DEFAULT_TRADING_CONFIGS["CRYPTO"])
+    min_qty = config.min_order_quantity
     
     # Validate quantity
-    if quantity < CRYPTO_MIN_ORDER_QUANTITY:
-        raise ValueError(f"Quantity must be >= {CRYPTO_MIN_ORDER_QUANTITY}")
+    if quantity < min_qty:
+        raise ValueError(f"Quantity must be >= {min_qty}")
     
     # Get execution price
-    exec_price = Decimal(str(price if (order_type == "LIMIT" and price) else get_last_price(symbol, "CRYPTO")))
+    exec_price = Decimal(str(price if (order_type == "LIMIT" and price) else get_last_price(symbol, market)))
     notional = exec_price * Decimal(str(quantity))
     
     # Calculate fees
-    taker_fee = _calc_crypto_fee(notional, leverage)
+    taker_fee = _calc_fee(notional, market, leverage)
     
     # Create order
     order = Order(
@@ -79,7 +93,7 @@ def place_and_execute_crypto(
         order_no=uuid.uuid4().hex[:16],
         symbol=symbol,
         name=name,
-        market="CRYPTO",
+        market=market,
         side=side.upper(),
         order_type=order_type,
         price=float(exec_price),
@@ -97,7 +111,7 @@ def place_and_execute_crypto(
         .filter(
             Position.account_id == account.id,
             Position.symbol == symbol,
-            Position.market == "CRYPTO"
+            Position.market == market
         )
         .first()
     )
@@ -155,7 +169,7 @@ def place_and_execute_crypto(
                     account_id=account.id,
                     symbol=symbol,
                     name=name,
-                    market="CRYPTO",
+                    market=market,
                     quantity=0,
                     available_quantity=0,
                     avg_cost=0,
@@ -250,7 +264,7 @@ def place_and_execute_crypto(
         account_id=account.id,
         symbol=symbol,
         name=name,
-        market="CRYPTO",
+        market=market,
         side=side.upper(),
         price=float(exec_price),
         quantity=quantity,

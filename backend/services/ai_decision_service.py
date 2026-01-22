@@ -44,6 +44,11 @@ SUPPORTED_SYMBOLS: Dict[str, str] = {
     "BNB": "Binance Coin",
 }
 
+# Update with stock symbols
+from config.settings import SUPPORTED_STOCKS
+for stock in SUPPORTED_STOCKS:
+    SUPPORTED_SYMBOLS[stock] = stock # Map symbol to name (same for now)
+
 
 def _is_default_api_key(api_key: str) -> bool:
     """Check if the API key is a default/placeholder key that should be skipped"""
@@ -54,7 +59,7 @@ def _get_portfolio_data(db: Session, account: Account) -> Dict:
     """Get current portfolio positions and values"""
     positions = db.query(Position).filter(
         Position.account_id == account.id,
-        Position.market == "CRYPTO"
+        # Position.market == "CRYPTO"  # Support all markets (US, CRYPTO)
     ).all()
 
     portfolio = {}
