@@ -177,11 +177,29 @@ class MetricsCalculator:
         if not trades:
             return 0.0
         
-        # Assume typical crypto exchange fees: 0.1% for market orders
-        # This should ideally be retrieved from actual trade records if available
-        avg_cost = 0.001  # 0.1%
+        # Calculate actual transaction costs from trade records
+        total_cost = 0
+        total_notional = 0
         
-        return avg_cost
+        for trade in trades:
+            notional_value = abs(float(trade.quantity) * float(trade.price))
+            total_notional += notional_value
+            
+            # Sum up all fees: commission, taker fee, and interest
+            trade_cost = (
+                float(trade.commission or 0) + 
+                float(trade.taker_fee or 0) + 
+                float(trade.interest_charged or 0)
+            )
+            total_cost += trade_cost
+        
+        # Calculate average cost ratio
+        if total_notional > 0:
+            avg_cost_ratio = total_cost / total_notional
+        else:
+            avg_cost_ratio = 0.0
+        
+        return avg_cost_ratio
     
     def calculate_sharpe_ratio(self, snapshots: List[AccountSnapshot], risk_free_rate: float = 0.0) -> float:
         """

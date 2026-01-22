@@ -278,49 +278,115 @@ class RuleEvaluator:
         # R2-01: Volatility (target: 10-15%)
         volatility = calculator.calculate_volatility(snapshots)
         if volatility < 0.10:
-            scores["R2-01"] = max(0, 1 - (0.10 - volatility) * 5)  # Exponential penalty
+            # Below minimum - penalize proportionally
+            scores["R2-01"] = max(0, 1 - (0.10 - volatility) * 5)
         elif volatility > 0.15:
-            scores["R2-01"] = max(0, 1 - (volatility - 0.15) * 5)
+            # Check if Sharpe ratio is high enough to justify higher volatility
+            sharpe = calculator.calculate_sharpe_ratio(snapshots)
+            sharpe_override_threshold = 2.0
+            
+            if sharpe >= sharpe_override_threshold:
+                # High Sharpe ratio - allow higher volatility with reduced penalty
+                scores["R2-01"] = max(0.7, 1 - (volatility - 0.15) * 2)
+            else:
+                # No override - standard penalty
+                scores["R2-01"] = max(0, 1 - (volatility - 0.15) * 5)
         else:
+            # Within target range
             scores["R2-01"] = 1.0
         
         # R2-02: Turnover (target: <= 200%)
         turnover = calculator.calculate_turnover(account_id, snapshots)
+        penalty_threshold = 3.0  # 300% turnover triggers severe penalty
+        
         if turnover > 2.0:
-            scores["R2-02"] = max(0, 1 - (turnover - 2.0) * 0.5)
+            if turnover > penalty_threshold:
+                # Excessive noise trading - severe penalty
+                scores["R2-02"] = max(0, 1 - (turnover - 2.0) * 1.0)
+            else:
+                # Moderate excess - standard penalty
+                scores["R2-02"] = max(0, 1 - (turnover - 2.0) * 0.5)
         else:
             scores["R2-02"] = 1.0
         
-        # R2-03: Sector preference (target: >= 40% in preferred sector)
-        sector_allocation = calculator.calculate_sector_allocation(account_id)
-        preferred_sector_ratio = sector_allocation.get("Layer1", 0)  # Example: prefer Layer1
-        if preferred_sector_ratio < 0.40:
-            scores["R2-03"] = max(0, preferred_sector_ratio / 0.40)
+        # R2-03: Sector preference (target: 30-50% in preferred sectors)
+        from backend.config.rules.rule_engine import RuleEngine
+        
+        rule_engine = RuleEngine()
+        r2_rules = rule_engine.load_rules("r2_client_soft")
+        r2_03_rule = next((r for r in r2_rules if r.get("id") == "R2-03"), None)
+        
+        if r2_03_rule:
+            params = r2_03_rule.get("parameters", {})
+            preferred_sectors = params.get("preferred_sectors", [])
+            preferred_crypto_themes = params.get("preferred_crypto_themes", [])
+            target_min = params.get("target_allocation_min", 0.30)
+            target_max = params.get("target_allocation_max", 0.50)
+            
+            sector_allocation = calculator.calculate_sector_allocation(account_id)
+            
+            # Calculate allocation in preferred sectors/themes
+            preferred_allocation = 0
+            for sector, allocation in sector_allocation.items():
+                sector_lower = sector.lower() if sector else ""
+                # Check if sector matches any preferred sector or crypto theme
+                if any(s.lower() in sector_lower or sector_lower in s.lower() 
+                       for s in (preferred_sectors + preferred_crypto_themes)):
+                    preferred_allocation += allocation
+            
+            if preferred_allocation < target_min:
+                # Below minimum - proportional penalty
+                scores["R2-03"] = max(0, preferred_allocation / target_min)
+            elif preferred_allocation > target_max:
+                # Above maximum - slight penalty for over-concentration
+                scores["R2-03"] = max(0.7, 1 - (preferred_allocation - target_max) * 2)
+            else:
+                # Within target range
+                scores["R2-03"] = 1.0
         else:
+            # Rule not found - default score
             scores["R2-03"] = 1.0
         
         # R2-04: Cash drag (target: <= 20%)
         latest_snapshot = snapshots[-1]
         cash_ratio = float(latest_snapshot.cash / latest_snapshot.total_equity) if latest_snapshot.total_equity > 0 else 0
+        
         if cash_ratio > 0.20:
-            scores["R2-04"] = max(0, 1 - (cash_ratio - 0.20) * 2)
+            # High cash position - check duration
+            extended_period_days = 7
+            
+            # Count how many recent snapshots have >20% cash
+            high_cash_count = sum(1 for s in snapshots[-extended_period_days*24:] 
+                                 if float(s.cash / s.total_equity) > 0.20 if s.total_equity > 0)
+            
+            if high_cash_count > extended_period_days * 24 * 0.8:
+                # Extended period with high cash - penalty
+                scores["R2-04"] = max(0, 1 - (cash_ratio - 0.20) * 3)
+            else:
+                # Temporary high cash - reduced penalty
+                scores["R2-04"] = max(0.7, 1 - (cash_ratio - 0.20) * 1.5)
         else:
             scores["R2-04"] = 1.0
         
         # R2-05: Transaction cost minimization
         avg_cost = calculator.calculate_avg_transaction_cost(account_id, start_time, end_time)
-        # Assume 0.1% is ideal, penalize if higher
-        if avg_cost > 0.001:
-            scores["R2-05"] = max(0, 1 - (avg_cost - 0.001) * 100)
+        target_max_slippage = 0.001  # 0.1% target
+        
+        if avg_cost > target_max_slippage:
+            # Higher than target - penalty
+            scores["R2-05"] = max(0, 1 - (avg_cost - target_max_slippage) * 100)
         else:
             scores["R2-05"] = 1.0
         
         # R2-06: Sharpe ratio (target: >= 1.5)
         sharpe = calculator.calculate_sharpe_ratio(snapshots)
+        
         if sharpe < 1.5:
-            scores["R2-06"] = max(0, sharpe / 1.5)
+            # Below target - proportional score
+            scores["R2-06"] = max(0, sharpe / 1.5) if sharpe > 0 else 0
         else:
-            scores["R2-06"] = 1.0
+            # Meets or exceeds target
+            scores["R2-06"] = min(1.0, sharpe / 1.5)  # Cap at 1.0
         
         return scores
     
