@@ -20,14 +20,14 @@ def get_or_create_memory_service():
     return _memory_service
 
 
-def memory_add(experience: str, user_id: str, metadata: Optional[str] = None) -> str:
+def memory_add(experience: str, account_id: str, metadata: Optional[str] = None) -> str:
     """
     Add an experience or insight to memory.
 
     Args:
         experience: The experience, insight, or lesson learned that should be remembered.
                    Should be a concise summary of what was learned.
-        user_id: The user/account ID this memory belongs to.
+        account_id: The account ID this memory belongs to.
         metadata: Optional JSON string with additional metadata (e.g., {"trade_result": "profit"})
 
     Returns:
@@ -36,7 +36,7 @@ def memory_add(experience: str, user_id: str, metadata: Optional[str] = None) ->
     Example:
         memory_add(
             experience="When BTC drops 5% in 1 hour with high volume, it often rebounds within 2 hours. Consider buying the dip.",
-            user_id="123"
+            account_id="123"
         )
     """
     try:
@@ -57,11 +57,11 @@ def memory_add(experience: str, user_id: str, metadata: Optional[str] = None) ->
         # Add to memory
         memory_service.add(
             content=experience,
-            user_id=user_id,
+            account_id=account_id,
             metadata=metadata_dict
         )
 
-        logger.info(f"Memory added for user {user_id}: {experience[:100]}...")
+        logger.info(f"Memory added for account {account_id}: {experience[:100]}...")
         return f"✓ Memory saved successfully: '{experience[:100]}...'"
 
     except Exception as e:
@@ -70,14 +70,14 @@ def memory_add(experience: str, user_id: str, metadata: Optional[str] = None) ->
         return f"✗ {error_msg}"
 
 
-def memory_search(query: str, user_id: str, limit: int = 2) -> str:
+def memory_search(query: str, account_id: str, limit: int = 2) -> str:
     """
     Search for relevant memories based on a query.
 
     Args:
         query: The search query describing what kind of memories you need.
                Should be specific about the context or situation.
-        user_id: The user/account ID to search memories for.
+        account_id: The account ID to search memories for.
         limit: Maximum number of memories to return (default: 5, max: 10)
 
     Returns:
@@ -86,7 +86,7 @@ def memory_search(query: str, user_id: str, limit: int = 2) -> str:
     Example:
         memory_search(
             query="What did I learn about BTC price drops and rebounds?",
-            user_id="123"
+            account_id="123"
         )
     """
     try:
@@ -101,7 +101,7 @@ def memory_search(query: str, user_id: str, limit: int = 2) -> str:
         # Search memories
         results = memory_service.search(
             query=query,
-            user_id=user_id,
+            account_id=account_id,
             limit=limit
         )
 
@@ -121,7 +121,7 @@ def memory_search(query: str, user_id: str, limit: int = 2) -> str:
             formatted_memories.append(f"{idx}. {text}{metadata_str}")
 
         result_text = "\n".join(formatted_memories)
-        logger.info(f"Found {len(results)} memories for user {user_id}")
+        logger.info(f"Found {len(results)} memories for account {account_id}")
 
         return f"Found {len(results)} relevant memories:\n{result_text}"
 
@@ -150,9 +150,9 @@ memory_add_tool = Tool(
                     "Example: 'When BTC drops 5% with high volume, it often rebounds within 2 hours.'"
                 )
             },
-            "user_id": {
+            "account_id": {
                 "type": "string",
-                "description": "Your user/account ID"
+                "description": "Your account ID"
             },
             "metadata": {
                 "type": "string",
@@ -160,7 +160,7 @@ memory_add_tool = Tool(
                 "default": None
             }
         },
-        "required": ["experience", "user_id"]
+        "required": ["experience", "account_id"]
     },
     func=memory_add
 )
@@ -183,9 +183,9 @@ memory_search_tool = Tool(
                     "Example: 'What did I learn about trading BTC during high volatility?'"
                 )
             },
-            "user_id": {
+            "account_id": {
                 "type": "string",
-                "description": "Your user/account ID"
+                "description": "Your account ID"
             },
             "limit": {
                 "type": "integer",
@@ -193,7 +193,7 @@ memory_search_tool = Tool(
                 "default": 2
             }
         },
-        "required": ["query", "user_id"]
+        "required": ["query", "account_id"]
     },
     func=memory_search
 )

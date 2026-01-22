@@ -30,18 +30,18 @@ class MemoryInterface(ABC):
     """Abstract interface for memory systems"""
 
     @abstractmethod
-    def add(self, content: str, user_id: str, metadata: Optional[Dict] = None, trace_id: Optional[str] = None):
+    def add(self, content: str, account_id: str, metadata: Optional[Dict] = None, trace_id: Optional[str] = None):
         """Add a memory item."""
         pass
 
     @abstractmethod
-    def search(self, query: str, user_id: str, limit: int = 5) -> List[Dict]:
+    def search(self, query: str, account_id: str, limit: int = 5) -> List[Dict]:
         """Search for memories."""
         pass
 
     @abstractmethod
-    def get_all(self, user_id: str, limit: int = 100) -> List[Dict]:
-        """Get all memories for a user."""
+    def get_all(self, account_id: str, limit: int = 100) -> List[Dict]:
+        """Get all memories for an account."""
         pass
 
     @abstractmethod
@@ -93,7 +93,7 @@ class LocalMemory(MemoryInterface):
             logger.error(f"Failed to compute embedding: {e}")
             return None
 
-    def add(self, content: str, user_id: str, metadata: Optional[Dict] = None, trace_id: Optional[str] = None):
+    def add(self, content: str, account_id: str, metadata: Optional[Dict] = None, trace_id: Optional[str] = None):
         """Add a memory with its embedding to the database"""
         if not self.model:
             logger.warning("Memory model not initialized. Cannot add memory.")
@@ -114,7 +114,7 @@ class LocalMemory(MemoryInterface):
             try:
                 mem_entry = AgentMemory(
                     memory_id=memory_id,
-                    account_id=int(user_id) if user_id.isdigit() else 0,
+                    account_id=int(account_id) if account_id.isdigit() else 0,
                     trace_id=trace_id,
                     content=content,
                     metadata_json=metadata,
@@ -122,7 +122,7 @@ class LocalMemory(MemoryInterface):
                 )
                 db.add(mem_entry)
                 db.commit()
-                logger.info(f"Memory saved to DB for user {user_id}: {content[:100]}...")
+                logger.info(f"Memory saved to DB for account {account_id}: {content[:100]}...")
             except Exception as e:
                 logger.error(f"Failed to save memory to DB: {e}")
                 db.rollback()
@@ -143,7 +143,7 @@ class LocalMemory(MemoryInterface):
             logger.error(f"Error computing cosine similarity: {e}")
             return 0.0
 
-    def search(self, query: str, user_id: str, limit: int = 2) -> List[Dict]:
+    def search(self, query: str, account_id: str, limit: int = 2) -> List[Dict]:
         """Search for similar memories using cosine similarity"""
         if not self.model:
             logger.warning("Memory model not initialized. Cannot search.")
@@ -156,15 +156,15 @@ class LocalMemory(MemoryInterface):
                 logger.error("Failed to compute query embedding")
                 return []
 
-            # Fetch all memories for this user from database
+            # Fetch all memories for this account from database
             db: Session = SessionLocal()
             try:
                 memories = db.query(AgentMemory).filter(
-                    AgentMemory.account_id == int(user_id) if user_id.isdigit() else 0
+                    AgentMemory.account_id == int(account_id) if account_id.isdigit() else 0
                 ).all()
 
                 if not memories:
-                    logger.info(f"No memories found for user {user_id}")
+                    logger.info(f"No memories found for account {account_id}")
                     return []
 
                 # Compute similarity scores
@@ -188,7 +188,7 @@ class LocalMemory(MemoryInterface):
                 results.sort(key=lambda x: x["similarity"], reverse=True)
                 top_results = results[:limit]
 
-                logger.info(f"Found {len(top_results)} relevant memories for user {user_id}")
+                logger.info(f"Found {len(top_results)} relevant memories for account {account_id}")
                 return top_results
 
             finally:
@@ -198,13 +198,13 @@ class LocalMemory(MemoryInterface):
             logger.error(f"Error searching memories: {e}")
             return []
 
-    def get_all(self, user_id: str, limit: int = 100) -> List[Dict]:
-        """Get all memories for a user"""
+    def get_all(self, account_id: str, limit: int = 100) -> List[Dict]:
+        """Get all memories for an account"""
         try:
             db: Session = SessionLocal()
             try:
                 memories = db.query(AgentMemory).filter(
-                    AgentMemory.account_id == int(user_id) if user_id.isdigit() else 0
+                    AgentMemory.account_id == int(account_id) if account_id.isdigit() else 0
                 ).order_by(AgentMemory.created_at.desc()).limit(limit).all()
 
                 results = []
