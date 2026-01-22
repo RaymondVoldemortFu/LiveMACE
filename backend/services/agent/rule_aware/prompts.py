@@ -99,6 +99,7 @@ No rule conflicts detected.
 - You MUST explicitly list EVERY rule you checked in the [Compliance Audit] section
 - For each rule, state whether it: Pass, Fail, or Adjusted
 - If you adjusted your decision to comply, explain what you changed
+- **For HOLD decisions**: You must still perform a full compliance audit. Explain why holding the current position is the most compliant and optimal choice.
 
 ### Transparency
 - Your reasoning must be traceable: cite specific data points, tool outputs, and rules

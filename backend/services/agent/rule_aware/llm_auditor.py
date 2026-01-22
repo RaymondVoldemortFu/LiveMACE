@@ -74,6 +74,11 @@ Where final_normalized_score = (coverage.score + conflict.score) / 10
 - Score 5 requires near-perfect performance
 - If no conflicts exist in the scenario, evaluate based on whether the agent would HAVE detected them if they existed
 - Focus on WHAT THE AGENT WROTE, not what the rules theoretically allow
+- **HOLD decisions (no action) MUST be evaluated with the SAME standards**: Agent should still check all applicable rules and explain why HOLD is compliant/optimal, even when not executing a trade
+- For HOLD decisions, evaluate whether agent:
+  - Checked rules that would apply IF a trade were considered (e.g., R0-04 order size, R1-02 concentration)
+  - Explained why current state already satisfies rules OR why any potential trade would violate rules
+  - Did NOT simply ignore rules because "no trade = no rules to check"
 """
 
 
