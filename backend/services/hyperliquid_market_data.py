@@ -4,8 +4,9 @@ Hyperliquid market data service using CCXT
 import ccxt
 import logging
 from typing import Dict, List, Any, Optional
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import time
+from config.settings import TIME_OFFSET_MINUTES
 
 logger = logging.getLogger(__name__)
 
@@ -35,15 +36,65 @@ class HyperliquidClient:
             # Ensure symbol is in CCXT format (e.g., 'BTC/USD')
             formatted_symbol = self._format_symbol(symbol)
             
-            ticker = self.exchange.fetch_ticker(formatted_symbol)
-            price = ticker['last']
-            
-            logger.info(f"Got price for {formatted_symbol}: {price}")
-            return float(price) if price else None
+            if TIME_OFFSET_MINUTES > 0:
+                # If offset is set, get price from klines at simulated time
+                simulated_now = datetime.now(timezone.utc) - timedelta(minutes=TIME_OFFSET_MINUTES)
+                simulated_now_ms = int(simulated_now.timestamp() * 1000)
+                
+                # Fetch recent klines to find the price at that time
+                # Using 1m candles for best precision
+                # We need to fetch enough data to cover the offset point
+                target_time_ms = simulated_now_ms
+                since_ms = target_time_ms - 60000 * 10  # 10 mins back
+                
+                ohlcv = self.exchange.fetch_ohlcv(formatted_symbol, '1m', since=since_ms, limit=20)
+                
+                # Find the latest candle that is <= target_time_ms
+                target_candle = None
+                for candle in ohlcv:
+                    # candle[0] is open time. 
+                    if candle[0] <= target_time_ms:
+                        target_candle = candle
+                    else:
+                        break
+                
+                if target_candle:
+                    # Use close price of the candle
+                    price = target_candle[4]
+                    logger.info(f"Got historical price for {formatted_symbol} at {simulated_now}: {price}")
+                    return float(price)
+                else:
+                    logger.warning(f"No historical price found for {formatted_symbol} at {simulated_now}")
+                    return None
+            else:
+                ticker = self.exchange.fetch_ticker(formatted_symbol)
+                price = ticker['last']
+                
+                logger.info(f"Got price for {formatted_symbol}: {price}")
+                return float(price) if price else None
             
         except Exception as e:
             logger.error(f"Error fetching price for {symbol}: {e}")
             return None
+
+    def _parse_timeframe_to_ms(self, timeframe: str) -> int:
+        """Convert CCXT timeframe string to milliseconds"""
+        unit = timeframe[-1]
+        try:
+            value = int(timeframe[:-1])
+        except ValueError:
+            return 0
+            
+        if unit == 'm':
+            return value * 60 * 1000
+        elif unit == 'h':
+            return value * 60 * 60 * 1000
+        elif unit == 'd':
+            return value * 24 * 60 * 60 * 1000
+        elif unit == 'w':
+            return value * 7 * 24 * 60 * 60 * 1000
+        else:
+            return 0
 
     def get_kline_data(self, symbol: str, period: str = '1d', count: int = 100, start_time: Optional[int] = None, end_time: Optional[int] = None) -> List[Dict[str, Any]]:
         """Get kline/candlestick data for a symbol"""
@@ -52,6 +103,19 @@ class HyperliquidClient:
                 self._initialize_exchange()
             
             formatted_symbol = self._format_symbol(symbol)
+            
+            # Handle Time Offset
+            if TIME_OFFSET_MINUTES > 0:
+                simulated_now = datetime.now(timezone.utc) - timedelta(minutes=TIME_OFFSET_MINUTES)
+                simulated_now_ms = int(simulated_now.timestamp() * 1000)
+                
+                # If end_time is not provided, cap it at simulated_now
+                if end_time is None:
+                    end_time = simulated_now_ms
+                else:
+                    # If end_time is provided, ensure it doesn't exceed simulated_now
+                    # (Prevent peeking into the future)
+                    end_time = min(end_time, simulated_now_ms)
             
             # Map period to CCXT timeframe
             timeframe_map = {
@@ -69,7 +133,18 @@ class HyperliquidClient:
             # If start_time is provided, use it as 'since'
             since = start_time if start_time else None
             
-            ohlcv = self.exchange.fetch_ohlcv(formatted_symbol, timeframe, since=since, limit=count)
+            # If we have an offset and no start time, we need to calculate 'since' 
+            # to ensure we get the data ending at 'end_time' (which is simulated now)
+            if TIME_OFFSET_MINUTES > 0 and since is None:
+                duration_ms = self._parse_timeframe_to_ms(timeframe)
+                if duration_ms > 0:
+                    # Calculate required lookback
+                    # Add extra buffer (count * 1.5) to account for gaps or partial candles
+                    lookback_ms = int(duration_ms * count * 1.5)
+                    # end_time is guaranteed to be set if TIME_OFFSET_MINUTES > 0 above
+                    since = end_time - lookback_ms
+            
+            ohlcv = self.exchange.fetch_ohlcv(formatted_symbol, timeframe, since=since, limit=count + 50)
             
             # Convert to our format
             klines = []

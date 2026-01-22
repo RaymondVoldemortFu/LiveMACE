@@ -9,6 +9,9 @@ from pydantic import BaseModel
 import logging
 
 from services.market_data import get_last_price, get_kline_data, get_market_status
+from config.settings import TIME_OFFSET_MINUTES
+import time
+from datetime import datetime, timezone, timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -70,12 +73,14 @@ async def get_crypto_price(symbol: str, market: str = "US"):
     try:
         price = get_last_price(symbol, market)
         
-        import time
+        # Apply time offset to timestamp
+        current_timestamp = int((time.time() - TIME_OFFSET_MINUTES * 60) * 1000)
+        
         return PriceResponse(
             symbol=symbol,
             market=market,
             price=price,
-            timestamp=int(time.time() * 1000)
+            timestamp=current_timestamp
         )
     except Exception as e:
         logger.error(f"Failed to get crypto price: {e}")
@@ -100,8 +105,8 @@ async def get_multiple_prices(symbols: str, market: str = "hyperliquid"):
             raise HTTPException(status_code=400, detail="Maximum 20 crypto symbols supported")
         
         results = []
-        import time
-        current_timestamp = int(time.time() * 1000)
+        # Apply time offset to timestamp
+        current_timestamp = int((time.time() - TIME_OFFSET_MINUTES * 60) * 1000)
         
         for symbol in symbol_list:
             try:
@@ -203,12 +208,17 @@ async def get_crypto_market_status(symbol: str, market: str = "US"):
     try:
         status_data = get_market_status(symbol, market)
         
+        # Calculate simulated time
+        simulated_now = datetime.now(timezone.utc) - timedelta(minutes=TIME_OFFSET_MINUTES)
+        timestamp = int(simulated_now.timestamp() * 1000)
+        current_time_str = simulated_now.strftime("%Y-%m-%d %H:%M:%S")
+
         return MarketStatusResponse(
             symbol=status_data.get('symbol', symbol),
             market=status_data.get('market', market),
             market_status=status_data.get('market_status', 'UNKNOWN'),
-            timestamp=status_data.get('timestamp'),
-            current_time=status_data.get('current_time', '')
+            timestamp=status_data.get('timestamp', timestamp),
+            current_time=status_data.get('current_time', current_time_str)
         )
     except Exception as e:
         logger.error(f"Failed to get market status: {e}")
@@ -227,10 +237,11 @@ async def market_data_health():
         # Test getting a price to check if service is running normally
         test_price = get_last_price("MSFT", "US")
         
-        import time
+        current_timestamp = int((time.time() - TIME_OFFSET_MINUTES * 60) * 1000)
+        
         return {
             "status": "healthy",
-            "timestamp": int(time.time() * 1000),
+            "timestamp": current_timestamp,
             "test_price": {
                 "symbol": "MSFT.US",
                 "price": test_price
@@ -241,7 +252,7 @@ async def market_data_health():
         logger.error(f"Market data service health check failed: {e}")
         return {
             "status": "unhealthy",
-            "timestamp": int(time.time() * 1000),
+            "timestamp": int(time.time() * 1000), # Return real time for error
             "error": str(e),
             "message": "Market data service abnormal"
         }

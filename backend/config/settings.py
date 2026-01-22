@@ -11,6 +11,12 @@ class MarketConfig(BaseModel):
     lot_size: int = 1
 
 
+# Time offset configuration for simulation (in minutes)
+# Positive value means the system perceives time as (Real Time - Offset)
+# This affects both the timestamp of "current" data and the data fetching logic
+TIME_OFFSET_MINUTES: int = 30
+
+
 #  default configs for CRYPTO markets
 DEFAULT_TRADING_CONFIGS: Dict[str, MarketConfig] = {
     "CRYPTO": MarketConfig(
