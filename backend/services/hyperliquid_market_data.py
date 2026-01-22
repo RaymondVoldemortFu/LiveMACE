@@ -7,6 +7,7 @@ from typing import Dict, List, Any, Optional
 from datetime import datetime, timezone, timedelta
 import time
 from config.settings import TIME_OFFSET_MINUTES
+from config.proxy_config import proxy_config
 
 logger = logging.getLogger(__name__)
 
@@ -18,10 +19,22 @@ class HyperliquidClient:
     def _initialize_exchange(self):
         """Initialize CCXT Hyperliquid exchange"""
         try:
-            self.exchange = ccxt.hyperliquid({
+            config = {
                 'sandbox': False,  # Set to True for testnet
                 'enableRateLimit': True,
-            })
+            }
+            
+            # Remove direct proxy config if using global env vars
+            # CCXT usually picks up env vars automatically, or we can explicity set 'aiohttp_proxy' / 'proxies'
+            # But mixing global env vars and constructor config can be tricky.
+            # Let's rely on global env vars first if setup_global_proxy is called.
+            
+            # However, if we want to be explicit:
+            # proxies = proxy_config.get_proxy_dict()
+            # if proxies:
+            #    config['proxies'] = proxies
+            
+            self.exchange = ccxt.hyperliquid(config)
             logger.info("Hyperliquid exchange initialized successfully")
         except Exception as e:
             logger.error(f"Failed to initialize Hyperliquid exchange: {e}")

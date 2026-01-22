@@ -11,6 +11,8 @@ from services.auto_trader import (
 )
 from services.scheduler import start_scheduler, setup_market_tasks, task_scheduler, start_margin_monitor
 from services.container_service import ContainerService
+from config.proxy_config import proxy_config
+import sys
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +20,17 @@ logger = logging.getLogger(__name__)
 def initialize_services():
     """Initialize all services"""
     try:
+        # Check Proxy
+        if proxy_config.enabled:
+            if not proxy_config.check_proxy_availability():
+                logger.critical("CRITICAL: Proxy configured but unavailable. Terminating startup.")
+                # We can either raise an exception to stop FastAPI startup, or sys.exit
+                # Raising exception might be cleaner for FastAPI to handle (although it might just log trace)
+                raise RuntimeError("Proxy configured but unavailable")
+            
+            # Setup global proxy environment variables
+            proxy_config.setup_global_proxy()
+        
         # Initialize Docker Container Service
         try:
             ContainerService()

@@ -23,11 +23,12 @@ def is_stock(symbol: str) -> bool:
 
 
 def get_last_price(symbol: str, market: str = "CRYPTO") -> float:
-    key = f"{symbol}.{market}"
+    market_key = "US" if is_stock(symbol) else market
+    key = f"{symbol}.{market_key}"
     
     # Check cache first
     from .price_cache import get_cached_price, cache_price
-    cached_price = get_cached_price(symbol, market)
+    cached_price = get_cached_price(symbol, market_key)
     if cached_price is not None:
         logger.debug(f"Using cached price for {key}: {cached_price}")
         return cached_price
@@ -39,7 +40,7 @@ def get_last_price(symbol: str, market: str = "CRYPTO") -> float:
             price = get_last_price_from_yfinance(symbol)
             if price and price > 0:
                 logger.info(f"Got price for {key} from YFinance: {price}")
-                cache_price(symbol, market, price)
+                cache_price(symbol, market_key, price)
                 return price
             # If stock is supported but no price found (e.g. market closed and no history?), return None or raise
             raise Exception(f"YFinance returned invalid price: {price}")
@@ -52,7 +53,7 @@ def get_last_price(symbol: str, market: str = "CRYPTO") -> float:
         if price and price > 0:
             logger.info(f"Got real-time price for {key} from Hyperliquid: {price}")
             # Cache the price
-            cache_price(symbol, market, price)
+            cache_price(symbol, market_key, price)
             return price
         raise Exception(f"Hyperliquid returned invalid price: {price}")
     except Exception as hl_err:
@@ -61,7 +62,8 @@ def get_last_price(symbol: str, market: str = "CRYPTO") -> float:
 
 
 def get_kline_data(symbol: str, market: str = "CRYPTO", period: str = "1d", count: int = 100, start_time: Any = None, end_time: Any = None) -> List[Dict[str, Any]]:
-    key = f"{symbol}.{market}"
+    market_key = "US" if is_stock(symbol) else market
+    key = f"{symbol}.{market_key}"
 
     if is_stock(symbol):
         try:
@@ -84,7 +86,8 @@ def get_kline_data(symbol: str, market: str = "CRYPTO", period: str = "1d", coun
 
 
 def get_market_status(symbol: str, market: str = "CRYPTO") -> Dict[str, Any]:
-    key = f"{symbol}.{market}"
+    market_key = "US" if is_stock(symbol) else market
+    key = f"{symbol}.{market_key}"
 
     if is_stock(symbol):
         try:

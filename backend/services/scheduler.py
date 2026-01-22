@@ -324,7 +324,7 @@ class TaskScheduler:
             db: Database session
             account: Account to check
         """
-        from services.market_data import get_last_price
+        from services.market_data import get_last_price, is_stock
         
         # Get all leveraged positions
         positions = db.query(Position).filter(
@@ -511,13 +511,14 @@ def _ensure_market_data_ready() -> None:
     """Prefetch required market data before enabling trading tasks"""
     try:
         from services.trading_commands import AI_TRADING_SYMBOLS
-        from services.market_data import get_last_price
+        from services.market_data import get_last_price, is_stock
 
         missing_symbols: List[str] = []
 
         for symbol in AI_TRADING_SYMBOLS:
             try:
-                price = get_last_price(symbol, "CRYPTO")
+                market = "US" if is_stock(symbol) else "CRYPTO"
+                price = get_last_price(symbol, market)
                 if price is None or price <= 0:
                     missing_symbols.append(symbol)
                     logger.warning(f"Prefetch returned invalid price for {symbol}: {price}")
