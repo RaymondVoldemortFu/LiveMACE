@@ -1,6 +1,7 @@
 """
 Rule-Aware Agent - Trading agent with built-in rule compliance
 """
+import os
 import re
 import json
 import logging
@@ -64,13 +65,30 @@ class RuleAwareAgent(BaseAgent):
         
         # LLM-based audit (optional)
         self.enable_llm_audit = enable_llm_audit
-        self.llm_auditor = LLMAuditor(llm) if enable_llm_audit else None
+        if enable_llm_audit:
+            # Create separate LLM client for auditing using environment variables
+            audit_api_key = os.getenv("AUDIT_API_KEY")
+            audit_base_url = os.getenv("AUDIT_BASE_URL", None)
+            audit_model = os.getenv("AUDIT_MODEL", "gpt-4o-mini")
+            
+            if not audit_api_key:
+                logger.warning("AUDIT_API_KEY not set in environment, LLM audit will be disabled")
+                self.llm_auditor = None
+                self.enable_llm_audit = False
+            else:
+                audit_llm = LLMClient(
+                    model=audit_model,
+                    api_key=audit_api_key,
+                    base_url=audit_base_url
+                )
+                self.llm_auditor = LLMAuditor(audit_llm)
+                logger.info(f"LLM-based audit scoring enabled - Model: {audit_model}, Base URL: {audit_base_url or 'OpenAI Official'}")
+        else:
+            self.llm_auditor = None
         
         # Log loaded rules
         rule_summary = self.rule_engine.get_rule_summary()
         logger.info(f"Rule-Aware Agent initialized with rules: {rule_summary}")
-        if enable_llm_audit:
-            logger.info("LLM-based audit scoring enabled")
     
     def run(
         self, 
