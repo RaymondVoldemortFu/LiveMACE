@@ -30,17 +30,17 @@ class MemoryInterface(ABC):
     """Abstract interface for memory systems"""
 
     @abstractmethod
-    def add(self, content: str, account_id: str, metadata: Optional[Dict] = None, trace_id: Optional[str] = None):
+    def add(self, content: str, account_id: str, metadata: Optional[Dict] = None, trace_id: Optional[str] = None, db: Session = None):
         """Add a memory item."""
         pass
 
     @abstractmethod
-    def search(self, query: str, account_id: str, limit: int = 5) -> List[Dict]:
+    def search(self, query: str, account_id: str, limit: int = 5, db: Session = None) -> List[Dict]:
         """Search for memories."""
         pass
 
     @abstractmethod
-    def get_all(self, account_id: str, limit: int = 100) -> List[Dict]:
+    def get_all(self, account_id: str, limit: int = 100, db: Session = None) -> List[Dict]:
         """Get all memories for an account."""
         pass
 
@@ -93,7 +93,7 @@ class LocalMemory(MemoryInterface):
             logger.error(f"Failed to compute embedding: {e}")
             return None
 
-    def add(self, content: str, account_id: str, metadata: Optional[Dict] = None, trace_id: Optional[str] = None):
+    def add(self, content: str, account_id: str, metadata: Optional[Dict] = None, trace_id: Optional[str] = None, db: Session = None):
         """Add a memory with its embedding to the database"""
         if not self.model:
             logger.warning("Memory model not initialized. Cannot add memory.")
@@ -109,31 +109,23 @@ class LocalMemory(MemoryInterface):
             # Generate unique ID
             memory_id = str(uuid.uuid4())
 
-            # Save to database
-            db: Session = SessionLocal()
-            try:
-                mem_entry = AgentMemory(
-                    memory_id=memory_id,
-                    account_id=int(account_id) if account_id.isdigit() else 0,
-                    trace_id=trace_id,
-                    content=content,
-                    metadata_json=metadata,
-                    embedding=embedding  # Store as JSON array
-                )
-                db.add(mem_entry)
-                db.commit()
-                logger.info(f"Memory saved to DB for account {account_id}: {content[:100]}...")
-            except Exception as e:
-                logger.error(f"Failed to save memory to DB: {e}")
-                db.rollback()
-                raise
-            finally:
-                db.close()
+            # Use provided db session
+            mem_entry = AgentMemory(
+                memory_id=memory_id,
+                account_id=int(account_id) if account_id.isdigit() else 0,
+                trace_id=trace_id,
+                content=content,
+                metadata_json=metadata,
+                embedding=embedding  # Store as JSON array
+            )
+            db.add(mem_entry)
+            logger.info(f"Memory saved to DB for account {account_id}: {content[:100]}...")
 
         except Exception as e:
             logger.error(f"Error adding memory: {e}")
 
-    def _cosine_similarity(self, vec1: List[float], vec2: List[float]) -> float:
+    @staticmethod
+    def _cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
         """Compute cosine similarity between two vectors"""
         try:
             v1 = np.array(vec1)
@@ -143,7 +135,7 @@ class LocalMemory(MemoryInterface):
             logger.error(f"Error computing cosine similarity: {e}")
             return 0.0
 
-    def search(self, query: str, account_id: str, limit: int = 2) -> List[Dict]:
+    def search(self, query: str, account_id: str, limit: int = 2, db: Session = None) -> List[Dict]:
         """Search for similar memories using cosine similarity"""
         if not self.model:
             logger.warning("Memory model not initialized. Cannot search.")
@@ -156,69 +148,59 @@ class LocalMemory(MemoryInterface):
                 logger.error("Failed to compute query embedding")
                 return []
 
-            # Fetch all memories for this account from database
-            db: Session = SessionLocal()
-            try:
-                memories = db.query(AgentMemory).filter(
-                    AgentMemory.account_id == int(account_id) if account_id.isdigit() else 0
-                ).all()
+            # Use provided db session
+            memories = db.query(AgentMemory).filter(
+                AgentMemory.account_id == int(account_id) if account_id.isdigit() else 0
+            ).all()
 
-                if not memories:
-                    logger.info(f"No memories found for account {account_id}")
-                    return []
+            if not memories:
+                logger.info(f"No memories found for account {account_id}")
+                return []
 
-                # Compute similarity scores
-                results = []
-                for mem in memories:
-                    if mem.embedding is None:
-                        continue
+            # Compute similarity scores
+            results = []
+            for mem in memories:
+                if mem.embedding is None:
+                    continue
 
-                    similarity = self._cosine_similarity(query_embedding, mem.embedding)
-                    results.append({
-                        "id": mem.memory_id,
-                        "content": mem.content,
-                        "metadata": mem.metadata_json or {},
-                        "similarity": similarity,
-                        "created_at": mem.created_at.isoformat() if mem.created_at else None
-                    })
+                similarity = self._cosine_similarity(query_embedding, mem.embedding)
+                results.append({
+                    "id": mem.memory_id,
+                    "content": mem.content,
+                    "metadata": mem.metadata_json or {},
+                    "similarity": similarity,
+                    "created_at": mem.created_at.isoformat() if mem.created_at else None
+                })
 
-                # Sort by similarity (descending) and return top results
-                results.sort(key=lambda x: x["similarity"], reverse=True)
-                top_results = results[:limit]
+            # Sort by similarity (descending) and return top results
+            results.sort(key=lambda x: x["similarity"], reverse=True)
+            top_results = results[:limit]
 
-                logger.info(f"Found {len(top_results)} relevant memories for account {account_id}")
-                return top_results
-
-            finally:
-                db.close()
+            logger.info(f"Found {len(top_results)} relevant memories for account {account_id}")
+            return top_results
 
         except Exception as e:
             logger.error(f"Error searching memories: {e}")
             return []
 
-    def get_all(self, account_id: str, limit: int = 100) -> List[Dict]:
+    def get_all(self, account_id: str, limit: int = 100, db: Session = None) -> List[Dict]:
         """Get all memories for an account"""
         try:
-            db: Session = SessionLocal()
-            try:
-                memories = db.query(AgentMemory).filter(
-                    AgentMemory.account_id == int(account_id) if account_id.isdigit() else 0
-                ).order_by(AgentMemory.created_at.desc()).limit(limit).all()
+            # Use provided db session
+            memories = db.query(AgentMemory).filter(
+                AgentMemory.account_id == int(account_id) if account_id.isdigit() else 0
+            ).order_by(AgentMemory.created_at.desc()).limit(limit).all()
 
-                results = []
-                for mem in memories:
-                    results.append({
-                        "id": mem.memory_id,
-                        "memory": mem.content,
-                        "content": mem.content,
-                        "metadata": mem.metadata_json or {},
-                        "created_at": mem.created_at.isoformat() if mem.created_at else None
-                    })
+            results = []
+            for mem in memories:
+                results.append({
+                    "id": mem.memory_id,
+                    "content": mem.content,
+                    "metadata": mem.metadata_json or {},
+                    "created_at": mem.created_at.isoformat() if mem.created_at else None
+                })
 
-                return results
-
-            finally:
-                db.close()
+            return results
 
         except Exception as e:
             logger.error(f"Error getting all memories: {e}")

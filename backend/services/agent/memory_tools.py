@@ -4,6 +4,7 @@ Agent can call these tools to add experiences or search for relevant memories.
 """
 import logging
 from typing import Optional
+from sqlalchemy.orm import Session
 from .memory import get_memory_service
 from .tools import Tool
 
@@ -19,214 +20,111 @@ def get_or_create_memory_service():
         _memory_service = get_memory_service()
     return _memory_service
 
-
-def memory_add(experience: str, account_id: str, metadata: Optional[str] = None) -> dict:
+def create_memory_tools(db: Session):
     """
-    Add an experience or insight to memory.
-
+    Factory function to create memory tools with a specific database session.
+    
     Args:
-        experience: The experience, insight, or lesson learned that should be remembered.
-                   Should be a concise summary of what was learned.
-        account_id: The account ID this memory belongs to.
-        metadata: Optional JSON string with additional metadata (e.g., {"trade_result": "profit"})
-
+        db: SQLAlchemy Session to use for database operations
+        
     Returns:
-        Dictionary with status, message, and memory details.
-
-    Example:
-        memory_add(
-            experience="When BTC drops 5% in 1 hour with high volume, it often rebounds within 2 hours. Consider buying the dip.",
-            account_id="123"
-        )
+        Tuple of (memory_add_tool, memory_search_tool)
     """
-    try:
-        memory_service = get_or_create_memory_service()
-
-        if not memory_service:
-            return {
-                "status": "error",
-                "message": "Memory service is not available. Memory not saved."
-            }
-
-        # Parse metadata if provided
-        import json
-        metadata_dict = {}
-        if metadata:
-            try:
-                metadata_dict = json.loads(metadata)
-            except json.JSONDecodeError:
-                logger.warning(f"Invalid metadata JSON: {metadata}")
-
-        # Add to memory
-        memory_service.add(
-            content=experience,
-            account_id=account_id,
-            metadata=metadata_dict
-        )
-
-        logger.info(f"Memory added for account {account_id}: {experience[:100]}...")
-        return {
-            "status": "success",
-            "message": "Memory saved successfully",
-            "memory": {
-                "content": experience,
-                "account_id": account_id,
-                "metadata": metadata_dict
-            }
-        }
-
-    except Exception as e:
-        error_msg = f"Failed to add memory: {str(e)}"
-        logger.error(error_msg)
-        return {
-            "status": "error",
-            "message": error_msg
-        }
-
-
-def memory_search(query: str, account_id: str, limit: int = 2) -> dict:
-    """
-    Search for relevant memories based on a query.
-
-    Args:
-        query: The search query describing what kind of memories you need.
-               Should be specific about the context or situation.
-        account_id: The account ID to search memories for.
-        limit: Maximum number of memories to return (default: 5, max: 10)
-
-    Returns:
-        Dictionary with status, query info, and list of memories.
-
-    Example:
-        memory_search(
-            query="What did I learn about BTC price drops and rebounds?",
-            account_id="123"
-        )
-    """
-    try:
-        memory_service = get_or_create_memory_service()
-
-        if not memory_service:
-            return {
-                "status": "error",
-                "message": "Memory service is not available."
-            }
-
-            # Limit to max 5
-        limit = min(limit, 5)
-
-        # Search memories
-        results = memory_service.search(
-            query=query,
-            account_id=account_id,
-            limit=limit
-        )
-
-        if not results:
+    memory_service = get_or_create_memory_service()
+    
+    def memory_add_with_db(experience: str, account_id: str, metadata: Optional[str] = None) -> dict:
+        """Add memory using provided db session"""
+        try:
+            if not memory_service:
+                return {"status": "error", "message": "Memory service is not available"}
+            
+            import json
+            metadata_dict = {}
+            if metadata:
+                try:
+                    metadata_dict = json.loads(metadata)
+                except json.JSONDecodeError:
+                    logger.warning(f"Invalid metadata JSON: {metadata}")
+            
+            memory_service.add(content=experience, account_id=account_id, metadata=metadata_dict, db=db)
+            logger.info(f"Memory added for account {account_id}: {experience[:100]}...")
+            
             return {
                 "status": "success",
-                "message": "No relevant memories found",
+                "message": "Memory saved successfully",
+                "memory": {"content": experience, "account_id": account_id, "metadata": metadata_dict}
+            }
+        except Exception as e:
+            error_msg = f"Failed to add memory: {str(e)}"
+            logger.error(error_msg)
+            return {"status": "error", "message": error_msg}
+    
+    def memory_search_with_db(query: str, account_id: str, limit: int = 2) -> dict:
+        """Search memories using provided db session"""
+        try:
+            if not memory_service:
+                return {"status": "error", "message": "Memory service is not available"}
+            
+            limit = min(limit, 5)
+            results = memory_service.search(query=query, account_id=account_id, limit=limit, db=db)
+            
+            if not results:
+                return {"status": "success", "message": "No relevant memories found", "query": query, "count": 0, "memories": []}
+
+            # Format results
+            formatted_memories = []
+            for idx, memory in enumerate(results, 1):
+                content = memory.get('content') or str(memory)
+                metadata = memory.get('metadata', {})
+                formatted_memories.append({
+                    "id": memory.get("id", idx),
+                    "content": content,
+                    "metadata": metadata
+                })
+
+            logger.info(f"Found {len(results)} memories for account {account_id}")
+
+            return {
+                "status": "success",
+                "message": f"Found {len(results)} relevant memories",
                 "query": query,
-                "count": 0,
-                "memories": []
+                "count": len(results),
+                "memories": formatted_memories
             }
 
-        # Format results
-        formatted_memories = []
-        for idx, memory in enumerate(results, 1):
-            # Extract memory text (Mem0 might return different formats)
-            content = memory.get('content') or str(memory)
-
-            # Extract metadata if available
-            metadata = memory.get('metadata', {})
-            formatted_memories.append({
-                "id": memory.get("id", idx),
-                "content": content,
-                "metadata": metadata
-            })
-
-        logger.info(f"Found {len(results)} memories for account {account_id}")
-
-        return {
-            "status": "success",
-            "message": f"Found {len(results)} relevant memories",
-            "query": query,
-            "count": len(results),
-            "memories": formatted_memories
-        }
-
-    except Exception as e:
-        error_msg = f"Failed to search memories: {str(e)}"
-        logger.error(error_msg)
-        return {
-            "status": "error",
-            "message": error_msg
-        }
-
-
-# Tool definitions for registration
-memory_add_tool = Tool(
-    name="memory_add",
-    description=(
-        "Add an experience, insight, or lesson learned to your long-term memory. "
-        "Use this when you discover a useful pattern, learn from a trade result, "
-        "or want to remember important information for future decisions. "
-        "The experience should be a concise, actionable insight."
-    ),
-    parameters={
-        "type": "object",
-        "properties": {
-            "experience": {
-                "type": "string",
-                "description": (
-                    "The experience or insight to remember. Should be specific and actionable. "
-                    "Example: 'When BTC drops 5% with high volume, it often rebounds within 2 hours.'"
-                )
+        except Exception as e:
+            error_msg = f"Failed to search memories: {str(e)}"
+            logger.error(error_msg)
+            return {"status": "error", "message": error_msg}
+    
+    memory_add_tool = Tool(
+        name="memory_add",
+        description="Add an experience, insight, or lesson learned to your long-term memory.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "experience": {"type": "string", "description": "The experience or insight to remember"},
+                "account_id": {"type": "string", "description": "Your account ID"},
+                "metadata": {"type": "string", "description": "Optional JSON string with additional context", "default": None}
             },
-            "account_id": {
-                "type": "string",
-                "description": "Your account ID"
-            },
-            "metadata": {
-                "type": "string",
-                "description": "Optional JSON string with additional context (e.g., trade result, market conditions)",
-                "default": None
-            }
+            "required": ["experience", "account_id"]
         },
-        "required": ["experience", "account_id"]
-    },
-    func=memory_add
-)
-
-memory_search_tool = Tool(
-    name="memory_search",
-    description=(
-        "Search your long-term memory for relevant experiences and insights. "
-        "Use this when you need to recall past learnings, similar situations, "
-        "or patterns that might help with the current decision. "
-        "Be specific in your query about what you're looking for."
-    ),
-    parameters={
-        "type": "object",
-        "properties": {
-            "query": {
-                "type": "string",
-                "description": (
-                    "What you want to search for in your memories. Be specific. "
-                    "Example: 'What did I learn about trading BTC during high volatility?'"
-                )
+        func=memory_add_with_db
+    )
+    
+    memory_search_tool = Tool(
+        name="memory_search",
+        description="Search your long-term memory for relevant experiences and insights.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "What you want to search for in your memories"},
+                "account_id": {"type": "string", "description": "Your account ID"},
+                "limit": {"type": "integer", "description": "Maximum number of memories to return (default: 2, max: 5)", "default": 2}
             },
-            "account_id": {
-                "type": "string",
-                "description": "Your account ID"
-            },
-            "limit": {
-                "type": "integer",
-                "description": "Maximum number of memories to return (default: 2, max: 5)",
-                "default": 2
-            }
+            "required": ["query", "account_id"]
         },
-        "required": ["query", "account_id"]
-    },
-    func=memory_search
-)
+        func=memory_search_with_db
+    )
+    
+    return memory_add_tool, memory_search_tool

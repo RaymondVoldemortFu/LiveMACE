@@ -8,7 +8,6 @@ from .tools import ToolRegistry
 from config.agent_config import AgentConfig
 from services.agent.prompts.system_prompts import TRADE_AGENT_PROMPT
 from .base import BaseAgent
-from .memory_tools import memory_add_tool, memory_search_tool
 
 # Define loggers
 logger = logging.getLogger(__name__)
@@ -22,12 +21,7 @@ class ReActAgent(BaseAgent):
         super().__init__(llm, tools)
         self.max_steps = max_steps
         self.user_id = user_id
-
-        # Register memory tools if memory is enabled
-        if AgentConfig.MEMORY_ENABLED:
-            self.tools.register(memory_add_tool)
-            self.tools.register(memory_search_tool)
-            logger.info("Memory tools registered: memory_add, memory_search")
+        # Memory tools are now registered in env_wrapper.register_default_tools()
 
     def run(self, portfolio: Dict[str, Any], prices: Dict[str, float], on_step: Optional[Callable[[Dict], None]] = None, trace_id: Optional[str] = None) -> Dict[str, Any]:
         """

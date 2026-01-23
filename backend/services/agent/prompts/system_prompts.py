@@ -105,6 +105,8 @@ You can call the following tools to retrieve data, manage the virtual environmen
   - Discover a useful trading pattern or market behavior
   - Learn from a successful or failed trade
   - Want to remember important information for future decisions
+  Information stored via memory_add MAY be retrieved in future decisions for the same account and can influence long-term strategy.
+  Before adding a new memory, always search existing memories first. Only add a new memory if it is meaningfully different from prior ones.
   Example: Store "When BTC drops 5% with high volume, it often rebounds within 2 hours"
 
 ========================

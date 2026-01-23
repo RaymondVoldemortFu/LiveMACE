@@ -14,7 +14,6 @@ from .prompts.multi_agent_prompts import (
     NEWS_AGENT_PROMPT,
     CODER_AGENT_PROMPT
 )
-from .memory_tools import memory_add_tool, memory_search_tool
 
 logger = logging.getLogger(__name__)
 
@@ -27,12 +26,7 @@ class MultiAgent(BaseAgent):
         super().__init__(llm, tools)
         self.max_steps = max_steps
         self.user_id = user_id
-
-        # Register memory tools if memory is enabled
-        if AgentConfig.MEMORY_ENABLED:
-            self.tools.register(memory_add_tool)
-            self.tools.register(memory_search_tool)
-            logger.info("Memory tools registered for MultiAgent: memory_add, memory_search")
+        # Memory tools are now registered in env_wrapper.register_default_tools()
 
         # Shared conversation history (context)
         self.context = []

@@ -314,7 +314,7 @@ Rules:
         return None
 
 
-def save_ai_decision(db: Session, account_id: int, account_name: str, decision: Dict, portfolio: Dict, executed: bool = False, order_id: Optional[int] = None) -> None:
+def save_ai_decision(db: Session, account: Account, decision: Dict, portfolio: Dict, executed: bool = False, order_id: Optional[int] = None) -> None:
     """Save AI decision to the decision log"""
     try:
         operation = decision.get("operation", "").lower() if decision.get("operation") else ""
@@ -344,7 +344,7 @@ def save_ai_decision(db: Session, account_id: int, account_name: str, decision: 
 
         # Create decision log entry
         decision_log = AIDecisionLog(
-            account_id=account_id,
+            account_id=account.id,
             reason=reason,
             operation=operation,
             symbol=symbol if operation != "hold" else None,
@@ -361,7 +361,7 @@ def save_ai_decision(db: Session, account_id: int, account_name: str, decision: 
         db.commit()
 
         symbol_str = symbol if symbol else "N/A"
-        logger.info(f"Saved AI decision log for account {account_name}: {operation} {symbol_str} "
+        logger.info(f"Saved AI decision log for account {account.name}: {operation} {symbol_str} "
                    f"prev_portion={prev_portion:.4f} target_portion={target_portion:.4f} leverage={leverage_val} executed={executed}")
 
     except Exception as err:
@@ -397,22 +397,13 @@ def call_agent_for_decision(
 ) -> Optional[Dict]:
     """基于 Agent（多轮+工具）的决策接口，保持与 call_ai_for_decision 兼容。"""
 
-    # Cache all account attributes at the beginning to avoid Session detachment issues
-    # after db.commit() in on_step callback
-    account_id = account.id
-    account_name = account.name
-    account_api_key = account.api_key
-    account_base_url = account.base_url
-    account_model = account.model
-    account_agent_type = getattr(account, "agent_type", None)
-
-    if _is_default_api_key(account_api_key):
-        logger.info(f"Skipping AI trading for account {account_name} - using default API key")
+    if _is_default_api_key(account.api_key):
+        logger.info(f"Skipping AI trading for account {account.name} - using default API key")
         return None
 
     # Lease a container for the agent session
     container_service = ContainerService()
-    container_service.lease_container(account_id)
+    container_service.lease_container(account.id)
 
     trace_id = str(uuid.uuid4())
     step_counter = 0
@@ -445,7 +436,7 @@ def call_agent_for_decision(
 
             trace = AgentTrace(
                 trace_id=trace_id,
-                account_id=account_id,  # Use cached account_id instead of account.id
+                account_id=account.id,
                 step_number=step_counter,
                 role=role,
                 content=str(content) if content is not None else None,
@@ -459,26 +450,27 @@ def call_agent_for_decision(
 
     try:
         llm = LLMClient(
-            model=account_model,
-            api_key=account_api_key,
-            base_url=account_base_url,  # 注意要和 OpenAI SDK 预期的 base_url 对齐
+            model=account.model,
+            api_key=account.api_key,
+            base_url=account.base_url,  # 注意要和 OpenAI SDK 预期的 base_url 对齐
         )
 
         registry = ToolRegistry()
-        register_default_tools(registry, db, account_id)
+        register_default_tools(registry, db, account.id)
 
         # Register the new history tool
-        registry.register(HistoryTool(db, account_id))
+        registry.register(HistoryTool(db, account.id))
 
-        logger.info(f"Initiating agent decision for account: {account_name} (ID: {account_id}) Type: {account_agent_type}")
+        logger.info(f"Initiating agent decision for account: {account.name} (ID: {account.id}) Type: {getattr(account, 'agent_type', 'react')}")
 
         # Use factory to create agent based on account config
+        agent_type = getattr(account, "agent_type", None)
         agent = create_agent(
-            agent_type=account_agent_type,
+            agent_type=agent_type,
             llm=llm,
             tools=registry,
             max_steps=AgentConfig.MAX_STEPS,
-            user_id=str(account_id)
+            user_id=str(account.id)
         )
 
         decision = agent.run(portfolio=portfolio, prices=prices, on_step=on_step, trace_id=trace_id)
@@ -486,7 +478,7 @@ def call_agent_for_decision(
         if decision:
             decision["trace_id"] = trace_id
 
-        logger.info(f"Agent decision for {account_name}: {decision}")
+        logger.info(f"Agent decision for {account.name}: {decision}")
         return decision
 
     except Exception as e:
@@ -494,4 +486,4 @@ def call_agent_for_decision(
         return None
     finally:
         # Always release the container
-        container_service.release_container(account_id)
+        container_service.release_container(account.id)
