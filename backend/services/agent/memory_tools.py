@@ -20,7 +20,7 @@ def get_or_create_memory_service():
     return _memory_service
 
 
-def memory_add(experience: str, account_id: str, metadata: Optional[str] = None) -> str:
+def memory_add(experience: str, account_id: str, metadata: Optional[str] = None) -> dict:
     """
     Add an experience or insight to memory.
 
@@ -31,7 +31,7 @@ def memory_add(experience: str, account_id: str, metadata: Optional[str] = None)
         metadata: Optional JSON string with additional metadata (e.g., {"trade_result": "profit"})
 
     Returns:
-        Success message or error message.
+        Dictionary with status, message, and memory details.
 
     Example:
         memory_add(
@@ -43,7 +43,10 @@ def memory_add(experience: str, account_id: str, metadata: Optional[str] = None)
         memory_service = get_or_create_memory_service()
 
         if not memory_service:
-            return "Memory service is not available. Memory not saved."
+            return {
+                "status": "error",
+                "message": "Memory service is not available. Memory not saved."
+            }
 
         # Parse metadata if provided
         import json
@@ -62,15 +65,26 @@ def memory_add(experience: str, account_id: str, metadata: Optional[str] = None)
         )
 
         logger.info(f"Memory added for account {account_id}: {experience[:100]}...")
-        return f"✓ Memory saved successfully: '{experience[:100]}...'"
+        return {
+            "status": "success",
+            "message": "Memory saved successfully",
+            "memory": {
+                "content": experience,
+                "account_id": account_id,
+                "metadata": metadata_dict
+            }
+        }
 
     except Exception as e:
         error_msg = f"Failed to add memory: {str(e)}"
         logger.error(error_msg)
-        return f"✗ {error_msg}"
+        return {
+            "status": "error",
+            "message": error_msg
+        }
 
 
-def memory_search(query: str, account_id: str, limit: int = 2) -> str:
+def memory_search(query: str, account_id: str, limit: int = 2) -> dict:
     """
     Search for relevant memories based on a query.
 
@@ -81,7 +95,7 @@ def memory_search(query: str, account_id: str, limit: int = 2) -> str:
         limit: Maximum number of memories to return (default: 5, max: 10)
 
     Returns:
-        Formatted string with relevant memories, or message if no memories found.
+        Dictionary with status, query info, and list of memories.
 
     Example:
         memory_search(
@@ -93,9 +107,12 @@ def memory_search(query: str, account_id: str, limit: int = 2) -> str:
         memory_service = get_or_create_memory_service()
 
         if not memory_service:
-            return "Memory service is not available."
+            return {
+                "status": "error",
+                "message": "Memory service is not available."
+            }
 
-        # Limit to max 5
+            # Limit to max 5
         limit = min(limit, 5)
 
         # Search memories
@@ -106,29 +123,45 @@ def memory_search(query: str, account_id: str, limit: int = 2) -> str:
         )
 
         if not results:
-            return f"No relevant memories found for query: '{query}'"
+            return {
+                "status": "success",
+                "message": "No relevant memories found",
+                "query": query,
+                "count": 0,
+                "memories": []
+            }
 
         # Format results
         formatted_memories = []
         for idx, memory in enumerate(results, 1):
             # Extract memory text (Mem0 might return different formats)
-            text = memory.get('memory') or memory.get('text') or memory.get('content') or str(memory)
+            content = memory.get('content') or str(memory)
 
             # Extract metadata if available
             metadata = memory.get('metadata', {})
-            metadata_str = f" [metadata: {metadata}]" if metadata else ""
+            formatted_memories.append({
+                "id": memory.get("id", idx),
+                "content": content,
+                "metadata": metadata
+            })
 
-            formatted_memories.append(f"{idx}. {text}{metadata_str}")
-
-        result_text = "\n".join(formatted_memories)
         logger.info(f"Found {len(results)} memories for account {account_id}")
 
-        return f"Found {len(results)} relevant memories:\n{result_text}"
+        return {
+            "status": "success",
+            "message": f"Found {len(results)} relevant memories",
+            "query": query,
+            "count": len(results),
+            "memories": formatted_memories
+        }
 
     except Exception as e:
         error_msg = f"Failed to search memories: {str(e)}"
         logger.error(error_msg)
-        return f"✗ {error_msg}"
+        return {
+            "status": "error",
+            "message": error_msg
+        }
 
 
 # Tool definitions for registration

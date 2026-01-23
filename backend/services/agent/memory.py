@@ -176,9 +176,7 @@ class LocalMemory(MemoryInterface):
                     similarity = self._cosine_similarity(query_embedding, mem.embedding)
                     results.append({
                         "id": mem.memory_id,
-                        "memory": mem.content,
                         "content": mem.content,
-                        "text": mem.content,
                         "metadata": mem.metadata_json or {},
                         "similarity": similarity,
                         "created_at": mem.created_at.isoformat() if mem.created_at else None
