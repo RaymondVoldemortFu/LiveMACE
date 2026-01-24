@@ -1,5 +1,6 @@
 # services/agent/llm_client.py
 from openai import OpenAI
+import httpx
 
 class LLMClient:
     """
@@ -16,12 +17,14 @@ class LLMClient:
         """
         self.model = model
 
+        http_client = httpx.Client(trust_env=False)
+
         if base_url:
             # 使用自定义 endpoint（OpenAI-compatible）
-            self.client = OpenAI(api_key=api_key, base_url=base_url)
+            self.client = OpenAI(api_key=api_key, base_url=base_url, http_client=http_client)
         else:
             # 使用 OpenAI 官方 endpoint
-            self.client = OpenAI(api_key=api_key)
+            self.client = OpenAI(api_key=api_key, http_client=http_client)
 
     def call(self, messages, tools=None):
         """

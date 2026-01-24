@@ -165,7 +165,10 @@ Rules:
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                response = requests.post(
+                # Bypass proxy for LLM requests
+                session = requests.Session()
+                session.trust_env = False
+                response = session.post(
                     api_endpoint,
                     headers=headers,
                     json=payload,

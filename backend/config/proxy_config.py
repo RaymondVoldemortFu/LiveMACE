@@ -3,6 +3,7 @@ import logging
 from typing import Optional, Dict
 import requests
 import urllib.parse
+import uuid
 
 # Load environment variables (dotenv is loaded in main.py/startup, but good to ensure)
 from dotenv import load_dotenv
@@ -31,7 +32,7 @@ class ProxyConfig:
             # URL encode user and password to handle special characters
             user_encoded = urllib.parse.quote_plus(self.user)
             pass_encoded = urllib.parse.quote_plus(self.password)
-            
+
             # Construct proxy URL
             # Format: http://user:pass@host:port
             self.proxy_url = f"http://{user_encoded}:{pass_encoded}@{self.host}:{self.port}"
@@ -42,6 +43,27 @@ class ProxyConfig:
 
     def get_proxy_url(self) -> Optional[str]:
         return self.proxy_url
+
+    def _build_session_username(self, session_id: str) -> str:
+        """
+        Build Bright Data session username.
+        If username already contains a session, replace it; otherwise append.
+        """
+        if not self.user:
+            return ""
+        if "-session-" in self.user:
+            return self.user.split("-session-")[0] + f"-session-{session_id}"
+        return f"{self.user}-session-{session_id}"
+
+    def get_proxy_url_with_session(self, session_id: Optional[str] = None) -> Optional[str]:
+        if not self.enabled or not self.user or not self.password:
+            return None
+        if not session_id:
+            session_id = uuid.uuid4().hex[:8]
+        session_user = self._build_session_username(session_id)
+        user_encoded = urllib.parse.quote_plus(session_user)
+        pass_encoded = urllib.parse.quote_plus(self.password)
+        return f"http://{user_encoded}:{pass_encoded}@{self.host}:{self.port}"
 
     def get_proxy_dict(self) -> Dict[str, str]:
         if self.enabled and self.proxy_url:

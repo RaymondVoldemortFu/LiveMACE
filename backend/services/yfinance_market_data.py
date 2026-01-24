@@ -7,8 +7,10 @@ from typing import Dict, List, Any, Optional
 from datetime import datetime, timezone, timedelta
 import pandas as pd
 import time
-import requests
 import os
+import uuid
+from contextlib import contextmanager
+import requests
 from config.settings import TIME_OFFSET_MINUTES, SUPPORTED_STOCKS
 from config.proxy_config import proxy_config
 
@@ -23,6 +25,32 @@ class YFinanceClient:
         proxy_config.setup_global_proxy()
         self._last_trace_ts = 0.0
         self._trace_interval_seconds = 300
+
+    @contextmanager
+    def _temp_proxy_session(self):
+        """Temporarily set proxy env to a new Bright Data session."""
+        proxy_url = proxy_config.get_proxy_url_with_session()
+        if not proxy_url:
+            yield
+            return
+
+        old_http = os.environ.get("HTTP_PROXY")
+        old_https = os.environ.get("HTTPS_PROXY")
+
+        os.environ["HTTP_PROXY"] = proxy_url
+        os.environ["HTTPS_PROXY"] = proxy_url
+        try:
+            yield
+        finally:
+            if old_http is None:
+                os.environ.pop("HTTP_PROXY", None)
+            else:
+                os.environ["HTTP_PROXY"] = old_http
+
+            if old_https is None:
+                os.environ.pop("HTTPS_PROXY", None)
+            else:
+                os.environ["HTTPS_PROXY"] = old_https
 
     def _trace_proxy_and_api(self, symbol: str):
         """Trace proxy and Yahoo API connectivity (rate-limited)."""
@@ -83,15 +111,16 @@ class YFinanceClient:
     def _safe_download(self, symbol: str, interval: str, period: str) -> Optional[pd.DataFrame]:
         """Fetch data via yf.download only to avoid history() NoneType issues."""
         try:
-            hist = yf.download(
-                symbol,
-                period=period,
-                interval=interval,
-                progress=False,
-                threads=False,
-                group_by="column",
-                auto_adjust=False
-            )
+            with self._temp_proxy_session():
+                hist = yf.download(
+                    symbol,
+                    period=period,
+                    interval=interval,
+                    progress=False,
+                    threads=False,
+                    group_by="column",
+                    auto_adjust=False
+                )
             if hist is not None and not hist.empty:
                 return hist
         except Exception as dl_err:
@@ -104,12 +133,13 @@ class YFinanceClient:
     def _safe_last_price(self, symbol: str) -> Optional[float]:
         """Try fast_info first, then download daily data."""
         try:
-            ticker = yf.Ticker(symbol)
-            fi = getattr(ticker, "fast_info", None)
-            if fi and isinstance(fi, dict):
-                price = fi.get("last_price") or fi.get("lastPrice")
-                if price:
-                    return float(price)
+            with self._temp_proxy_session():
+                ticker = yf.Ticker(symbol)
+                fi = getattr(ticker, "fast_info", None)
+                if fi and isinstance(fi, dict):
+                    price = fi.get("last_price") or fi.get("lastPrice")
+                    if price:
+                        return float(price)
         except Exception as err:
             logger.debug("fast_info failed for %s: %s", symbol, repr(err))
 
