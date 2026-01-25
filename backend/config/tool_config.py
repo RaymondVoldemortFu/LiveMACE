@@ -11,6 +11,7 @@ class ToolConfig:
     TOOLENV_ROOT = r"backend/services/agent/toolenv"
     TOOLENV_TOOLS_ROOT = r"backend/services/agent/toolenv/tools"
     TOOLENV_SCHEMA_ROOT = os.getenv("TOOLENV_SCHEMA_ROOT")
+    TOOLENV_BLACKLIST = os.getenv("TOOLENV_BLACKLIST")
     
     # Sub-agent configuration
     MAX_SEARCH_STEPS = 5

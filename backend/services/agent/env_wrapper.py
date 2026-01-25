@@ -7,6 +7,7 @@ from repositories.account_repo import get_account
 from services.order_executor_leverage import place_and_execute_crypto
 from services.agent.sub_agents.search_agent import SearchSubAgent
 from services.container_service import ContainerService
+from services.agent.toolenv_adapter import ToolEnvAdapter
 
 
 def map_operation_side(operation: str, direction: str):
@@ -197,6 +198,9 @@ def register_default_tools(registry, db: Session, account_id: int):
             func=lambda script_content: _run_python_helper(container_service, account_id, script_content)
         )
     )
+
+    # === ToolEnv 工具 ===
+    ToolEnvAdapter().register_toolenv_tools(registry)
 
 
 def _run_python_helper(service, account_id, content):
