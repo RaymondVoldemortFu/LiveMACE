@@ -41,6 +41,7 @@ class Account(Base):
     name = Column(String(100), nullable=False)  # Display name (e.g., "GPT Trader", "Claude Analyst")
     account_type = Column(String(20), nullable=False, default="AI")  # "AI" or "MANUAL"
     agent_type = Column(String(20), nullable=False, default="react") # "react" or "multi_agent"
+    enable_rule_aware = Column(String(10), nullable=False, default="false")  # "true" or "false" - Enable Rule-Aware Trading
     is_active = Column(String(10), nullable=False, default="true")
     
     # AI Model Configuration (for AI accounts)
@@ -57,11 +58,11 @@ class Account(Base):
     margin_used = Column(DECIMAL(18, 2), nullable=False, default=0.00)
     maintenance_margin_ratio = Column(Float, nullable=False, default=0.5)  # 50% of initial margin
     
-    # LLM Audit Statistics (累计审计评分统计)
-    llm_audit_count = Column(Integer, nullable=False, default=0)  # 累计审计次数
-    llm_audit_avg_score = Column(Float, nullable=True)  # 累计平均审计分数 (0.0-1.0)
-    llm_audit_avg_coverage = Column(Float, nullable=True)  # 累计平均覆盖率分数 (1.0-5.0)
-    llm_audit_avg_conflict = Column(Float, nullable=True)  # 累计平均冲突处理分数 (1.0-5.0)
+    # LLM Audit Statistics
+    llm_audit_count = Column(Integer, nullable=False, default=0)  # total number of LLM audits performed
+    llm_audit_avg_score = Column(Float, nullable=True)  # average audit score (1.0-5.0)
+    llm_audit_avg_coverage = Column(Float, nullable=True)  # average coverage score (1.0-5.0)
+    llm_audit_avg_conflict = Column(Float, nullable=True)  # average conflict score (1.0-5.0)
     
     created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
     updated_at = Column(

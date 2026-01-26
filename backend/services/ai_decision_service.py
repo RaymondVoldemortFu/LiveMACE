@@ -363,10 +363,78 @@ def save_ai_decision(db: Session, account: Account, decision: Dict, portfolio: D
         symbol_str = symbol if symbol else "N/A"
         logger.info(f"Saved AI decision log for account {account.name}: {operation} {symbol_str} "
                    f"prev_portion={prev_portion:.4f} target_portion={target_portion:.4f} leverage={leverage_val} executed={executed}")
+        
+        # Save rule evaluation results if this is a rule-aware agent
+        enable_rule_aware = getattr(account, 'enable_rule_aware', 'false')
+        is_rule_aware = enable_rule_aware == 'true' or enable_rule_aware == True
+        
+        if is_rule_aware and "compliance_audit" in decision:
+            _save_rule_evaluation(db, account, decision, trace_id)
 
     except Exception as err:
         logger.error(f"Failed to save AI decision log: {err}")
         db.rollback()
+
+
+def _save_rule_evaluation(db: Session, account: Account, decision: Dict, trace_id: Optional[str]) -> None:
+    """Save rule evaluation results for rule-aware agents"""
+    try:
+        from database.models import RuleEvaluationResult
+        from datetime import datetime
+        
+        compliance_audit = decision.get("compliance_audit", {})
+        llm_audit = decision.get("llm_audit", {})
+        
+        # Extract compliance data
+        gate_pass = compliance_audit.get("final_status") == "PASS"
+        
+        # Extract violations
+        violations = compliance_audit.get("violations", [])
+        r0_violations = [v for v in violations if v.get("rule_level") == "R0"]
+        r1_violations = [v for v in violations if v.get("rule_level") == "R1"]
+        
+        # Extract R2 scores
+        r2_results = compliance_audit.get("r2_results", {})
+        r2_scores = r2_results.get("rule_scores", {})
+        
+        # Extract scores
+        s_rule_sat = compliance_audit.get("s_rule_sat")
+        s_audit = llm_audit.get("final_normalized_score")
+        
+        # Calculate final score (weighted combination)
+        final_score = None
+        if s_rule_sat is not None and s_audit is not None:
+            # Weight: 60% rule satisfaction, 40% LLM audit
+            final_score = 0.6 * s_rule_sat + 0.4 * s_audit
+        elif s_rule_sat is not None:
+            final_score = s_rule_sat
+        elif s_audit is not None:
+            final_score = s_audit
+        
+        # Create evaluation record
+        eval_result = RuleEvaluationResult(
+            trace_id=trace_id,
+            account_id=account.id,
+            ts=datetime.utcnow(),
+            gate_pass="true" if gate_pass else "false",
+            r0_violations_json=json.dumps(r0_violations, ensure_ascii=False) if r0_violations else None,
+            r1_violations_json=json.dumps(r1_violations, ensure_ascii=False) if r1_violations else None,
+            r2_scores_json=json.dumps(r2_scores, ensure_ascii=False) if r2_scores else None,
+            s_rule_sat=s_rule_sat,
+            s_audit=s_audit,
+            final_score=final_score
+        )
+        
+        db.add(eval_result)
+        db.commit()
+        
+        logger.info(f"Saved rule evaluation for account {account.name}: "
+                   f"gate_pass={gate_pass}, s_rule_sat={s_rule_sat:.3f if s_rule_sat else 'N/A'}, "
+                   f"s_audit={s_audit:.3f if s_audit else 'N/A'}, final_score={final_score:.3f if final_score else 'N/A'}")
+        
+    except Exception as err:
+        logger.error(f"Failed to save rule evaluation results: {err}", exc_info=True)
+        # Don't rollback here as we already committed decision_log
 
 
 def get_active_ai_accounts(db: Session) -> List[Account]:
@@ -496,15 +564,32 @@ def call_agent_for_decision(
 
         logger.info(f"Initiating agent decision for account: {account_name} (ID: {account_id}) Type: {account_type}")
         
+        # Check if rule-aware is enabled for this account
+        enable_rule_aware = getattr(account, 'enable_rule_aware', 'false')
+        is_rule_aware = enable_rule_aware == 'true' or enable_rule_aware == True
+        
         # Use factory to create agent based on account config
-        agent_type = account_type
-        agent = create_agent(
-            agent_type=agent_type,
-            llm=llm, 
-            tools=registry, 
-            max_steps=AgentConfig.MAX_STEPS, 
-            user_id=str(account_id)
-        )
+        if is_rule_aware:
+            # Use rule-aware agent with rule evaluation pipeline
+            logger.info(f"Creating Rule-Aware Agent for account {account.name}")
+            agent = create_agent(
+                agent_type="rule_aware",
+                llm=llm, 
+                tools=registry, 
+                max_steps=AgentConfig.MAX_STEPS, 
+                user_id=str(account.id)
+            )
+        else:
+            # Use standard agent (react or multi_agent) without rule evaluation
+            agent_type = getattr(account, "agent_type", "react")
+            logger.info(f"Creating standard {agent_type} agent for account {account.name}")
+            agent = create_agent(
+                agent_type=agent_type,
+                llm=llm, 
+                tools=registry, 
+                max_steps=AgentConfig.MAX_STEPS, 
+                user_id=str(account.id)
+            )
 
         decision = agent.run(portfolio=portfolio, prices=prices, on_step=on_step, trace_id=trace_id)
 

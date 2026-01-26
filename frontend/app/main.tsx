@@ -34,6 +34,8 @@ interface Account {
   initial_capital: number
   current_cash: number
   frozen_cash: number
+  is_active: boolean
+  enable_rule_aware?: boolean  // Add support for rule-aware flag
 }
 
 interface Overview {
@@ -317,11 +319,8 @@ function App() {
           <AgentStatusView accounts={accounts} />
         )}
         
-        {currentPage === 'compliance' && account && (
-          <ComplianceDashboard 
-            accountId={account.id} 
-            accountName={account.name}
-          />
+        {currentPage === 'compliance' && (
+          <ComplianceDashboard accounts={accounts} />
         )}
       </main>
     )

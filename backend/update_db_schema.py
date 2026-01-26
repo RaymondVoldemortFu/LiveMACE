@@ -65,7 +65,19 @@ def update_schema():
                 else:
                     print(f"Column {field_name} already exists.")
             
-            # 5. Verify new tables exist
+            # 5. Add enable_rule_aware column to Accounts if it doesn't exist
+            print("\nChecking for enable_rule_aware column in accounts...")
+            result = conn.execute(text("PRAGMA table_info(accounts)"))
+            columns = [row[1] for row in result]
+            
+            if "enable_rule_aware" not in columns:
+                print("Adding enable_rule_aware column to accounts...")
+                conn.execute(text("ALTER TABLE accounts ADD COLUMN enable_rule_aware VARCHAR(10) DEFAULT 'false' NOT NULL"))
+                print("Column enable_rule_aware added.")
+            else:
+                print("Column enable_rule_aware already exists.")
+            
+            # 6. Verify new tables exist
             print("\nVerifying new tables...")
             tables_to_check = ['account_snapshots', 'asset_metadata', 'rule_evaluation_results']
             for table_name in tables_to_check:

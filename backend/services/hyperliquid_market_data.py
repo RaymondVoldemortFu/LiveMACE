@@ -3,6 +3,7 @@ Hyperliquid market data service using CCXT
 """
 import ccxt
 import logging
+import os
 from typing import Dict, List, Any, Optional
 from datetime import datetime, timezone
 from services.time_source import delta_t_minutes, now_timestamp_ms
@@ -17,51 +18,69 @@ class HyperliquidClient:
     def _initialize_exchange(self):
         """Initialize CCXT Hyperliquid exchange"""
         try:
-            self.exchange = ccxt.hyperliquid({
+            config = {
                 'sandbox': False,  # Set to True for testnet
                 'enableRateLimit': True,
-            })
+            }
+            
+            # Add proxy configuration if environment variables are set
+            http_proxy = os.getenv('HTTP_PROXY') or os.getenv('http_proxy')
+            https_proxy = os.getenv('HTTPS_PROXY') or os.getenv('https_proxy')
+            
+            if http_proxy or https_proxy:
+                config['proxies'] = {}
+                if http_proxy:
+                    config['proxies']['http'] = http_proxy
+                    logger.info(f"Using HTTP proxy: {http_proxy}")
+                if https_proxy:
+                    config['proxies']['https'] = https_proxy
+                    logger.info(f"Using HTTPS proxy: {https_proxy}")
+            
+            self.exchange = ccxt.hyperliquid(config)
             logger.info("Hyperliquid exchange initialized successfully")
         except Exception as e:
             logger.error(f"Failed to initialize Hyperliquid exchange: {e}")
             raise
 
-    def get_last_price(self, symbol: str) -> Optional[float]:
-        """Get the last price for a symbol"""
-        try:
-            if not self.exchange:
-                self._initialize_exchange()
-            
-            # Ensure symbol is in CCXT format (e.g., 'BTC/USD')
-            formatted_symbol = self._format_symbol(symbol)
-            
-            if delta_t_minutes() <= 0:
+    def get_last_price(self, symbol: str, max_retries: int = 3, retry_delay: float = 1.0) -> Optional[float]:
+        """
+        Get the last price for a symbol with retry logic
+        
+        Args:
+            symbol: Trading symbol
+            max_retries: Maximum number of retry attempts (default: 3)
+            retry_delay: Delay between retries in seconds (default: 1.0)
+        """
+        last_error = None
+        
+        for attempt in range(max_retries):
+            try:
+                if not self.exchange:
+                    self._initialize_exchange()
+                
+                # Ensure symbol is in CCXT format (e.g., 'BTC/USD')
+                formatted_symbol = self._format_symbol(symbol)
+                
                 ticker = self.exchange.fetch_ticker(formatted_symbol)
                 price = ticker['last']
-                logger.info(f"Got price for {formatted_symbol}: {price}")
-                return float(price) if price else None
-
-            virtual_now_ms = now_timestamp_ms()
-            klines = self.get_kline_data(
-                symbol,
-                period="1m",
-                count=10,
-                start_time=virtual_now_ms - (10 * 60 * 1000),
-                end_time=virtual_now_ms,
-            )
-            if klines:
-                price = klines[-1].get("close")
-                logger.info(f"Got delayed price for {formatted_symbol}: {price}")
-                return float(price) if price else None
-
-            logger.warning(f"No delayed kline data for {formatted_symbol}, falling back to real-time ticker")
-            ticker = self.exchange.fetch_ticker(formatted_symbol)
-            price = ticker['last']
-            return float(price) if price else None
-            
-        except Exception as e:
-            logger.error(f"Error fetching price for {symbol}: {e}")
-            return None
+                
+                if price and float(price) > 0:
+                    logger.info(f"Got price for {formatted_symbol}: {price}")
+                    return float(price)
+                else:
+                    logger.warning(f"Invalid price for {formatted_symbol}: {price}, attempt {attempt + 1}/{max_retries}")
+                    
+            except Exception as e:
+                last_error = e
+                logger.warning(f"Error fetching price for {symbol} (attempt {attempt + 1}/{max_retries}): {e}")
+                
+            # Don't sleep after last attempt
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay)
+        
+        # All retries failed
+        logger.error(f"Failed to fetch price for {symbol} after {max_retries} attempts: {last_error}")
+        return None
 
     def get_kline_data(self, symbol: str, period: str = '1d', count: int = 100, start_time: Optional[int] = None, end_time: Optional[int] = None) -> List[Dict[str, Any]]:
         """Get kline/candlestick data for a symbol"""

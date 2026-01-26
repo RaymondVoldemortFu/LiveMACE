@@ -209,6 +209,7 @@ export interface TradingAccount {
   base_url?: string  // API endpoint
   api_key?: string  // API key (masked in responses)
   agent_type?: string // "react" or "multi_agent"
+  enable_rule_aware?: boolean  // Enable Rule-Aware Trading
   initial_capital: number
   current_cash: number
   frozen_cash: number
@@ -222,6 +223,7 @@ export interface TradingAccountCreate {
   base_url?: string
   api_key?: string
   agent_type?: string
+  enable_rule_aware?: boolean
   initial_capital?: number
   account_type?: string
 }
@@ -232,6 +234,7 @@ export interface TradingAccountUpdate {
   base_url?: string
   api_key?: string
   agent_type?: string
+  enable_rule_aware?: boolean
 }
 
 

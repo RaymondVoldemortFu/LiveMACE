@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { PieChart, Settings, TrendingUp, BarChart3, Bot, Shield } from 'lucide-react'
 import SettingsDialog from './SettingsDialog'
+import { type TradingAccount } from '@/lib/api'
 
 interface SidebarProps {
   currentPage?: string
@@ -123,6 +124,7 @@ export default function Sidebar({ currentPage = 'comprehensive', onPageChange, o
             <TrendingUp className="w-5 h-5" />
             <span className="text-xs mt-1">Curve</span>
           </button>
+          
           <button
             className={`flex flex-col items-center justify-center w-12 h-12 rounded-lg transition-colors ${
               currentPage === 'compliance'
@@ -135,6 +137,7 @@ export default function Sidebar({ currentPage = 'comprehensive', onPageChange, o
             <Shield className="w-5 h-5" />
             <span className="text-xs mt-1">Rules</span>
           </button>
+          
           <button
             className="flex flex-col items-center justify-center w-12 h-12 rounded-lg hover:bg-muted transition-colors text-muted-foreground"
             onClick={() => setSettingsOpen(true)}
