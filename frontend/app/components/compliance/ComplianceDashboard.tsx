@@ -1,9 +1,21 @@
 /**
  * Compliance Dashboard - Main view for Rule-Aware Agent compliance monitoring
- * Shows overview of all rule-aware accounts
+ * Shows overview of all rule-aware accounts with comparison charts
  */
 import { useState, useEffect } from 'react'
 import { Shield, TrendingUp, CheckCircle, AlertCircle, Activity, BarChart3, Info } from 'lucide-react'
+import { Line } from 'react-chartjs-2'
+import {
+  Chart as ChartJS,
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  Title,
+  Tooltip,
+  Legend,
+  ChartOptions,
+} from 'chart.js'
 import {
   getComplianceStats,
   getRuleSummary,
@@ -12,6 +24,17 @@ import {
 } from '@/lib/compliance-api'
 import { type TradingAccount } from '@/lib/api'
 import RuleSummaryCard from './RuleSummaryCard'
+
+// Register Chart.js components
+ChartJS.register(
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  Title,
+  Tooltip,
+  Legend
+)
 
 interface ComplianceDashboardProps {
   accounts: TradingAccount[]
@@ -105,16 +128,97 @@ export default function ComplianceDashboard({ accounts }: ComplianceDashboardPro
     )
   }
 
-  // Calculate aggregate statistics
-  const aggregateStats = {
-    totalAccounts: accountsData.length,
-    totalEvaluations: accountsData.reduce((sum, d) => sum + (d.stats?.total_evaluations || 0), 0),
-    avgPassRate: accountsData.length > 0 
-      ? accountsData.reduce((sum, d) => sum + (d.stats?.all_time?.gate_pass_rate || 0), 0) / accountsData.length 
-      : 0,
-    avgFinalScore: accountsData.length > 0
-      ? accountsData.reduce((sum, d) => sum + (d.stats?.all_time?.avg_final_score || 0), 0) / accountsData.length
-      : 0,
+  // Prepare chart data for compliance score comparison
+  const chartData = {
+    labels: accountsData.map(d => d.account.name),
+    datasets: [
+      {
+        label: 'Rule Satisfaction (S_rule_sat)',
+        data: accountsData.map(d => d.stats?.all_time?.avg_s_rule_sat || 0),
+        borderColor: 'rgb(59, 130, 246)', // blue
+        backgroundColor: 'rgba(59, 130, 246, 0.1)',
+        tension: 0.4,
+      },
+      {
+        label: 'Audit Score (S_audit)',
+        data: accountsData.map(d => d.stats?.all_time?.avg_s_audit || 0),
+        borderColor: 'rgb(168, 85, 247)', // purple
+        backgroundColor: 'rgba(168, 85, 247, 0.1)',
+        tension: 0.4,
+      },
+      {
+        label: 'Final Score (Combined)',
+        data: accountsData.map(d => d.stats?.all_time?.avg_final_score || 0),
+        borderColor: 'rgb(34, 197, 94)', // green
+        backgroundColor: 'rgba(34, 197, 94, 0.1)',
+        tension: 0.4,
+        borderWidth: 3,
+      },
+    ],
+  }
+
+  const chartOptions: ChartOptions<'line'> = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        position: 'top' as const,
+        labels: {
+          usePointStyle: true,
+          padding: 15,
+        },
+      },
+      title: {
+        display: true,
+        text: 'Agent Compliance Score Comparison',
+        font: {
+          size: 16,
+          weight: 'bold',
+        },
+      },
+      tooltip: {
+        mode: 'index',
+        intersect: false,
+        callbacks: {
+          label: function(context) {
+            let label = context.dataset.label || '';
+            if (label) {
+              label += ': ';
+            }
+            if (context.parsed.y !== null) {
+              label += context.parsed.y.toFixed(3);
+            }
+            return label;
+          }
+        }
+      },
+    },
+    scales: {
+      y: {
+        beginAtZero: true,
+        max: 1.0,
+        ticks: {
+          callback: function(value) {
+            return (Number(value) * 100).toFixed(0) + '%';
+          }
+        },
+        title: {
+          display: true,
+          text: 'Score',
+        },
+      },
+      x: {
+        title: {
+          display: true,
+          text: 'Agent',
+        },
+      },
+    },
+    interaction: {
+      mode: 'nearest',
+      axis: 'x',
+      intersect: false
+    },
   }
 
   return (
@@ -127,7 +231,7 @@ export default function ComplianceDashboard({ accounts }: ComplianceDashboardPro
             Rule Compliance Overview
           </h2>
           <p className="text-sm text-muted-foreground mt-1">
-            {ruleAwareAccounts.length} rule-aware agent{ruleAwareAccounts.length > 1 ? 's' : ''} • {aggregateStats.totalEvaluations} total evaluations
+            {ruleAwareAccounts.length} rule-aware agent{ruleAwareAccounts.length > 1 ? 's' : ''} monitored
           </p>
         </div>
         <button
@@ -141,38 +245,10 @@ export default function ComplianceDashboard({ accounts }: ComplianceDashboardPro
       {/* Rule Summary */}
       {ruleSummary && <RuleSummaryCard summary={ruleSummary} />}
 
-      {/* Aggregate Stats Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <div className="bg-card border rounded-lg p-4">
-          <div className="flex items-center justify-between mb-2">
-            <p className="text-sm text-muted-foreground">Total Agents</p>
-            <Shield className="w-4 h-4 text-muted-foreground" />
-          </div>
-          <p className="text-2xl font-bold">{aggregateStats.totalAccounts}</p>
-        </div>
-        
-        <div className="bg-card border rounded-lg p-4">
-          <div className="flex items-center justify-between mb-2">
-            <p className="text-sm text-muted-foreground">Total Evaluations</p>
-            <BarChart3 className="w-4 h-4 text-muted-foreground" />
-          </div>
-          <p className="text-2xl font-bold">{aggregateStats.totalEvaluations}</p>
-        </div>
-        
-        <div className="bg-card border rounded-lg p-4">
-          <div className="flex items-center justify-between mb-2">
-            <p className="text-sm text-muted-foreground">Avg Pass Rate</p>
-            <CheckCircle className="w-4 h-4 text-green-500" />
-          </div>
-          <p className="text-2xl font-bold">{(aggregateStats.avgPassRate * 100).toFixed(1)}%</p>
-        </div>
-        
-        <div className="bg-card border rounded-lg p-4">
-          <div className="flex items-center justify-between mb-2">
-            <p className="text-sm text-muted-foreground">Avg Final Score</p>
-            <TrendingUp className="w-4 h-4 text-blue-500" />
-          </div>
-          <p className="text-2xl font-bold">{aggregateStats.avgFinalScore.toFixed(3)}</p>
+      {/* Compliance Score Chart */}
+      <div className="bg-card border rounded-lg p-6">
+        <div className="h-80">
+          <Line data={chartData} options={chartOptions} />
         </div>
       </div>
 
@@ -180,7 +256,7 @@ export default function ComplianceDashboard({ accounts }: ComplianceDashboardPro
       <div className="bg-card border rounded-lg p-6">
         <h3 className="text-lg font-semibold flex items-center gap-2 mb-4">
           <BarChart3 className="w-5 h-5" />
-          Accounts Compliance Comparison
+          Detailed Compliance Metrics
         </h3>
         <div className="overflow-x-auto">
           <table className="w-full">
@@ -189,9 +265,9 @@ export default function ComplianceDashboard({ accounts }: ComplianceDashboardPro
                 <th className="text-left py-3 px-4 font-medium">Account</th>
                 <th className="text-right py-3 px-4 font-medium">Evaluations</th>
                 <th className="text-right py-3 px-4 font-medium">Pass Rate</th>
-                <th className="text-right py-3 px-4 font-medium">Final Score</th>
                 <th className="text-right py-3 px-4 font-medium">Rule Sat</th>
                 <th className="text-right py-3 px-4 font-medium">Audit Score</th>
+                <th className="text-right py-3 px-4 font-medium">Final Score</th>
                 <th className="text-center py-3 px-4 font-medium">Status</th>
               </tr>
             </thead>
@@ -199,6 +275,7 @@ export default function ComplianceDashboard({ accounts }: ComplianceDashboardPro
               {accountsData.map((data) => {
                 const stats = data.stats
                 const allTime = stats?.all_time
+                const finalScore = allTime?.avg_final_score || 0
                 
                 return (
                   <tr key={data.account.id} className="border-b hover:bg-muted/50">
@@ -218,14 +295,24 @@ export default function ComplianceDashboard({ accounts }: ComplianceDashboardPro
                           </span>
                         : '-'}
                     </td>
-                    <td className="py-3 px-4 text-right font-medium">
-                      {allTime?.avg_final_score?.toFixed(3) || '-'}
+                    <td className="py-3 px-4 text-right">
+                      <span className="text-blue-600">
+                        {allTime?.avg_s_rule_sat?.toFixed(3) || '-'}
+                      </span>
                     </td>
                     <td className="py-3 px-4 text-right">
-                      {allTime?.avg_s_rule_sat?.toFixed(3) || '-'}
+                      <span className="text-purple-600">
+                        {allTime?.avg_s_audit?.toFixed(3) || '-'}
+                      </span>
                     </td>
                     <td className="py-3 px-4 text-right">
-                      {allTime?.avg_s_audit?.toFixed(3) || '-'}
+                      <span className={`font-semibold ${
+                        finalScore >= 0.9 ? 'text-green-600' : 
+                        finalScore >= 0.7 ? 'text-yellow-600' : 
+                        'text-red-600'
+                      }`}>
+                        {finalScore.toFixed(3)}
+                      </span>
                     </td>
                     <td className="py-3 px-4 text-center">
                       {data.loading ? (
