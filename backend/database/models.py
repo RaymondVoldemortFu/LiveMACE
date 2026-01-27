@@ -58,12 +58,6 @@ class Account(Base):
     margin_used = Column(DECIMAL(18, 2), nullable=False, default=0.00)
     maintenance_margin_ratio = Column(Float, nullable=False, default=0.5)  # 50% of initial margin
     
-    # LLM Audit Statistics
-    llm_audit_count = Column(Integer, nullable=False, default=0)  # total number of LLM audits performed
-    llm_audit_avg_score = Column(Float, nullable=True)  # average audit score (1.0-5.0)
-    llm_audit_avg_coverage = Column(Float, nullable=True)  # average coverage score (1.0-5.0)
-    llm_audit_avg_conflict = Column(Float, nullable=True)  # average conflict score (1.0-5.0)
-    
     created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
     updated_at = Column(
         TIMESTAMP, server_default=func.current_timestamp(), onupdate=func.current_timestamp()
@@ -410,6 +404,12 @@ class RuleEvaluationResult(Base):
     s_rule_sat = Column(Float, nullable=True)  # S_rule_sat: weighted soft rule score
     s_audit = Column(Float, nullable=True)  # S_audit: audit/awareness score (LLM-based)
     final_score = Column(Float, nullable=True)  # Final compliance score
+    
+    # LLM Audit Details (per-decision)
+    llm_audit_score = Column(Float, nullable=True)  # Overall audit score (1.0-5.0)
+    llm_audit_coverage = Column(Float, nullable=True)  # Coverage score (1.0-5.0)
+    llm_audit_conflict = Column(Float, nullable=True)  # Conflict score (1.0-5.0)
+    llm_audit_json = Column(Text, nullable=True)  # Full LLM audit response (JSON)
     
     created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
     

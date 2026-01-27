@@ -45,27 +45,7 @@ def update_schema():
             else:
                 print("Column agent_type already exists.")
             
-            # 4. Add LLM audit statistics fields to Accounts if they don't exist
-            print("\nChecking for LLM audit statistics fields in accounts...")
-            result = conn.execute(text("PRAGMA table_info(accounts)"))
-            columns = [row[1] for row in result]
-            
-            llm_audit_fields = {
-                "llm_audit_count": "INTEGER NOT NULL DEFAULT 0",
-                "llm_audit_avg_score": "REAL",
-                "llm_audit_avg_coverage": "REAL",
-                "llm_audit_avg_conflict": "REAL"
-            }
-            
-            for field_name, field_type in llm_audit_fields.items():
-                if field_name not in columns:
-                    print(f"Adding {field_name} column to accounts...")
-                    conn.execute(text(f"ALTER TABLE accounts ADD COLUMN {field_name} {field_type}"))
-                    print(f"Column {field_name} added.")
-                else:
-                    print(f"Column {field_name} already exists.")
-            
-            # 5. Add enable_rule_aware column to Accounts if it doesn't exist
+            # 4. Add enable_rule_aware column to Accounts if it doesn't exist
             print("\nChecking for enable_rule_aware column in accounts...")
             result = conn.execute(text("PRAGMA table_info(accounts)"))
             columns = [row[1] for row in result]
@@ -77,7 +57,41 @@ def update_schema():
             else:
                 print("Column enable_rule_aware already exists.")
             
-            # 6. Verify new tables exist
+            # 5. Remove old LLM audit fields from Accounts if they exist (moved to RuleEvaluationResult)
+            print("\nChecking for deprecated LLM audit fields in accounts...")
+            result = conn.execute(text("PRAGMA table_info(accounts)"))
+            columns = [row[1] for row in result]
+            
+            deprecated_fields = ["llm_audit_count", "llm_audit_avg_score", "llm_audit_avg_coverage", "llm_audit_avg_conflict"]
+            has_deprecated = any(field in columns for field in deprecated_fields)
+            
+            if has_deprecated:
+                print("Found deprecated LLM audit fields in accounts table.")
+                print("Note: SQLite does not support DROP COLUMN directly.")
+                print("These fields are now in rule_evaluation_results table (per-decision).")
+                print("If you want to remove them, you need to recreate the table.")
+            
+            # 6. Add LLM audit detail fields to RuleEvaluationResult if they don't exist
+            print("\nChecking for LLM audit detail fields in rule_evaluation_results...")
+            result = conn.execute(text("PRAGMA table_info(rule_evaluation_results)"))
+            columns = [row[1] for row in result]
+            
+            llm_audit_detail_fields = {
+                "llm_audit_score": "REAL",
+                "llm_audit_coverage": "REAL",
+                "llm_audit_conflict": "REAL",
+                "llm_audit_json": "TEXT"
+            }
+            
+            for field_name, field_type in llm_audit_detail_fields.items():
+                if field_name not in columns:
+                    print(f"Adding {field_name} column to rule_evaluation_results...")
+                    conn.execute(text(f"ALTER TABLE rule_evaluation_results ADD COLUMN {field_name} {field_type}"))
+                    print(f"Column {field_name} added.")
+                else:
+                    print(f"Column {field_name} already exists.")
+            
+            # 7. Verify new tables exist
             print("\nVerifying new tables...")
             tables_to_check = ['account_snapshots', 'asset_metadata', 'rule_evaluation_results']
             for table_name in tables_to_check:

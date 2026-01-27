@@ -401,6 +401,11 @@ def _save_rule_evaluation(db: Session, account: Account, decision: Dict, trace_i
         s_rule_sat = compliance_audit.get("s_rule_sat")
         s_audit = llm_audit.get("final_normalized_score")
         
+        # Extract LLM audit details
+        llm_audit_score = llm_audit.get("audit_score")  # Overall audit score (1-5)
+        llm_audit_coverage = llm_audit.get("coverage_score")  # Coverage score (1-5)
+        llm_audit_conflict = llm_audit.get("conflict_score")  # Conflict score (1-5)
+        
         # Calculate final score (weighted combination)
         final_score = None
         if s_rule_sat is not None and s_audit is not None:
@@ -422,7 +427,12 @@ def _save_rule_evaluation(db: Session, account: Account, decision: Dict, trace_i
             r2_scores_json=json.dumps(r2_scores, ensure_ascii=False) if r2_scores else None,
             s_rule_sat=s_rule_sat,
             s_audit=s_audit,
-            final_score=final_score
+            final_score=final_score,
+            # LLM audit details (per-decision)
+            llm_audit_score=llm_audit_score,
+            llm_audit_coverage=llm_audit_coverage,
+            llm_audit_conflict=llm_audit_conflict,
+            llm_audit_json=json.dumps(llm_audit, ensure_ascii=False) if llm_audit else None
         )
         
         db.add(eval_result)

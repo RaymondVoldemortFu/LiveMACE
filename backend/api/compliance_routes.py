@@ -224,15 +224,19 @@ async def get_compliance_stats(
                 "evaluation_count": recent_count
             }
         
-        # Get LLM audit stats from Account table
-        account = db.query(Account).filter(Account.id == account_id).first()
+        # Calculate LLM audit stats from RuleEvaluationResult (per-decision data)
+        llm_audit_records = [r for r in all_records if r.llm_audit_score is not None]
         llm_audit_stats = None
-        if account and hasattr(account, 'llm_audit_count') and account.llm_audit_count > 0:
+        if llm_audit_records:
+            audit_scores = [r.llm_audit_score for r in llm_audit_records if r.llm_audit_score is not None]
+            coverage_scores = [r.llm_audit_coverage for r in llm_audit_records if r.llm_audit_coverage is not None]
+            conflict_scores = [r.llm_audit_conflict for r in llm_audit_records if r.llm_audit_conflict is not None]
+            
             llm_audit_stats = {
-                "count": account.llm_audit_count,
-                "avg_score": round(account.llm_audit_avg_score, 3) if account.llm_audit_avg_score else None,
-                "avg_coverage": round(account.llm_audit_avg_coverage, 2) if account.llm_audit_avg_coverage else None,
-                "avg_conflict": round(account.llm_audit_avg_conflict, 2) if account.llm_audit_avg_conflict else None
+                "count": len(llm_audit_records),
+                "avg_score": round(sum(audit_scores) / len(audit_scores), 3) if audit_scores else None,
+                "avg_coverage": round(sum(coverage_scores) / len(coverage_scores), 3) if coverage_scores else None,
+                "avg_conflict": round(sum(conflict_scores) / len(conflict_scores), 3) if conflict_scores else None
             }
         
         return {
