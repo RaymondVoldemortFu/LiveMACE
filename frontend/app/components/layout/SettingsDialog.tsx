@@ -267,12 +267,13 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
       base_url: account.base_url || '',
       api_key: account.api_key || '',
       agent_type: account.agent_type || 'react',
+      enable_rule_aware: account.enable_rule_aware || false,
     })
   }
 
   const cancelEdit = () => {
     setEditingId(null)
-    setEditAccount({ name: '', model: '', base_url: '', api_key: '', agent_type: 'react' })
+    setEditAccount({ name: '', model: '', base_url: '', api_key: '', agent_type: 'react', enable_rule_aware: false })
     setTestResult(null)
     setError(null)
   }
@@ -337,6 +338,30 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
                             </SelectContent>
                           </Select>
                         </div>
+                        
+                        {/* Rule-Aware Toggle for Edit */}
+                        <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
+                          <div className="flex items-center gap-2">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-primary">
+                              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/>
+                              <path d="m9 12 2 2 4-4"/>
+                            </svg>
+                            <div>
+                              <p className="text-sm font-medium">Enable Rule-Aware Trading</p>
+                              <p className="text-xs text-muted-foreground">Monitor compliance with trading rules (R0/R1/R2)</p>
+                            </div>
+                          </div>
+                          <label className="relative inline-flex items-center cursor-pointer">
+                            <input
+                              type="checkbox"
+                              className="sr-only peer"
+                              checked={editAccount.enable_rule_aware || false}
+                              onChange={(e) => setEditAccount({ ...editAccount, enable_rule_aware: e.target.checked })}
+                            />
+                            <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-primary/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
+                          </label>
+                        </div>
+                        
                         <Input
                             placeholder="Model"
                             value={editAccount.model || ''}

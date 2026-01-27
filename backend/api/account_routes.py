@@ -45,6 +45,7 @@ async def list_all_accounts(db: Session = Depends(get_db)):
                 "name": account.name,
                 "account_type": account.account_type,
                 "agent_type": getattr(account, "agent_type", "react"),
+                "enable_rule_aware": getattr(account, "enable_rule_aware", "false") == "true",
                 "initial_capital": float(account.initial_capital),
                 "current_cash": float(account.current_cash),
                 "frozen_cash": float(account.frozen_cash),
@@ -200,6 +201,7 @@ async def create_new_account(payload: dict, db: Session = Depends(get_db)):
             name=payload["name"],
             account_type=payload.get("account_type", "AI"),
             agent_type=payload.get("agent_type", "react"),
+            enable_rule_aware="true" if payload.get("enable_rule_aware") is True else "false",
             model=model,
             base_url=base_url,
             api_key=api_key,
@@ -227,6 +229,8 @@ async def create_new_account(payload: dict, db: Session = Depends(get_db)):
             "username": user.username,
             "name": new_account.name,
             "account_type": new_account.account_type,
+            "agent_type": new_account.agent_type,
+            "enable_rule_aware": new_account.enable_rule_aware == "true",
             "initial_capital": float(new_account.initial_capital),
             "current_cash": float(new_account.current_cash),
             "frozen_cash": float(new_account.frozen_cash),
@@ -272,6 +276,10 @@ async def update_account_settings(account_id: int, payload: dict, db: Session = 
             account.agent_type = payload["agent_type"]
             logger.info(f"Updated agent_type to: {account.agent_type}")
         
+        if "enable_rule_aware" in payload:
+            account.enable_rule_aware = "true" if payload["enable_rule_aware"] is True else "false"
+            logger.info(f"Updated enable_rule_aware to: {account.enable_rule_aware}")
+        
         if "base_url" in payload:
             account.base_url = payload["base_url"]
             logger.info(f"Updated base_url to: {account.base_url}")
@@ -302,6 +310,7 @@ async def update_account_settings(account_id: int, payload: dict, db: Session = 
             "name": account.name,
             "account_type": account.account_type,
             "agent_type": getattr(account, "agent_type", "react"),
+            "enable_rule_aware": getattr(account, "enable_rule_aware", "false") == "true",
             "initial_capital": float(account.initial_capital),
             "current_cash": float(account.current_cash),
             "frozen_cash": float(account.frozen_cash),

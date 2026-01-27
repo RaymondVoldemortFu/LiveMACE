@@ -301,6 +301,7 @@ export async function createAccount(account: TradingAccountCreate): Promise<Trad
       api_key: account.api_key,
       account_type: account.account_type || 'AI',
       agent_type: account.agent_type || 'react',
+      enable_rule_aware: account.enable_rule_aware || false,
       initial_capital: account.initial_capital || 10000
     })
   })
@@ -315,7 +316,8 @@ export async function updateAccount(accountId: number, account: TradingAccountUp
       model: account.model,
       base_url: account.base_url,
       api_key: account.api_key,
-      agent_type: account.agent_type
+      agent_type: account.agent_type,
+      enable_rule_aware: account.enable_rule_aware
     })
   })
   return response.json()
