@@ -131,12 +131,20 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
       // If AI fields are provided, test LLM connection first
       if (hasAllLLMFields) {
         setTestResult('Testing LLM connection...')
+        
+        console.log('[SettingsDialog] Starting LLM test')
+        console.log('[SettingsDialog] newAccount:', newAccount)
+        console.log('[SettingsDialog] enable_rule_aware:', newAccount.enable_rule_aware, typeof newAccount.enable_rule_aware)
+        
         try {
           const testResponse = await testLLMConnection({
             model: newAccount.model,
             base_url: newAccount.base_url,
             api_key: newAccount.api_key,
           })
+          
+          console.log('[SettingsDialog] LLM test response:', testResponse)
+          
           if (!testResponse.success) {
             const message = testResponse.message || 'LLM connection test failed'
             setError(`LLM Test Failed: ${message}`)
@@ -147,6 +155,7 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
           }
           setTestResult('✅ LLM connection test passed! Creating account...')
         } catch (testError) {
+          console.error('[SettingsDialog] LLM test error:', testError)
           const message = testError instanceof Error ? testError.message : 'LLM connection test failed'
           setError(`LLM Test Failed: ${message}`)
           setTestResult(`❌ Test failed: ${message}`)
@@ -156,7 +165,7 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
         }
       }
 
-      console.log('Creating account with data:', newAccount)
+      console.log('[SettingsDialog] Creating account with data:', newAccount)
       await createAccount(newAccount)
       setNewAccount({ name: '', model: '', base_url: '', api_key: '', agent_type: 'react', enable_rule_aware: false })
       setShowAddForm(false)
@@ -280,7 +289,7 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[600px] max-h-[85vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-hidden flex flex-col">
         <DialogHeader>
           <DialogTitle>Account Management</DialogTitle>
           <DialogDescription>
@@ -294,7 +303,7 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
           </div>
         )}
 
-        <div className="space-y-6">
+        <div className="space-y-6 overflow-y-auto pr-2">
           {/* Existing Accounts */}
           <div className="space-y-4">
             <div className="flex items-center justify-between">
