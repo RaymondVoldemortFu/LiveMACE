@@ -18,12 +18,14 @@ class ComplianceAudit:
     def __init__(self):
         self.timestamp = datetime.utcnow()
         self.rules_checked: List[str] = []  # List of rule IDs checked
-        self.violations: List[RuleViolation] = []
+        self.violations: List[RuleViolation] = []  # Rule violations found
         self.conflicts: List[Dict[str, Any]] = []  # Rule conflicts
         self.adjustments: List[Dict[str, Any]] = []  # Adjustments made
         self.final_status: str = "PENDING"  # PASS, FAIL, ADJUSTED
         self.decision_before: Optional[Dict] = None
         self.decision_after: Optional[Dict] = None
+        self.s_rule_sat: Optional[float] = None  # Rule satisfaction score (0-1)
+        self.r2_results: Optional[Dict[str, Any]] = None  # R2 soft rule results
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert audit to dictionary"""
@@ -35,7 +37,9 @@ class ComplianceAudit:
             "adjustments": self.adjustments,
             "final_status": self.final_status,
             "decision_before": self.decision_before,
-            "decision_after": self.decision_after
+            "decision_after": self.decision_after,
+            "s_rule_sat": self.s_rule_sat,  # Rule satisfaction score
+            "r2_results": self.r2_results  # R2 soft rule evaluation results
         }
     
     def format_for_output(self) -> str:
@@ -61,9 +65,18 @@ class ComplianceAudit:
         if self.conflicts:
             lines.append(f"\nRule Conflicts: {len(self.conflicts)}")
             for conflict in self.conflicts:
-                lines.append(f"  - {conflict['rule_a']} vs {conflict['rule_b']}")
-                lines.append(f"    Chosen: {conflict['chosen']}")
-                lines.append(f"    Reason: {conflict['reason']}")
+                # Handle both old format (rule_a/rule_b) and new format (conflict string)
+                if 'rule_a' in conflict and 'rule_b' in conflict:
+                    lines.append(f"  - {conflict['rule_a']} vs {conflict['rule_b']}")
+                elif 'conflict' in conflict:
+                    lines.append(f"  - {conflict['conflict']}")
+                else:
+                    lines.append(f"  - {conflict}")
+                
+                if 'chosen' in conflict:
+                    lines.append(f"    Chosen: {conflict['chosen']}")
+                if 'reason' in conflict:
+                    lines.append(f"    Reason: {conflict['reason']}")
         
         # Adjustments
         if self.adjustments:
@@ -123,6 +136,60 @@ class ComplianceAuditor:
         # Extract conflicts from agent reasoning if provided
         if agent_reasoning and "conflicts" in agent_reasoning:
             audit.conflicts = agent_reasoning["conflicts"]
+        
+        # Calculate R2 (soft) rule scores
+        # Import RuleLevel enum to properly filter R2 rules
+        from .rule_engine import RuleLevel
+        
+        r2_rules = [r for r in all_rules if r.level == RuleLevel.R2_CLIENT_SOFT]
+        logger.info(f"Found {len(r2_rules)} R2 rules out of {len(all_rules)} total rules")
+        r2_scores = {}
+        r2_total_score = 0.0
+        r2_rule_count = 0
+        
+        for rule in r2_rules:
+            # For R2 rules, check if there's a violation
+            rule_violations = [v for v in violations if v.rule.id == rule.id]
+            if not rule_violations:
+                # No violation = full score
+                r2_scores[rule.id] = 1.0
+                r2_total_score += 1.0
+            else:
+                # Has violation = partial score based on severity
+                violation = rule_violations[0]
+                if violation.severity == "WARNING":
+                    r2_scores[rule.id] = 0.5  # 50% for warnings
+                    r2_total_score += 0.5
+                else:
+                    r2_scores[rule.id] = 0.0  # 0% for critical
+                    r2_total_score += 0.0
+            r2_rule_count += 1
+        
+        # Store R2 results
+        audit.r2_results = {
+            "rule_scores": r2_scores,
+            "average_score": r2_total_score / r2_rule_count if r2_rule_count > 0 else 1.0,
+            "total_rules": r2_rule_count
+        }
+        
+        # Calculate overall rule satisfaction score (s_rule_sat)
+        # This is based on violations and rule compliance
+        total_rules = len(all_rules)
+        violated_rules = len(set(v.rule.id for v in violations))
+        compliant_rules = total_rules - violated_rules
+        
+        # Calculate score: (compliant_rules / total_rules) with penalty for critical violations
+        base_score = compliant_rules / total_rules if total_rules > 0 else 1.0
+        
+        # Apply penalties for violations
+        critical_count = len([v for v in violations if v.severity == "CRITICAL"])
+        warning_count = len([v for v in violations if v.severity == "WARNING"])
+        
+        # Critical violations: -0.2 each, warnings: -0.05 each
+        penalty = min(0.8, critical_count * 0.2 + warning_count * 0.05)
+        audit.s_rule_sat = max(0.0, base_score - penalty)
+        
+        logger.info(f"Rule satisfaction score: {audit.s_rule_sat:.3f} (base={base_score:.3f}, penalty={penalty:.3f})")
         
         # Determine status
         critical_violations = [v for v in violations if v.severity == "CRITICAL"]

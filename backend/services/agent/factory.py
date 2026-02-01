@@ -57,8 +57,18 @@ def create_agent(agent_type: str, llm: LLMClient, tools: ToolRegistry, **kwargs)
         
         max_steps = kwargs.get("max_steps", AgentConfig.MAX_STEPS)
         user_id = kwargs.get("user_id")
+        account_id = kwargs.get("account_id")
+        enable_llm_audit = kwargs.get("enable_llm_audit", False)
         
-        return RuleAwareAgent(llm, tools, rule_engine, max_steps=max_steps, user_id=user_id)
+        return RuleAwareAgent(
+            llm, 
+            tools, 
+            rule_engine, 
+            max_steps=max_steps, 
+            user_id=user_id,
+            account_id=account_id,
+            enable_llm_audit=enable_llm_audit
+        )
         
     else:
         # Fallback to ReAct if unknown, but log warning

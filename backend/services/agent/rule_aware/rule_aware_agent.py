@@ -172,6 +172,7 @@ class RuleAwareAgent(BaseAgent):
         
         decision = None
         compliance_audit = None
+        accumulated_content = ""  # Track accumulated assistant content across steps
         
         try:
             for step in range(self.max_steps):
@@ -199,6 +200,13 @@ class RuleAwareAgent(BaseAgent):
                     resp_dict = resp.dict()
                 messages.append(resp_dict)
                 
+                # Accumulate assistant content (handle multi-turn responses)
+                if msg_content and not tool_calls:
+                    accumulated_content += msg_content
+                else:
+                    # Reset accumulation if there are tool calls or empty content
+                    accumulated_content = msg_content
+                
                 # Notify step callback
                 if on_step:
                     on_step({
@@ -208,40 +216,60 @@ class RuleAwareAgent(BaseAgent):
                         "metadata": {"step": step + 1}
                     })
                 
-                # Check for final decision
-                if "<FINAL_JSON>" in msg_content and "</FINAL_JSON>" in msg_content:
+                # Check for final decision - use accumulated content
+                full_content = accumulated_content if accumulated_content else msg_content
+                if "<FINAL_JSON>" in full_content and "</FINAL_JSON>" in full_content:
                     logger.info("Final decision detected in agent output")
                     
                     # Parse the full output for compliance audit
-                    parsed_output = self.compliance_auditor.parse_agent_output(msg_content)
+                    parsed_output = self.compliance_auditor.parse_agent_output(full_content)
                     
                     # Extract JSON decision
                     try:
-                        start = msg_content.index("<FINAL_JSON>") + len("<FINAL_JSON>")
-                        end = msg_content.index("</FINAL_JSON>")
-                        json_str = msg_content[start:end].strip()
+                        start = full_content.index("<FINAL_JSON>") + len("<FINAL_JSON>")
+                        end = full_content.index("</FINAL_JSON>")
+                        json_str = full_content[start:end].strip()
+                        logger.info(f"Extracted JSON string ({len(json_str)} chars): {json_str[:200]}...")
+                        
                         decision = json.loads(json_str)
+                        logger.info(f"Parsed decision: operation={decision.get('operation')}, symbol={decision.get('symbol')}, direction={decision.get('direction')}")
                         
                         # Validate decision format
                         decision = self._validate_decision_format(decision)
+                        logger.info(f"Decision after validation: {decision}")
                         
                         # Perform compliance audit
+                        logger.info("Starting compliance audit...")
+                        logger.info(f"Portfolio state: total_assets={portfolio.get('total_assets')}, cash={portfolio.get('account', {}).get('cash')}")
+                        logger.info(f"Number of rules to check: {len(self.rule_engine.get_all_rules())}")
+                        
                         compliance_audit = self.compliance_auditor.audit_decision(
                             decision, portfolio, prices, agent_reasoning=parsed_output
                         )
+                        
+                        logger.info(f"Compliance audit completed: status={compliance_audit.final_status}, violations={len(compliance_audit.violations)}")
+                        if compliance_audit.violations:
+                            for v in compliance_audit.violations:
+                                logger.info(f"  Violation: [{v.severity}] {v.rule.id} - {v.message}")
                         
                         # Log audit results
                         agent_logger.info("=== Compliance Audit ===")
                         agent_logger.info(compliance_audit.format_for_output())
                         
                         # Add audit to decision output
-                        decision["compliance_audit"] = compliance_audit.to_dict()
+                        logger.info("Converting compliance audit to dict...")
+                        compliance_dict = compliance_audit.to_dict()
+                        logger.info(f"Compliance audit dict keys: {list(compliance_dict.keys())}")
+                        decision["compliance_audit"] = compliance_dict
                         decision["agent_reasoning"] = parsed_output["reasoning"]
+                        logger.info("Successfully added compliance audit and reasoning to decision")
                         
                         # Perform LLM-based audit if enabled
                         if self.enable_llm_audit and self.llm_auditor:
                             try:
                                 logger.info("Performing LLM-based audit scoring...")
+                                logger.info(f"Agent output length: {len(full_content)} chars")
+                                logger.info(f"Number of rules for LLM audit: {len(self.rule_engine.get_all_rules())}")
                                 
                                 # Prepare data for LLM audit
                                 rule_documents = self.rule_engine.format_rules_for_prompt()
@@ -254,8 +282,10 @@ class RuleAwareAgent(BaseAgent):
                                 llm_audit_result = self.llm_auditor.audit_agent_reasoning(
                                     rules=rule_documents,
                                     market_state=market_state,
-                                    agent_output=msg_content
+                                    agent_output=full_content  # Use accumulated content
                                 )
+                                
+                                logger.info(f"LLM audit raw result: coverage={llm_audit_result.get('coverage')}, conflict={llm_audit_result.get('conflict')}, final_score={llm_audit_result.get('final_normalized_score')}")
                                 
                                 # Add LLM audit to decision
                                 decision["llm_audit"] = llm_audit_result
@@ -267,9 +297,8 @@ class RuleAwareAgent(BaseAgent):
                                 
                                 logger.info(f"LLM Audit completed - Score: {llm_audit_result.get('final_normalized_score', 0):.2f}")
                                 
-                                # Update account audit statistics
-                                if self.account_id:
-                                    self._update_account_audit_stats(llm_audit_result)
+                                # Note: LLM audit statistics are now saved per-decision in rule_evaluation_results table
+                                # No need to update account-level aggregates
                                 
                             except Exception as e:
                                 logger.error(f"LLM audit failed: {e}", exc_info=True)
@@ -307,13 +336,20 @@ class RuleAwareAgent(BaseAgent):
                             args = {}
                         
                         logger.info(f"Calling tool: {func_name} with args: {args}")
+                        agent_logger.info(f"Executing tool '{func_name}' with args: {json.dumps(args, ensure_ascii=False)}")
                         
-                        # Execute tool
-                        result = self.tools.execute(func_name, args)
+                        # Execute tool - get tool from registry and call it
+                        try:
+                            tool = self.tools.get(func_name)
+                            result = tool(**args)
+                        except Exception as tool_err:
+                            logger.error(f"Tool execution failed for {func_name}: {tool_err}", exc_info=True)
+                            result = {"error": f"Tool execution failed: {str(tool_err)}"}
                         
                         # Log result
                         result_preview = str(result)[:200] if result else "None"
                         llm_logger.info(f"Tool {func_name} result: {result_preview}...")
+                        agent_logger.info(f"Tool '{func_name}' result: {json.dumps(result, ensure_ascii=False)}")
                         
                         tool_results.append({
                             "role": "tool",
@@ -331,10 +367,14 @@ class RuleAwareAgent(BaseAgent):
                             })
                     
                     messages.extend(tool_results)
+                    # Reset accumulated content after tool calls
+                    accumulated_content = ""
                 
                 # If no tool calls and no decision, this might be intermediate reasoning
-                if not tool_calls and "<FINAL_JSON>" not in msg_content:
-                    logger.debug("Agent provided reasoning without tool calls or decision")
+                # or a truncated response - continue to next iteration
+                if not tool_calls and "<FINAL_JSON>" not in full_content:
+                    logger.debug(f"Agent provided reasoning without tool calls or decision (accumulated: {len(accumulated_content)} chars)")
+                    # Don't reset accumulated_content here - it will be used in next iteration
             
             # If loop finished without decision, return HOLD
             if decision is None:
@@ -363,8 +403,9 @@ class RuleAwareAgent(BaseAgent):
         """Validate and normalize decision format"""
         required_fields = ["operation", "symbol", "direction", "target_portion_of_balance", "leverage", "reason"]
         
+        # Set defaults for missing or None fields
         for field in required_fields:
-            if field not in decision:
+            if field not in decision or decision[field] is None:
                 if field == "direction":
                     decision[field] = "long"
                 elif field == "target_portion_of_balance":
@@ -373,13 +414,28 @@ class RuleAwareAgent(BaseAgent):
                     decision[field] = 1
                 elif field == "reason":
                     decision[field] = "No reason provided"
-                else:
-                    decision[field] = "hold" if field == "operation" else "BTC"
+                elif field == "operation":
+                    decision[field] = "hold"
+                elif field == "symbol":
+                    decision[field] = "BTC"
         
-        # Normalize values
-        decision["operation"] = decision["operation"].lower()
-        decision["direction"] = decision["direction"].lower()
-        decision["symbol"] = decision["symbol"].upper()
+        # Normalize string values (handle None gracefully)
+        if decision["operation"]:
+            decision["operation"] = str(decision["operation"]).lower()
+        else:
+            decision["operation"] = "hold"
+            
+        if decision["direction"]:
+            decision["direction"] = str(decision["direction"]).lower()
+        else:
+            decision["direction"] = "long"
+            
+        if decision["symbol"]:
+            decision["symbol"] = str(decision["symbol"]).upper()
+        else:
+            decision["symbol"] = "BTC"
+        
+        logger.info(f"Validated decision: {decision['operation']} {decision['symbol']} {decision['direction']} portion={decision['target_portion_of_balance']} leverage={decision['leverage']}")
         
         return decision
     

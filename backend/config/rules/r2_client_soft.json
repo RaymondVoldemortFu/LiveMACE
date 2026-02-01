@@ -52,30 +52,6 @@
         "justification_required_above": 0.20,
         "acceptable_scenarios": ["market_crash_risk", "high_volatility", "regime_uncertainty"]
       }
-    },
-    {
-      "id": "R2-05",
-      "name": "Transaction Cost Minimization",
-      "description": "Prefer limit orders over market orders when possible to reduce slippage and transaction costs. Target average slippage below 0.1%.",
-      "enforcement": "Market orders are acceptable during urgent situations or when liquidity is high, but should be minimized.",
-      "parameters": {
-        "preferred_order_type": "limit",
-        "max_avg_slippage_pct": 0.001,
-        "market_order_exceptions": ["urgent_exit", "high_liquidity", "small_size"],
-        "track_execution_quality": true
-      }
-    },
-    {
-      "id": "R2-06",
-      "name": "Risk-Adjusted Return Focus",
-      "description": "Prioritize strategies with Sharpe Ratio above 1.5. Higher returns at lower Sharpe are less desirable.",
-      "enforcement": "This is a soft preference - can be overridden for tactical opportunities, but should guide long-term strategy.",
-      "parameters": {
-        "min_sharpe_ratio": 1.5,
-        "calculation_window_days": 60,
-        "risk_free_rate": 0.04,
-        "tactical_override_allowed": true
-      }
     }
   ]
 }

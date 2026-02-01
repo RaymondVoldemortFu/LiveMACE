@@ -82,21 +82,35 @@ async def get_specific_account_overview(account_id: int, db: Session = Depends(g
             Position.quantity > 0
         ).count()
         
-        from database.models import Order
+        from database.models import Order, RuleEvaluationResult
         pending_orders = db.query(Order).filter(
             Order.account_id == account.id,
             Order.status == "PENDING"
         ).count()
         
-        # Get LLM audit statistics
+        # Get LLM audit statistics from rule_evaluation_results table
         llm_audit_stats = None
-        if hasattr(account, 'llm_audit_count') and account.llm_audit_count > 0:
-            llm_audit_stats = {
-                "count": account.llm_audit_count,
-                "avg_score": round(account.llm_audit_avg_score, 3) if account.llm_audit_avg_score else None,
-                "avg_coverage": round(account.llm_audit_avg_coverage, 2) if account.llm_audit_avg_coverage else None,
-                "avg_conflict": round(account.llm_audit_avg_conflict, 2) if account.llm_audit_avg_conflict else None
-            }
+        try:
+            from sqlalchemy import func
+            audit_results = db.query(
+                func.count(RuleEvaluationResult.id).label('count'),
+                func.avg(RuleEvaluationResult.llm_audit_score).label('avg_score'),
+                func.avg(RuleEvaluationResult.llm_audit_coverage).label('avg_coverage'),
+                func.avg(RuleEvaluationResult.llm_audit_conflict).label('avg_conflict')
+            ).filter(
+                RuleEvaluationResult.account_id == account.id,
+                RuleEvaluationResult.llm_audit_score.isnot(None)  # Only include records with LLM audit
+            ).first()
+            
+            if audit_results and audit_results.count > 0:
+                llm_audit_stats = {
+                    "count": audit_results.count,
+                    "avg_score": round(float(audit_results.avg_score), 3) if audit_results.avg_score else None,
+                    "avg_coverage": round(float(audit_results.avg_coverage), 2) if audit_results.avg_coverage else None,
+                    "avg_conflict": round(float(audit_results.avg_conflict), 2) if audit_results.avg_conflict else None
+                }
+        except Exception as e:
+            logger.warning(f"Failed to calculate LLM audit stats: {e}")
         
         return {
             "account": {

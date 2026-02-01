@@ -2,12 +2,36 @@
 Rule Validator - Validates trading decisions against rules
 """
 import logging
+import sys
+import os
 from typing import Dict, Any, List, Tuple, Optional
 from decimal import Decimal
 
 from .rule_engine import RuleEngine, Rule, RuleLevel
 
+# Import database models at module level to avoid dynamic import issues
+# Try different import paths depending on execution context
+get_db = None
+AssetMetadata = None
+Position = None
+
+try:
+    # First try relative import (when running from backend/)
+    from database.connection import get_db
+    from database.models import AssetMetadata, Position
+except ImportError:
+    try:
+        # Fallback for absolute import (when running from project root)
+        from backend.database.connection import get_db
+        from backend.database.models import AssetMetadata, Position
+    except ImportError:
+        # If both fail, log warning
+        pass
+
 logger = logging.getLogger(__name__)
+
+if not get_db:
+    logger.warning("Failed to import database models for rule validation - R1-01 and R2-03 will skip database checks")
 
 
 class RuleViolation:
@@ -217,8 +241,10 @@ class RuleValidator:
         
         # R1-01: Asset Blacklist (enhanced with sector and market cap checks)
         elif rule_id == "R1-01":
-            from backend.database.connection import get_db
-            from backend.database.models import AssetMetadata
+            # Check if database models are available
+            if not get_db or not AssetMetadata:
+                logger.warning("Database models not available for R1-01 validation")
+                return None
             
             blacklist_symbols = params.get("blacklist_symbols", [])
             blacklist_sectors = params.get("blacklist_sectors", [])
@@ -319,8 +345,10 @@ class RuleValidator:
         
         # R2-03: Thematic Sector Affinity (30-50% in preferred sectors)
         elif rule_id == "R2-03":
-            from backend.database.connection import get_db
-            from backend.database.models import AssetMetadata, Position
+            # Check if database models are available
+            if not get_db or not AssetMetadata or not Position:
+                logger.warning("Database models not available for R2-03 validation")
+                return None
             
             preferred_sectors = params.get("preferred_sectors", [])
             preferred_crypto_themes = params.get("preferred_crypto_themes", [])
@@ -392,27 +420,6 @@ class RuleValidator:
                         actual_value=cash_pct,
                         expected_value=f"<= {max_cash_pct}"
                     )
-        
-        # R2-05: Transaction Cost Minimization
-        elif rule_id == "R2-05":
-            # This is evaluated based on order type preference
-            preferred_order_type = params.get("preferred_order_type", "limit")
-            order_type = decision.get("order_type", "market")
-            
-            if order_type.lower() != preferred_order_type.lower():
-                # Soft warning - suggest limit orders when possible
-                return RuleViolation(
-                    rule, severity,
-                    f"Using {order_type} order instead of preferred {preferred_order_type} (may increase slippage)",
-                    actual_value=order_type,
-                    expected_value=preferred_order_type
-                )
-        
-        # R2-06: Risk-Adjusted Return Focus (Sharpe Ratio >= 1.5)
-        elif rule_id == "R2-06":
-            # This is soft rule - warning only, requires historical data
-            # Usually evaluated in batch mode, not per-decision
-            pass
         
         # Add more rule checks as needed...
         
