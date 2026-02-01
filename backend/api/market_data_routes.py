@@ -160,9 +160,15 @@ async def get_crypto_kline(
         # Convert data format
         kline_items = []
         for item in kline_data:
+            datetime_value = item.get('datetime')
+            if hasattr(datetime_value, "isoformat"):
+                datetime_str = datetime_value.isoformat()
+            else:
+                datetime_str = item.get('datetime_str')
+
             kline_items.append(KlineItem(
                 timestamp=item.get('timestamp'),
-                datetime=item.get('datetime').isoformat() if item.get('datetime') else None,
+                datetime=datetime_str,
                 open=item.get('open'),
                 high=item.get('high'),
                 low=item.get('low'),
