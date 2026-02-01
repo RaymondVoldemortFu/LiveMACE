@@ -93,20 +93,25 @@ class AlpacaClient:
             paper=True
         )
         self._limiter = RateLimiter(max_calls=max_rpm, window_seconds=60)
+        self._max_rpm = max_rpm
 
     def _wait(self) -> None:
+        logger.debug("Alpaca rate limiter: max_rpm=%s", self._max_rpm)
         self._limiter.wait_for_slot()
 
     def get_last_price(self, symbol: str) -> Optional[float]:
         try:
             symbol_norm = _ensure_supported_symbol(symbol)
+            logger.info("Alpaca latest trade request: %s", symbol_norm)
             self._wait()
             req = StockLatestTradeRequest(symbol_or_symbols=[symbol_norm])
             resp = self._data_client.get_stock_latest_trade(req)
             trade = resp.get(symbol_norm)
             if not trade:
+                logger.warning("Alpaca latest trade empty: %s", symbol_norm)
                 return None
             price = getattr(trade, "price", None)
+            logger.info("Alpaca latest trade success: %s price=%s", symbol_norm, price)
             return float(price) if price is not None else None
         except Exception as e:
             logger.error(f"Error fetching Alpaca price for {symbol}: {e}")
@@ -134,6 +139,14 @@ class AlpacaClient:
             else:
                 start_dt = _estimate_start_time(end_dt, timeframe, count)
 
+            logger.info(
+                "Alpaca bars request: %s timeframe=%s start=%s end=%s limit=%s",
+                symbol_norm,
+                timeframe,
+                start_dt.isoformat(),
+                end_dt.isoformat(),
+                count,
+            )
             self._wait()
             req = StockBarsRequest(
                 symbol_or_symbols=[symbol_norm],
@@ -143,7 +156,17 @@ class AlpacaClient:
                 limit=count,
             )
             bars = self._data_client.get_stock_bars(req)
-            bar_list = bars.get(symbol_norm, [])
+            if hasattr(bars, "data"):
+                bar_list = bars.data.get(symbol_norm, [])
+            elif isinstance(bars, dict):
+                bar_list = bars.get(symbol_norm, [])
+            else:
+                try:
+                    bar_list = bars[symbol_norm]
+                except Exception:
+                    bar_list = []
+            if not bar_list:
+                logger.warning("Alpaca bars empty: %s timeframe=%s", symbol_norm, timeframe)
 
             result: List[Dict[str, Any]] = []
             for bar in bar_list:
@@ -169,7 +192,7 @@ class AlpacaClient:
                     "percent": float(percent),
                 })
 
-            logger.info(f"Got {len(result)} US stock bars for {symbol_norm}")
+            logger.info("Alpaca bars success: %s count=%s", symbol_norm, len(result))
             return result
         except Exception as e:
             logger.error(f"Error fetching Alpaca klines for {symbol}: {e}")
@@ -178,11 +201,18 @@ class AlpacaClient:
     def get_market_status(self, symbol: str) -> Dict[str, Any]:
         try:
             symbol_norm = _ensure_supported_symbol(symbol)
+            logger.info("Alpaca market status request: %s", symbol_norm)
             self._wait()
             clock = self._trading_client.get_clock()
             is_open = bool(getattr(clock, "is_open", False))
             ts = getattr(clock, "timestamp", now_utc())
             ts = ts if isinstance(ts, datetime) else now_utc()
+            logger.info(
+                "Alpaca market status success: %s is_open=%s timestamp=%s",
+                symbol_norm,
+                is_open,
+                ts.isoformat(),
+            )
             return {
                 "market_status": "OPEN" if is_open else "CLOSED",
                 "is_trading": is_open,
