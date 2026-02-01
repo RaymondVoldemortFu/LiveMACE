@@ -175,7 +175,7 @@ async def get_crypto_kline(
                 close=item.get('close'),
                 volume=item.get('volume'),
                 amount=item.get('amount'),
-                chg=item.get('chg'),
+                chg=item.get('chg') if item.get('chg') is not None else item.get('change'),
                 percent=item.get('percent')
             ))
         

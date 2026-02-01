@@ -13,8 +13,15 @@ from .alpaca_market_data import (
     get_market_status_from_alpaca,
     get_all_supported_symbols,
 )
+from database.connection import SessionLocal
+from database.models import MarketKline
+from services.time_source import now_timestamp
+from repositories.kline_repo import KlineRepository
 
 logger = logging.getLogger(__name__)
+
+KLINE_CACHE_PERIOD = "1m"
+KLINE_CACHE_MAX_STALE_SECONDS = 120
 
 
 def _normalize_market(market: str | None) -> str:
@@ -39,16 +46,102 @@ def _resolve_market(symbol: str, market: str | None) -> str:
     return market_norm
 
 
+def _get_cached_latest_price(symbol: str, market: str) -> float | None:
+    if not symbol:
+        return None
+
+    db = SessionLocal()
+    try:
+        row = (
+            db.query(MarketKline)
+            .filter(
+                MarketKline.symbol == symbol,
+                MarketKline.market == market,
+                MarketKline.period == KLINE_CACHE_PERIOD,
+            )
+            .order_by(MarketKline.timestamp.desc())
+            .first()
+        )
+        if not row:
+            return None
+        if (now_timestamp() - row.timestamp) > KLINE_CACHE_MAX_STALE_SECONDS:
+            return None
+        return float(row.close_price) if row.close_price is not None else None
+    finally:
+        db.close()
+
+
+def _get_cached_klines(symbol: str, market: str, period: str, count: int) -> List[Dict[str, Any]]:
+    if not symbol:
+        return []
+
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(MarketKline)
+            .filter(
+                MarketKline.symbol == symbol,
+                MarketKline.market == market,
+                MarketKline.period == period,
+            )
+            .order_by(MarketKline.timestamp.desc())
+            .limit(count)
+            .all()
+        )
+        if not rows:
+            return []
+
+        rows_sorted = sorted(rows, key=lambda r: r.timestamp)
+        if period == KLINE_CACHE_PERIOD:
+            latest_ts = rows_sorted[-1].timestamp
+            if (now_timestamp() - latest_ts) > KLINE_CACHE_MAX_STALE_SECONDS:
+                return []
+
+        return [
+            {
+                "timestamp": r.timestamp,
+                "datetime_str": r.datetime_str,
+                "open": float(r.open_price) if r.open_price is not None else None,
+                "high": float(r.high_price) if r.high_price is not None else None,
+                "low": float(r.low_price) if r.low_price is not None else None,
+                "close": float(r.close_price) if r.close_price is not None else None,
+                "volume": float(r.volume) if r.volume is not None else None,
+                "amount": float(r.amount) if r.amount is not None else None,
+                "change": float(r.change) if r.change is not None else None,
+                "percent": float(r.percent) if r.percent is not None else None,
+            }
+            for r in rows_sorted
+        ]
+    finally:
+        db.close()
+
+
+def _save_klines(symbol: str, market: str, period: str, klines: List[Dict[str, Any]]) -> None:
+    if not klines:
+        return
+    db = SessionLocal()
+    try:
+        repo = KlineRepository(db)
+        repo.save_kline_data(symbol, market, period, klines)
+    finally:
+        db.close()
+
+
 def get_last_price(symbol: str, market: str = "CRYPTO") -> float:
-    key = f"{symbol}.{market}"
     market_norm = _resolve_market(symbol, market)
+    key = f"{symbol}.{market_norm}"
     
     # Check cache first
     from .price_cache import get_cached_price, cache_price
-    cached_price = get_cached_price(symbol, market)
+    cached_price = get_cached_price(symbol, market_norm)
     if cached_price is not None:
         logger.debug(f"Using cached price for {key}: {cached_price}")
         return cached_price
+
+    cached_db_price = _get_cached_latest_price(symbol, market_norm)
+    if cached_db_price is not None:
+        cache_price(symbol, market_norm, cached_db_price)
+        return cached_db_price
     
     logger.info(f"Getting real-time price for {key} from API...")
 
@@ -62,7 +155,7 @@ def get_last_price(symbol: str, market: str = "CRYPTO") -> float:
         if price and price > 0:
             logger.info(f"Got real-time price for {key} from {source}: {price}")
             # Cache the price
-            cache_price(symbol, market, price)
+            cache_price(symbol, market_norm, price)
             return price
         raise Exception(f"{source} returned invalid price: {price}")
     except Exception as hl_err:
@@ -71,10 +164,15 @@ def get_last_price(symbol: str, market: str = "CRYPTO") -> float:
 
 
 def get_kline_data(symbol: str, market: str = "CRYPTO", period: str = "1d", count: int = 100, start_time: Any = None, end_time: Any = None) -> List[Dict[str, Any]]:
-    key = f"{symbol}.{market}"
     market_norm = _resolve_market(symbol, market)
+    key = f"{symbol}.{market_norm}"
 
     try:
+        if start_time is None and end_time is None:
+            cached = _get_cached_klines(symbol, market_norm, period, count)
+            if cached:
+                return cached
+
         if market_norm == "US":
             source = "Alpaca"
             data = get_kline_data_from_alpaca(symbol, period, count, start_time, end_time)
@@ -83,6 +181,7 @@ def get_kline_data(symbol: str, market: str = "CRYPTO", period: str = "1d", coun
             data = get_kline_data_from_hyperliquid(symbol, period, count, start_time, end_time)
         if data is not None:
             logger.info(f"Got K-line data for {key} from {source}, total {len(data)} items")
+            _save_klines(symbol, market_norm, period, data)
             return data
         raise Exception(f"{source} returned empty K-line data")
     except Exception as hl_err:
@@ -91,8 +190,8 @@ def get_kline_data(symbol: str, market: str = "CRYPTO", period: str = "1d", coun
 
 
 def get_market_status(symbol: str, market: str = "CRYPTO") -> Dict[str, Any]:
-    key = f"{symbol}.{market}"
     market_norm = _resolve_market(symbol, market)
+    key = f"{symbol}.{market_norm}"
 
     try:
         if market_norm == "US":

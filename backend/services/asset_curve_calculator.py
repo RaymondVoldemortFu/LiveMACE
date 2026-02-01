@@ -9,7 +9,7 @@ from typing import Dict, List, Tuple, Optional
 from datetime import datetime, timezone
 import logging
 
-from database.models import Trade, Account, CryptoKline
+from database.models import Trade, Account
 from services.market_data import get_kline_data
 from services.time_source import now_utc
 

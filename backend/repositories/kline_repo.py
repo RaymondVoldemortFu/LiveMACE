@@ -6,7 +6,7 @@ Provides K-line data database operations
 from sqlalchemy.orm import Session
 from sqlalchemy import and_
 from typing import List, Optional
-from database.models import cryptoKline
+from database.models import MarketKline
 from database.connection import get_db
 
 
@@ -36,12 +36,12 @@ class KlineRepository:
                 continue
                 
             # Check if record with same timestamp already exists
-            existing = self.db.query(cryptoKline).filter(
+            existing = self.db.query(MarketKline).filter(
                 and_(
-                    cryptoKline.symbol == symbol,
-                    cryptoKline.market == market,
-                    cryptoKline.period == period,
-                    cryptoKline.timestamp == timestamp
+                    MarketKline.symbol == symbol,
+                    MarketKline.market == market,
+                    MarketKline.period == period,
+                    MarketKline.timestamp == timestamp
                 )
             ).first()
             
@@ -50,14 +50,14 @@ class KlineRepository:
                 'market': market,
                 'period': period,
                 'timestamp': timestamp,
-                'datetime_str': item.get('datetime', ''),
+                'datetime_str': item.get('datetime_str') or item.get('datetime', ''),
                 'open_price': item.get('open'),
                 'high_price': item.get('high'),
                 'low_price': item.get('low'),
                 'close_price': item.get('close'),
                 'volume': item.get('volume'),
                 'amount': item.get('amount'),
-                'change': item.get('chg'),
+                'change': item.get('change') if item.get('change') is not None else item.get('chg'),
                 'percent': item.get('percent')
             }
             
@@ -69,7 +69,7 @@ class KlineRepository:
                 updated_count += 1
             else:
                 # Insert new record
-                kline_record = cryptoKline(**kline_data_dict)
+                kline_record = MarketKline(**kline_data_dict)
                 self.db.add(kline_record)
                 inserted_count += 1
         
@@ -82,7 +82,7 @@ class KlineRepository:
             'total': inserted_count + updated_count
         }
 
-    def get_kline_data(self, symbol: str, market: str, period: str, limit: int = 100) -> List[cryptoKline]:
+    def get_kline_data(self, symbol: str, market: str, period: str, limit: int = 100) -> List[MarketKline]:
         """
         Get K-line data
 
@@ -95,13 +95,13 @@ class KlineRepository:
         Returns:
             K-line data list
         """
-        return self.db.query(cryptoKline).filter(
+        return self.db.query(MarketKline).filter(
             and_(
-                cryptoKline.symbol == symbol,
-                cryptoKline.market == market,
-                cryptoKline.period == period
+                MarketKline.symbol == symbol,
+                MarketKline.market == market,
+                MarketKline.period == period
             )
-        ).order_by(cryptoKline.timestamp.desc()).limit(limit).all()
+        ).order_by(MarketKline.timestamp.desc()).limit(limit).all()
 
     def delete_old_kline_data(self, symbol: str, market: str, period: str, keep_days: int = 30):
         """
@@ -114,14 +114,14 @@ class KlineRepository:
             keep_days: Days to keep
         """
         import time
-        cutoff_timestamp = int((time.time() - keep_days * 24 * 3600) * 1000)
+        cutoff_timestamp = int(time.time() - keep_days * 24 * 3600)
         
-        self.db.query(cryptoKline).filter(
+        self.db.query(MarketKline).filter(
             and_(
-                cryptoKline.symbol == symbol,
-                cryptoKline.market == market,
-                cryptoKline.period == period,
-                cryptoKline.timestamp < cutoff_timestamp
+                MarketKline.symbol == symbol,
+                MarketKline.market == market,
+                MarketKline.period == period,
+                MarketKline.timestamp < cutoff_timestamp
             )
         ).delete()
         

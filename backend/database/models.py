@@ -201,8 +201,8 @@ class CryptoPrice(Base):
     __table_args__ = (UniqueConstraint('symbol', 'market', 'price_date'),)
 
 
-class CryptoKline(Base):
-    __tablename__ = "crypto_klines"
+class MarketKline(Base):
+    __tablename__ = "market_klines"
 
     id = Column(Integer, primary_key=True, index=True)
     symbol = Column(String(20), nullable=False, index=True)
