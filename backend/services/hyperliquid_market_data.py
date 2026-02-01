@@ -5,7 +5,7 @@ import ccxt
 import logging
 from typing import Dict, List, Any, Optional
 from datetime import datetime, timezone
-import time
+from services.time_source import delta_t_minutes, now_timestamp_ms
 
 logger = logging.getLogger(__name__)
 
@@ -35,10 +35,28 @@ class HyperliquidClient:
             # Ensure symbol is in CCXT format (e.g., 'BTC/USD')
             formatted_symbol = self._format_symbol(symbol)
             
+            if delta_t_minutes() <= 0:
+                ticker = self.exchange.fetch_ticker(formatted_symbol)
+                price = ticker['last']
+                logger.info(f"Got price for {formatted_symbol}: {price}")
+                return float(price) if price else None
+
+            virtual_now_ms = now_timestamp_ms()
+            klines = self.get_kline_data(
+                symbol,
+                period="1m",
+                count=10,
+                start_time=virtual_now_ms - (10 * 60 * 1000),
+                end_time=virtual_now_ms,
+            )
+            if klines:
+                price = klines[-1].get("close")
+                logger.info(f"Got delayed price for {formatted_symbol}: {price}")
+                return float(price) if price else None
+
+            logger.warning(f"No delayed kline data for {formatted_symbol}, falling back to real-time ticker")
             ticker = self.exchange.fetch_ticker(formatted_symbol)
             price = ticker['last']
-            
-            logger.info(f"Got price for {formatted_symbol}: {price}")
             return float(price) if price else None
             
         except Exception as e:
@@ -67,7 +85,26 @@ class HyperliquidClient:
             
             # Fetch OHLCV data
             # If start_time is provided, use it as 'since'
-            since = start_time if start_time else None
+            if delta_t_minutes() > 0 and end_time is None:
+                end_time = now_timestamp_ms()
+
+            timeframe_ms_map = {
+                '1m': 60 * 1000,
+                '5m': 5 * 60 * 1000,
+                '15m': 15 * 60 * 1000,
+                '30m': 30 * 60 * 1000,
+                '1h': 60 * 60 * 1000,
+                '4h': 4 * 60 * 60 * 1000,
+                '1d': 24 * 60 * 60 * 1000,
+            }
+
+            if start_time:
+                since = start_time
+            elif end_time:
+                timeframe_ms = timeframe_ms_map.get(timeframe, 24 * 60 * 60 * 1000)
+                since = max(0, end_time - (count * timeframe_ms))
+            else:
+                since = None
             
             ohlcv = self.exchange.fetch_ohlcv(formatted_symbol, timeframe, since=since, limit=count)
             

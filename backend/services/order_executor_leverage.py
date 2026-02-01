@@ -8,6 +8,7 @@ from database.models import (
     CRYPTO_MIN_ORDER_QUANTITY, CRYPTO_LOT_SIZE, CRYPTO_MAINTENANCE_MARGIN_RATIO
 )
 from .market_data import get_last_price
+from services.time_source import now_utc
 
 
 def _calc_crypto_fee(notional: Decimal, leverage: int = 1) -> Decimal:
@@ -20,7 +21,7 @@ def _calculate_position_interest(position: Position) -> Decimal:
     if not position.last_interest_time or position.leverage <= 1:
         return Decimal(0)
     
-    now = datetime.datetime.now(datetime.timezone.utc)
+    now = now_utc()
     # Handle both timezone-aware and naive datetimes
     last_time = position.last_interest_time
     if last_time.tzinfo is None:
@@ -87,6 +88,7 @@ def place_and_execute_crypto(
         leverage=leverage,
         filled_quantity=0,
         status="PENDING",
+        order_time=now_utc(),
     )
     db.add(order)
     db.flush()
@@ -172,7 +174,7 @@ def place_and_execute_crypto(
             pos.side = side.upper()
         
         # Update interest timestamp
-        pos.last_interest_time = datetime.datetime.now(datetime.timezone.utc)
+        pos.last_interest_time = now_utc()
     
     elif side.upper() in ("BUY", "SELL"):
         # Closing a position (partial or full)
@@ -225,7 +227,7 @@ def place_and_execute_crypto(
                 pos.leverage = 1
                 pos.last_interest_time = None
             else:
-                pos.last_interest_time = datetime.datetime.now(datetime.timezone.utc)
+                pos.last_interest_time = now_utc()
         else:
             # Closing spot position (simple sell)
             if side.upper() != "SELL":
@@ -257,6 +259,7 @@ def place_and_execute_crypto(
         commission=float(taker_fee),
         taker_fee=float(taker_fee),
         interest_charged=float(interest_charged),
+        trade_time=now_utc(),
     )
     db.add(trade)
     

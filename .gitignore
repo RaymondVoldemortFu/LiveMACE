@@ -309,3 +309,5 @@ data.db
 backend/tests/
 .vscode/
 backend/.DS_Store
+
+toolenv

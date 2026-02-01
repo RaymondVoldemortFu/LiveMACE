@@ -11,6 +11,7 @@ import logging
 
 from database.models import Order, Position, Trade, Account, User, CRYPTO_MIN_COMMISSION, CRYPTO_COMMISSION_RATE, CRYPTO_MIN_ORDER_QUANTITY, CRYPTO_LOT_SIZE
 from .market_data import get_last_price
+from services.time_source import now_utc
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +112,7 @@ def create_order(db: Session, account: Account, symbol: str, name: str,
         leverage=leverage,
         filled_quantity=0,
         status="PENDING",
+        order_time=now_utc(),
     )
 
     db.add(order)
@@ -322,6 +324,7 @@ def _execute_order(db: Session, order: Order, account: Account, execution_price:
             price=float(execution_price),
             quantity=float(quantity),
             commission=float(commission),
+            trade_time=now_utc(),
         )
         db.add(trade)
 
