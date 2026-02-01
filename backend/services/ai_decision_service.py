@@ -430,9 +430,19 @@ def _save_rule_evaluation(db: Session, account_id: int, decision: Dict, trace_id
         logger.info(f"R2 scores: {list(r2_scores.keys()) if r2_scores else 'None'}")
         
         # Extract scores
-        s_rule_sat = compliance_audit.get("s_rule_sat")
+        s_rule_sat_original = compliance_audit.get("s_rule_sat")
         s_audit = llm_audit.get("final_normalized_score")
-        logger.info(f"Scores: s_rule_sat={s_rule_sat}, s_audit={s_audit}")
+        
+        # If R0 or R1 violations exist, set s_rule_sat to 0 (hard constraint violation)
+        # LLM audit score is still calculated and used
+        has_hard_violations = len(r0_violations) > 0 or len(r1_violations) > 0
+        if has_hard_violations:
+            s_rule_sat = 0.0
+            logger.info(f"Hard constraint violations detected (R0={len(r0_violations)}, R1={len(r1_violations)}), setting s_rule_sat to 0")
+        else:
+            s_rule_sat = s_rule_sat_original
+        
+        logger.info(f"Scores: s_rule_sat_original={s_rule_sat_original}, s_rule_sat={s_rule_sat}, s_audit={s_audit}")
         
         # Extract LLM audit details
         coverage_data = llm_audit.get("coverage", {})
@@ -444,17 +454,19 @@ def _save_rule_evaluation(db: Session, account_id: int, decision: Dict, trace_id
         
         logger.info(f"LLM audit details: score={llm_audit_score}, coverage={llm_audit_coverage}, conflict={llm_audit_conflict}")
         
-        # Calculate final score (weighted combination)
+        # Calculate final score
+        # When hard violations exist: final_score = (0 + s_audit) / 2 = s_audit / 2
+        # When no hard violations: final_score = (s_rule_sat + s_audit) / 2
         final_score = None
         if s_rule_sat is not None and s_audit is not None:
-            # Weight: 60% rule satisfaction, 40% LLM audit
-            final_score = 0.6 * s_rule_sat + 0.4 * s_audit
+            # Equal weight: 50% rule satisfaction, 50% LLM audit
+            final_score = (s_rule_sat + s_audit) / 2.0
         elif s_rule_sat is not None:
             final_score = s_rule_sat
         elif s_audit is not None:
             final_score = s_audit
         
-        logger.info(f"Final score calculation: {final_score}")
+        logger.info(f"Final score calculation: {final_score} (has_hard_violations={has_hard_violations})")
         
         # Create evaluation record
         eval_result = RuleEvaluationResult(
