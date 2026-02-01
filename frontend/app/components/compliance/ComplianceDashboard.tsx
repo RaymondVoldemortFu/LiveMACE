@@ -19,8 +19,10 @@ import {
 import {
   getComplianceStats,
   getRuleSummary,
+  getComplianceHistory,
   type ComplianceStats,
   type RuleSummary,
+  type ComplianceHistory,
 } from '@/lib/compliance-api'
 import { type TradingAccount } from '@/lib/api'
 import RuleSummaryCard from './RuleSummaryCard'
@@ -43,6 +45,7 @@ interface ComplianceDashboardProps {
 interface AccountComplianceData {
   account: TradingAccount
   stats: ComplianceStats | null
+  history: ComplianceHistory | null
   loading: boolean
   error: string | null
 }
@@ -66,10 +69,14 @@ export default function ComplianceDashboard({ accounts }: ComplianceDashboardPro
     
     const dataPromises = ruleAwareAccounts.map(async (account) => {
       try {
-        const stats = await getComplianceStats(account.id)
+        const [stats, history] = await Promise.all([
+          getComplianceStats(account.id),
+          getComplianceHistory(account.id, 50)
+        ])
         return {
           account,
           stats,
+          history,
           loading: false,
           error: null
         }
@@ -78,6 +85,7 @@ export default function ComplianceDashboard({ accounts }: ComplianceDashboardPro
         return {
           account,
           stats: null,
+          history: null,
           loading: false,
           error: err instanceof Error ? err.message : 'Failed to load'
         }
@@ -128,36 +136,102 @@ export default function ComplianceDashboard({ accounts }: ComplianceDashboardPro
     )
   }
 
-  // Prepare chart data for compliance score comparison
-  const chartData = {
-    labels: accountsData.map(d => d.account.name),
-    datasets: [
-      {
-        label: 'Rule Satisfaction (S_rule_sat)',
-        data: accountsData.map(d => d.stats?.all_time?.avg_s_rule_sat || 0),
-        borderColor: 'rgb(59, 130, 246)', // blue
-        backgroundColor: 'rgba(59, 130, 246, 0.1)',
-        tension: 0.4,
-      },
-      {
-        label: 'Audit Score (S_audit)',
-        data: accountsData.map(d => d.stats?.all_time?.avg_s_audit || 0),
-        borderColor: 'rgb(168, 85, 247)', // purple
-        backgroundColor: 'rgba(168, 85, 247, 0.1)',
-        tension: 0.4,
-      },
-      {
-        label: 'Final Score (Combined)',
-        data: accountsData.map(d => d.stats?.all_time?.avg_final_score || 0),
-        borderColor: 'rgb(34, 197, 94)', // green
-        backgroundColor: 'rgba(34, 197, 94, 0.1)',
-        tension: 0.4,
-        borderWidth: 3,
-      },
-    ],
+  // Generate colors for each agent
+  const agentColors = [
+    { border: 'rgb(59, 130, 246)', bg: 'rgba(59, 130, 246, 0.1)' },   // blue
+    { border: 'rgb(168, 85, 247)', bg: 'rgba(168, 85, 247, 0.1)' },   // purple
+    { border: 'rgb(34, 197, 94)', bg: 'rgba(34, 197, 94, 0.1)' },     // green
+    { border: 'rgb(234, 179, 8)', bg: 'rgba(234, 179, 8, 0.1)' },     // yellow
+    { border: 'rgb(239, 68, 68)', bg: 'rgba(239, 68, 68, 0.1)' },     // red
+    { border: 'rgb(20, 184, 166)', bg: 'rgba(20, 184, 166, 0.1)' },   // teal
+  ]
+
+  // Helper function to normalize timestamp to nearest 5-minute interval
+  const normalizeToFiveMinutes = (timestamp: string): string => {
+    const date = new Date(timestamp)
+    const minutes = date.getMinutes()
+    const normalizedMinutes = Math.round(minutes / 5) * 5
+    date.setMinutes(normalizedMinutes, 0, 0) // Set to normalized minutes, clear seconds and milliseconds
+    return date.toISOString()
   }
 
-  const chartOptions: ChartOptions<'line'> = {
+  // Prepare time series data for each metric
+  const prepareTimeSeriesData = (metric: 's_rule_sat' | 's_audit' | 'final_score') => {
+    // Collect and normalize timestamps, grouping records by agent and normalized timestamp
+    const normalizedDataByAgent = new Map<number, Map<string, number[]>>()
+    
+    accountsData.forEach(data => {
+      const agentId = data.account.id
+      const normalizedRecords = new Map<string, number[]>()
+      
+      if (data.history?.records) {
+        data.history.records.forEach(record => {
+          const normalizedTime = normalizeToFiveMinutes(record.timestamp)
+          const value = metric === 's_rule_sat' ? record.s_rule_sat :
+                       metric === 's_audit' ? record.s_audit :
+                       record.final_score
+          
+          if (value !== null && value !== undefined) {
+            if (!normalizedRecords.has(normalizedTime)) {
+              normalizedRecords.set(normalizedTime, [])
+            }
+            normalizedRecords.get(normalizedTime)!.push(value)
+          }
+        })
+      }
+      
+      normalizedDataByAgent.set(agentId, normalizedRecords)
+    })
+    
+    // Collect all unique normalized timestamps across all agents
+    const allNormalizedTimestamps = new Set<string>()
+    normalizedDataByAgent.forEach(records => {
+      records.forEach((_, timestamp) => allNormalizedTimestamps.add(timestamp))
+    })
+    
+    const sortedTimestamps = Array.from(allNormalizedTimestamps).sort()
+    
+    // Create datasets for each agent
+    const datasets = accountsData.map((data, index) => {
+      const color = agentColors[index % agentColors.length]
+      const agentRecords = normalizedDataByAgent.get(data.account.id)
+      
+      // For each timestamp, take the average if multiple values exist, or null if no data
+      const dataPoints = sortedTimestamps.map(ts => {
+        const values = agentRecords?.get(ts)
+        if (!values || values.length === 0) return null
+        // Take the average of all values in the same 5-minute window
+        const avg = values.reduce((sum, v) => sum + v, 0) / values.length
+        return avg
+      })
+      
+      return {
+        label: data.account.name,
+        data: dataPoints,
+        borderColor: color.border,
+        backgroundColor: color.bg,
+        tension: 0.4,
+        spanGaps: true,
+        pointRadius: 3,
+        pointHoverRadius: 5,
+      }
+    })
+    
+    return {
+      labels: sortedTimestamps.map(ts => {
+        const date = new Date(ts)
+        return date.toLocaleString('en-US', { 
+          month: 'short', 
+          day: 'numeric', 
+          hour: '2-digit', 
+          minute: '2-digit' 
+        })
+      }),
+      datasets
+    }
+  }
+
+  const createChartOptions = (title: string, yAxisLabel: string): ChartOptions<'line'> => ({
     responsive: true,
     maintainAspectRatio: false,
     plugins: {
@@ -170,7 +244,7 @@ export default function ComplianceDashboard({ accounts }: ComplianceDashboardPro
       },
       title: {
         display: true,
-        text: 'Agent Compliance Score Comparison',
+        text: title,
         font: {
           size: 16,
           weight: 'bold',
@@ -187,6 +261,8 @@ export default function ComplianceDashboard({ accounts }: ComplianceDashboardPro
             }
             if (context.parsed.y !== null) {
               label += context.parsed.y.toFixed(3);
+            } else {
+              label += 'N/A';
             }
             return label;
           }
@@ -204,13 +280,17 @@ export default function ComplianceDashboard({ accounts }: ComplianceDashboardPro
         },
         title: {
           display: true,
-          text: 'Score',
+          text: yAxisLabel,
         },
       },
       x: {
         title: {
           display: true,
-          text: 'Agent',
+          text: 'Time',
+        },
+        ticks: {
+          maxRotation: 45,
+          minRotation: 45,
         },
       },
     },
@@ -219,7 +299,15 @@ export default function ComplianceDashboard({ accounts }: ComplianceDashboardPro
       axis: 'x',
       intersect: false
     },
-  }
+  })
+
+  const ruleSatData = prepareTimeSeriesData('s_rule_sat')
+  const auditScoreData = prepareTimeSeriesData('s_audit')
+  const finalScoreData = prepareTimeSeriesData('final_score')
+
+  const ruleSatOptions = createChartOptions('Rule Satisfaction Score Over Time', 'Rule Satisfaction')
+  const auditScoreOptions = createChartOptions('LLM Audit Score Over Time', 'Audit Score')
+  const finalScoreOptions = createChartOptions('Final Combined Score Over Time', 'Final Score')
 
   return (
     <div className="space-y-6">
@@ -245,10 +333,27 @@ export default function ComplianceDashboard({ accounts }: ComplianceDashboardPro
       {/* Rule Summary */}
       {ruleSummary && <RuleSummaryCard summary={ruleSummary} />}
 
-      {/* Compliance Score Chart */}
-      <div className="bg-card border rounded-lg p-6">
-        <div className="h-80">
-          <Line data={chartData} options={chartOptions} />
+      {/* Three Compliance Score Charts */}
+      <div className="grid grid-cols-1 gap-6">
+        {/* Rule Satisfaction Chart */}
+        <div className="bg-card border rounded-lg p-6">
+          <div className="h-80">
+            <Line data={ruleSatData} options={ruleSatOptions} />
+          </div>
+        </div>
+
+        {/* Audit Score Chart */}
+        <div className="bg-card border rounded-lg p-6">
+          <div className="h-80">
+            <Line data={auditScoreData} options={auditScoreOptions} />
+          </div>
+        </div>
+
+        {/* Final Score Chart */}
+        <div className="bg-card border rounded-lg p-6">
+          <div className="h-80">
+            <Line data={finalScoreData} options={finalScoreOptions} />
+          </div>
         </div>
       </div>
 
@@ -256,18 +361,21 @@ export default function ComplianceDashboard({ accounts }: ComplianceDashboardPro
       <div className="bg-card border rounded-lg p-6">
         <h3 className="text-lg font-semibold flex items-center gap-2 mb-4">
           <BarChart3 className="w-5 h-5" />
-          Detailed Compliance Metrics
+          Agent Compliance Metrics Summary
         </h3>
         <div className="overflow-x-auto">
           <table className="w-full">
             <thead>
               <tr className="border-b">
-                <th className="text-left py-3 px-4 font-medium">Account</th>
-                <th className="text-right py-3 px-4 font-medium">Evaluations</th>
-                <th className="text-right py-3 px-4 font-medium">Pass Rate</th>
-                <th className="text-right py-3 px-4 font-medium">Rule Sat</th>
-                <th className="text-right py-3 px-4 font-medium">Audit Score</th>
-                <th className="text-right py-3 px-4 font-medium">Final Score</th>
+                <th className="text-left py-3 px-4 font-medium">Agent</th>
+                <th className="text-right py-3 px-4 font-medium">Total<br/>Evaluations</th>
+                <th className="text-right py-3 px-4 font-medium">Pass<br/>Rate</th>
+                <th className="text-right py-3 px-4 font-medium">Avg Rule<br/>Sat</th>
+                <th className="text-right py-3 px-4 font-medium">Avg Audit<br/>Score</th>
+                <th className="text-right py-3 px-4 font-medium">Avg Final<br/>Score</th>
+                <th className="text-right py-3 px-4 font-medium">Latest Rule<br/>Sat</th>
+                <th className="text-right py-3 px-4 font-medium">Latest Audit<br/>Score</th>
+                <th className="text-right py-3 px-4 font-medium">Latest Final<br/>Score</th>
                 <th className="text-center py-3 px-4 font-medium">Status</th>
               </tr>
             </thead>
@@ -275,7 +383,13 @@ export default function ComplianceDashboard({ accounts }: ComplianceDashboardPro
               {accountsData.map((data) => {
                 const stats = data.stats
                 const allTime = stats?.all_time
-                const finalScore = allTime?.avg_final_score || 0
+                const avgFinalScore = allTime?.avg_final_score || 0
+                
+                // Get latest scores from history
+                const latestRecord = data.history?.records?.[0]
+                const latestRuleSat = latestRecord?.s_rule_sat
+                const latestAudit = latestRecord?.s_audit
+                const latestFinal = latestRecord?.final_score
                 
                 return (
                   <tr key={data.account.id} className="border-b hover:bg-muted/50">
@@ -307,11 +421,32 @@ export default function ComplianceDashboard({ accounts }: ComplianceDashboardPro
                     </td>
                     <td className="py-3 px-4 text-right">
                       <span className={`font-semibold ${
-                        finalScore >= 0.9 ? 'text-green-600' : 
-                        finalScore >= 0.7 ? 'text-yellow-600' : 
+                        avgFinalScore >= 0.9 ? 'text-green-600' : 
+                        avgFinalScore >= 0.7 ? 'text-yellow-600' : 
                         'text-red-600'
                       }`}>
-                        {finalScore.toFixed(3)}
+                        {avgFinalScore.toFixed(3)}
+                      </span>
+                    </td>
+                    <td className="py-3 px-4 text-right">
+                      <span className="text-blue-600 text-sm">
+                        {latestRuleSat !== null && latestRuleSat !== undefined ? latestRuleSat.toFixed(3) : '-'}
+                      </span>
+                    </td>
+                    <td className="py-3 px-4 text-right">
+                      <span className="text-purple-600 text-sm">
+                        {latestAudit !== null && latestAudit !== undefined ? latestAudit.toFixed(3) : '-'}
+                      </span>
+                    </td>
+                    <td className="py-3 px-4 text-right">
+                      <span className={`text-sm font-semibold ${
+                        latestFinal !== null && latestFinal !== undefined 
+                          ? (latestFinal >= 0.9 ? 'text-green-600' : 
+                             latestFinal >= 0.7 ? 'text-yellow-600' : 
+                             'text-red-600')
+                          : ''
+                      }`}>
+                        {latestFinal !== null && latestFinal !== undefined ? latestFinal.toFixed(3) : '-'}
                       </span>
                     </td>
                     <td className="py-3 px-4 text-center">
@@ -330,6 +465,11 @@ export default function ComplianceDashboard({ accounts }: ComplianceDashboardPro
               })}
             </tbody>
           </table>
+        </div>
+        <div className="mt-4 text-xs text-muted-foreground">
+          <p>• <span className="text-blue-600 font-semibold">Rule Sat</span>: Rule satisfaction score (compliance with R0/R1/R2 rules)</p>
+          <p>• <span className="text-purple-600 font-semibold">Audit Score</span>: LLM audit score (reasoning quality and rule awareness)</p>
+          <p>• <span className="text-green-600 font-semibold">Final Score</span>: Combined score (60% Rule Sat + 40% Audit Score)</p>
         </div>
       </div>
     </div>
