@@ -24,7 +24,7 @@ def _calc_commission(notional: Decimal) -> Decimal:
 
 
 def create_order(db: Session, account: Account, symbol: str, name: str,
-                side: str, order_type: str, price: Optional[float], quantity: float, leverage: int = 1) -> Order:
+                side: str, order_type: str, price: Optional[float], quantity: float, leverage: int = 1, market: str = "CRYPTO") -> Order:
     """
     Create limit order
 
@@ -62,7 +62,7 @@ def create_order(db: Session, account: Account, symbol: str, name: str,
     if order_type == "MARKET":
         # Market order: get current price for fund validation
         try:
-            current_market_price = get_last_price(symbol)
+            current_market_price = get_last_price(symbol, market)
         except Exception as err:
             raise ValueError(f"Unable to get market price for market order: {err}")
         check_price = Decimal(str(current_market_price))
@@ -89,7 +89,7 @@ def create_order(db: Session, account: Account, symbol: str, name: str,
         # Sell: check if sufficient positions available
         position = (
             db.query(Position)
-            .filter(Position.account_id == account.id, Position.symbol == symbol, Position.market == "CRYPTO")
+            .filter(Position.account_id == account.id, Position.symbol == symbol, Position.market == market)
             .first()
         )
 
@@ -104,7 +104,7 @@ def create_order(db: Session, account: Account, symbol: str, name: str,
         order_no=uuid.uuid4().hex[:16],
         symbol=symbol,
         name=name,
-        market="CRYPTO",
+        market=market,
         side=side,
         order_type=order_type,
         price=price,

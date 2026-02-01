@@ -53,8 +53,7 @@ def _is_default_api_key(api_key: str) -> bool:
 def _get_portfolio_data(db: Session, account: Account) -> Dict:
     """Get current portfolio positions and values"""
     positions = db.query(Position).filter(
-        Position.account_id == account.id,
-        Position.market == "CRYPTO"
+        Position.account_id == account.id
     ).all()
 
     portfolio = {}
@@ -65,7 +64,8 @@ def _get_portfolio_data(db: Session, account: Account) -> Dict:
                 "avg_cost": float(pos.avg_cost),
                 "current_value": float(pos.quantity) * float(pos.avg_cost),
                 "side": (pos.side or "LONG").upper(),  # Include position direction
-                "leverage": pos.leverage  # Include leverage
+                "leverage": pos.leverage,  # Include leverage
+                "market": pos.market,
             }
 
     return {
