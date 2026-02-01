@@ -204,6 +204,10 @@ def _run_python_helper(service, account_id, content):
     timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
     filename = f"script_{timestamp}.py"
     filepath = f"/workspace/{filename}"
+
+    # Normalize escaped newlines from tool input
+    if "\\n" in content and "\n" not in content:
+        content = content.replace("\\n", "\n").replace("\\t", "\t")
     
     write_res = service.write_file(account_id, filepath, content)
     
