@@ -18,7 +18,7 @@ from alpaca.data.requests import StockLatestTradeRequest, StockBarsRequest
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 from alpaca.trading.client import TradingClient
 
-from services.time_source import now_utc
+from services.time_source import now_utc, delta_t_minutes
 
 dotenv.load_dotenv()
 
@@ -104,6 +104,33 @@ class AlpacaClient:
             symbol_norm = _ensure_supported_symbol(symbol)
             logger.info("Alpaca latest trade request: %s", symbol_norm)
             self._wait()
+            if delta_t_minutes() > 0:
+                end_dt = now_utc()
+                start_dt = end_dt - timedelta(minutes=10)
+                req = StockBarsRequest(
+                    symbol_or_symbols=[symbol_norm],
+                    timeframe=TimeFrame(1, TimeFrameUnit.Minute),
+                    start=start_dt,
+                    end=end_dt,
+                    limit=10,
+                )
+                bars = self._data_client.get_stock_bars(req)
+                if hasattr(bars, "data"):
+                    bar_list = bars.data.get(symbol_norm, [])
+                elif isinstance(bars, dict):
+                    bar_list = bars.get(symbol_norm, [])
+                else:
+                    try:
+                        bar_list = bars[symbol_norm]
+                    except Exception:
+                        bar_list = []
+                if bar_list:
+                    last_bar = bar_list[-1]
+                    price = getattr(last_bar, "close", None)
+                    logger.info("Alpaca delayed price success: %s price=%s", symbol_norm, price)
+                    return float(price) if price is not None else None
+                logger.warning("Alpaca delayed price empty, fallback to latest trade: %s", symbol_norm)
+
             req = StockLatestTradeRequest(symbol_or_symbols=[symbol_norm])
             resp = self._data_client.get_stock_latest_trade(req)
             trade = resp.get(symbol_norm)
