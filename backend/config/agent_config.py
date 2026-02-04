@@ -20,6 +20,9 @@ class AgentConfig:
     MEMORY_ENABLED = True
     # Lightweight embedding model (384 dimensions)
     MEMORY_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+    # Memory backend: "local" (SQLite) or "chroma" (vector database)
+    MEMORY_BACKEND = "chroma"  # Options: "local", "chroma"
+    CHROMA_PERSIST_DIR = "./chroma_db"  # Directory for Chroma persistence
 
 
 class LLMConfig:

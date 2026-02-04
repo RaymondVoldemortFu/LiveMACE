@@ -225,14 +225,35 @@ class LocalMemory(MemoryInterface):
 
 def get_memory_service() -> Optional[MemoryInterface]:
     """
-    Get the memory service instance.
-    Returns LocalCPUMemory if enabled, None otherwise.
+    Get the memory service instance based on configuration.
+    Returns ChromaMemory or LocalMemory if enabled, None otherwise.
     """
-    if AgentConfig.MEMORY_ENABLED:
-        if not SENTENCE_TRANSFORMERS_AVAILABLE:
-            logger.warning("AgentConfig.MEMORY_ENABLED is True, but sentence-transformers is not installed.")
-            logger.warning("Install with: pip install sentence-transformers")
-            return None
+    if not AgentConfig.MEMORY_ENABLED:
+        return None
+
+    if not SENTENCE_TRANSFORMERS_AVAILABLE:
+        logger.warning("AgentConfig.MEMORY_ENABLED is True, but sentence-transformers is not installed.")
+        logger.warning("Install with: pip install sentence-transformers")
+        return None
+
+    # Choose backend based on configuration
+    backend = getattr(AgentConfig, 'MEMORY_BACKEND', 'local')
+
+    if backend == 'chroma':
+        try:
+            from .memory_chroma import ChromaMemory, CHROMA_AVAILABLE
+            if CHROMA_AVAILABLE:
+                persist_dir = getattr(AgentConfig, 'CHROMA_PERSIST_DIR', './chroma_db')
+                logger.info(f"Using Chroma memory backend (persist_dir: {persist_dir})")
+                return ChromaMemory(persist_directory=persist_dir)
+            else:
+                logger.warning("Chroma backend selected but chromadb not installed. Falling back to LocalMemory.")
+                logger.warning("Install with: pip install chromadb")
+                return LocalMemory()
+        except Exception as e:
+            logger.error(f"Failed to initialize Chroma backend: {e}. Falling back to LocalMemory.")
+            return LocalMemory()
+    else:
+        logger.info("Using LocalMemory backend (SQLite)")
         return LocalMemory()
-    return None
 
