@@ -143,6 +143,7 @@ Additional decision rules:
 - leverage:
   - An integer in the range [1, 10].
   - It should be consistent with account risk, volatility, and news context.
+  - For US stocks, you MUST set leverage to 1 when opening a new position.
 
 - US market hours:
   - You MUST call get_market_snapshot for US stocks.
