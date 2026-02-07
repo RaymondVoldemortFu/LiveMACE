@@ -9,8 +9,9 @@ from typing import Dict, List, Tuple, Optional
 from datetime import datetime, timezone
 import logging
 
-from database.models import Trade, Account, CryptoKline
+from database.models import Trade, Account
 from services.market_data import get_kline_data
+from services.time_source import now_utc
 
 
 def get_all_asset_curves_data_new(db: Session, timeframe: str = "1h") -> List[Dict]:
@@ -40,7 +41,7 @@ def get_all_asset_curves_data_new(db: Session, timeframe: str = "1h") -> List[Di
         
         if not unique_symbols:
             # No trades yet, return initial capital for all accounts at current time
-            now = datetime.now()
+            now = now_utc()
             return [{
                 "timestamp": int(now.timestamp()),
                 "datetime_str": now.isoformat(),
@@ -70,7 +71,7 @@ def get_all_asset_curves_data_new(db: Session, timeframe: str = "1h") -> List[Di
         
         if not symbol_klines:
             # Fallback to current time if no market data available
-            now = datetime.now()
+            now = now_utc()
             return [{
                 "timestamp": int(now.timestamp()),
                 "datetime_str": now.isoformat(),
@@ -307,7 +308,7 @@ def get_account_asset_curve(db: Session, account_id: int, timeframe: str = "1h")
         
         if not unique_symbols:
             # No trades yet, return initial capital
-            now = datetime.now()
+            now = now_utc()
             return [{
                 "timestamp": int(now.timestamp()),
                 "datetime_str": now.isoformat(),
@@ -334,7 +335,7 @@ def get_account_asset_curve(db: Session, account_id: int, timeframe: str = "1h")
         
         if not symbol_klines:
             # Fallback to current time
-            now = datetime.now()
+            now = now_utc()
             return [{
                 "timestamp": int(now.timestamp()),
                 "datetime_str": now.isoformat(),

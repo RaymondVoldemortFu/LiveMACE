@@ -9,6 +9,7 @@ from pydantic import BaseModel
 import logging
 
 from services.market_data import get_last_price, get_kline_data, get_market_status
+from services.time_source import now_timestamp_ms
 
 logger = logging.getLogger(__name__)
 
@@ -70,12 +71,11 @@ async def get_crypto_price(symbol: str, market: str = "US"):
     try:
         price = get_last_price(symbol, market)
         
-        import time
         return PriceResponse(
             symbol=symbol,
             market=market,
             price=price,
-            timestamp=int(time.time() * 1000)
+            timestamp=now_timestamp_ms()
         )
     except Exception as e:
         logger.error(f"Failed to get crypto price: {e}")
@@ -100,8 +100,7 @@ async def get_multiple_prices(symbols: str, market: str = "hyperliquid"):
             raise HTTPException(status_code=400, detail="Maximum 20 crypto symbols supported")
         
         results = []
-        import time
-        current_timestamp = int(time.time() * 1000)
+        current_timestamp = now_timestamp_ms()
         
         for symbol in symbol_list:
             try:
@@ -161,16 +160,22 @@ async def get_crypto_kline(
         # Convert data format
         kline_items = []
         for item in kline_data:
+            datetime_value = item.get('datetime')
+            if hasattr(datetime_value, "isoformat"):
+                datetime_str = datetime_value.isoformat()
+            else:
+                datetime_str = item.get('datetime_str')
+
             kline_items.append(KlineItem(
                 timestamp=item.get('timestamp'),
-                datetime=item.get('datetime').isoformat() if item.get('datetime') else None,
+                datetime=datetime_str,
                 open=item.get('open'),
                 high=item.get('high'),
                 low=item.get('low'),
                 close=item.get('close'),
                 volume=item.get('volume'),
                 amount=item.get('amount'),
-                chg=item.get('chg'),
+                chg=item.get('chg') if item.get('chg') is not None else item.get('change'),
                 percent=item.get('percent')
             ))
         
@@ -227,10 +232,9 @@ async def market_data_health():
         # Test getting a price to check if service is running normally
         test_price = get_last_price("MSFT", "US")
         
-        import time
         return {
             "status": "healthy",
-            "timestamp": int(time.time() * 1000),
+            "timestamp": now_timestamp_ms(),
             "test_price": {
                 "symbol": "MSFT.US",
                 "price": test_price
@@ -241,7 +245,7 @@ async def market_data_health():
         logger.error(f"Market data service health check failed: {e}")
         return {
             "status": "unhealthy",
-            "timestamp": int(time.time() * 1000),
+            "timestamp": now_timestamp_ms(),
             "error": str(e),
             "message": "Market data service abnormal"
         }

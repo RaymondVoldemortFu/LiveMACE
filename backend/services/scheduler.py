@@ -503,8 +503,15 @@ def remove_user_snapshot_job(user_id: int):
 
 def setup_market_tasks():
     """Set up crypto market-related scheduled tasks"""
-    # Crypto markets run 24/7, no specific market open/close times needed
-    logger.info("Crypto markets run 24/7 - no market hours tasks needed")
+    from services.market_kline_service import refresh_market_klines, KLINE_REFRESH_INTERVAL_SECONDS
+
+    # Prefetch and persist market kline data for cache usage
+    task_scheduler.add_interval_task(
+        task_func=refresh_market_klines,
+        interval_seconds=KLINE_REFRESH_INTERVAL_SECONDS,
+        task_id="market_kline_refresh"
+    )
+    logger.info(f"Market kline refresh scheduled every {KLINE_REFRESH_INTERVAL_SECONDS}s")
 
 
 def _ensure_market_data_ready() -> None:
@@ -512,8 +519,11 @@ def _ensure_market_data_ready() -> None:
     try:
         from services.trading_commands import AI_TRADING_SYMBOLS
         from services.market_data import get_last_price
+        from services.market_kline_service import ensure_latest_kline
 
         missing_symbols: List[str] = []
+
+        ensure_latest_kline([(symbol, "CRYPTO") for symbol in AI_TRADING_SYMBOLS])
 
         for symbol in AI_TRADING_SYMBOLS:
             try:

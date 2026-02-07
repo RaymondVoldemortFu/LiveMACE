@@ -1,7 +1,7 @@
 import re
 import json
 import logging
-from datetime import datetime, timezone, timedelta
+from datetime import timezone, timedelta
 from typing import Dict, Any, List, Callable, Optional
 from .llm_client import LLMClient
 from .tools import ToolRegistry
@@ -9,6 +9,7 @@ from config.agent_config import AgentConfig
 from services.agent.prompts.system_prompts import TRADE_AGENT_PROMPT
 from .base import BaseAgent
 from .memory import get_memory_service
+from services.time_source import now_in_tz
 
 # Define loggers
 logger = logging.getLogger(__name__)
@@ -42,7 +43,7 @@ class ReActAgent(BaseAgent):
 
         # Get current UTC+8 time
         tz_utc_8 = timezone(timedelta(hours=8))
-        current_time = datetime.now(tz_utc_8).strftime("%Y-%m-%d %H:%M:%S")
+        current_time = now_in_tz(tz_utc_8).strftime("%Y-%m-%d %H:%M:%S")
         
         # Add time context to system prompt
         system_prompt_with_time = f"{SYSTEM_PROMPT}\n\nCurrent Time (UTC+8): {current_time}"
