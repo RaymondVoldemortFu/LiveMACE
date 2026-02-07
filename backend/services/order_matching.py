@@ -93,9 +93,13 @@ def create_order(db: Session, account: Account, symbol: str, name: str,
             .first()
         )
 
-        if not position or Decimal(str(position.available_quantity)) < Decimal(str(quantity)):
-            available_qty = float(position.available_quantity) if position else 0
-            raise ValueError(f"Insufficient positions. Need {quantity} {symbol}, available {available_qty} {symbol}")
+        if market == "US" and (position is None or position.side == "SHORT"):
+            # Allow short selling for US stocks (open/increase short)
+            position = position
+        else:
+            if not position or Decimal(str(position.available_quantity)) < Decimal(str(quantity)):
+                available_qty = float(position.available_quantity) if position else 0
+                raise ValueError(f"Insufficient positions. Need {quantity} {symbol}, available {available_qty} {symbol}")
     
     # Create order
     order = Order(
@@ -230,52 +234,67 @@ def _execute_order(db: Session, order: Order, account: Account, execution_price:
                 logger.warning(f"Insufficient cash when executing order {order.order_no}")
                 return False
                 
-            # Deduct cash
-            account.current_cash = float(Decimal(str(account.current_cash)) - cash_needed)
-            
             # Update position
             position = (
                 db.query(Position)
                 .filter(Position.account_id == account.id, Position.symbol == order.symbol, Position.market == order.market)
                 .first()
             )
-            
-            if not position:
-                position = Position(
-                    version="v1",
-                    account_id=account.id,
-                    symbol=order.symbol,
-                    name=order.name,
-                    market=order.market,
-                    quantity=0,
-                    available_quantity=0,
-                    avg_cost=0,
-                    leverage=1,
-                )
-                db.add(position)
-                db.flush()
-            
-            # Calculate new average cost and leverage (use Decimal for precision)
-            old_qty = Decimal(str(position.quantity))
-            old_cost = Decimal(str(position.avg_cost))
-            old_leverage = Decimal(str(position.leverage))
 
-            new_qty = old_qty + quantity
-            
-            if old_qty == 0:
-                new_avg_cost = execution_price
-                new_leverage = leverage
+            if order.market == "US" and position and position.side == "SHORT":
+                # Cover short position for US stocks
+                if Decimal(str(position.quantity)) < quantity:
+                    logger.warning(f"Insufficient short position when executing order {order.order_no}")
+                    return False
+
+                # Deduct cash for buyback
+                account.current_cash = float(Decimal(str(account.current_cash)) - cash_needed)
+
+                position.quantity = float(Decimal(str(position.quantity)) - quantity)
+                position.available_quantity = float(Decimal(str(position.available_quantity)) - quantity)
+                if position.quantity <= 0:
+                    position.side = None
+                # Keep avg_cost for remaining short position
             else:
-                old_notional = old_cost * old_qty
-                new_notional = notional + old_notional
-                new_avg_cost = new_notional / new_qty
-                # Update leverage (weighted average)
-                new_leverage = (old_notional * old_leverage + notional * leverage) / new_notional
+                # Deduct cash
+                account.current_cash = float(Decimal(str(account.current_cash)) - cash_needed)
+            
+                if not position:
+                    position = Position(
+                        version="v1",
+                        account_id=account.id,
+                        symbol=order.symbol,
+                        name=order.name,
+                        market=order.market,
+                        quantity=0,
+                        available_quantity=0,
+                        avg_cost=0,
+                        leverage=1,
+                    )
+                    db.add(position)
+                    db.flush()
+            
+                # Calculate new average cost and leverage (use Decimal for precision)
+                old_qty = Decimal(str(position.quantity))
+                old_cost = Decimal(str(position.avg_cost))
+                old_leverage = Decimal(str(position.leverage))
 
-            position.quantity = float(new_qty)
-            position.available_quantity = float(Decimal(str(position.available_quantity)) + quantity)
-            position.avg_cost = float(new_avg_cost)
-            position.leverage = int(new_leverage)
+                new_qty = old_qty + quantity
+            
+                if old_qty == 0:
+                    new_avg_cost = execution_price
+                    new_leverage = leverage
+                else:
+                    old_notional = old_cost * old_qty
+                    new_notional = notional + old_notional
+                    new_avg_cost = new_notional / new_qty
+                    # Update leverage (weighted average)
+                    new_leverage = (old_notional * old_leverage + notional * leverage) / new_notional
+
+                position.quantity = float(new_qty)
+                position.available_quantity = float(Decimal(str(position.available_quantity)) + quantity)
+                position.avg_cost = float(new_avg_cost)
+                position.leverage = int(new_leverage)
 
         else:  # SELL
             # Check position
@@ -285,33 +304,69 @@ def _execute_order(db: Session, order: Order, account: Account, execution_price:
                 .first()
             )
 
-            if not position or Decimal(str(position.available_quantity)) < quantity:
-                logger.warning(f"Insufficient position when executing order {order.order_no}")
-                return False
+            if order.market == "US" and (position is None or position.side == "SHORT"):
+                # Open or increase US stock short position
+                if not position:
+                    position = Position(
+                        version="v1",
+                        account_id=account.id,
+                        symbol=order.symbol,
+                        name=order.name,
+                        market=order.market,
+                        quantity=0,
+                        available_quantity=0,
+                        avg_cost=0,
+                        leverage=1,
+                        side="SHORT",
+                    )
+                    db.add(position)
+                    db.flush()
 
-            # Reduce position (use Decimal for precision)
-            position.quantity = float(Decimal(str(position.quantity)) - quantity)
-            position.available_quantity = float(Decimal(str(position.available_quantity)) - quantity)
-            
-            # PnL and cash gain calculation for leveraged positions
-            sell_notional = notional
-            commission = _calc_commission(sell_notional)
-            position_leverage = Decimal(str(position.leverage))
-            
-            if position_leverage > 1:
-                # 杠杆仓位卖出，需要计算 PnL
-                entry_price = Decimal(str(position.avg_cost))
-                pnl = (execution_price - entry_price) * quantity
-                
-                # 释放的保证金
-                initial_margin_part = (entry_price * quantity) / position_leverage
-                
-                cash_gain = initial_margin_part + pnl - commission
+                old_qty = Decimal(str(position.quantity))
+                old_cost = Decimal(str(position.avg_cost))
+                new_qty = old_qty + quantity
+                if old_qty == 0:
+                    new_avg_cost = execution_price
+                else:
+                    old_notional = old_cost * old_qty
+                    new_notional = notional + old_notional
+                    new_avg_cost = new_notional / new_qty
+
+                position.quantity = float(new_qty)
+                position.available_quantity = float(new_qty)
+                position.avg_cost = float(new_avg_cost)
+                position.side = "SHORT"
+
+                cash_gain = notional - commission
+                account.current_cash = float(Decimal(str(account.current_cash)) + cash_gain)
             else:
-                # 现货卖出
-                cash_gain = sell_notional - commission
+                if not position or Decimal(str(position.available_quantity)) < quantity:
+                    logger.warning(f"Insufficient position when executing order {order.order_no}")
+                    return False
 
-            account.current_cash = float(Decimal(str(account.current_cash)) + cash_gain)
+                # Reduce position (use Decimal for precision)
+                position.quantity = float(Decimal(str(position.quantity)) - quantity)
+                position.available_quantity = float(Decimal(str(position.available_quantity)) - quantity)
+                
+                # PnL and cash gain calculation for leveraged positions
+                sell_notional = notional
+                commission = _calc_commission(sell_notional)
+                position_leverage = Decimal(str(position.leverage))
+                
+                if position_leverage > 1:
+                    # 杠杆仓位卖出，需要计算 PnL
+                    entry_price = Decimal(str(position.avg_cost))
+                    pnl = (execution_price - entry_price) * quantity
+                    
+                    # 释放的保证金
+                    initial_margin_part = (entry_price * quantity) / position_leverage
+                    
+                    cash_gain = initial_margin_part + pnl - commission
+                else:
+                    # 现货卖出
+                    cash_gain = sell_notional - commission
+
+                account.current_cash = float(Decimal(str(account.current_cash)) + cash_gain)
         
         # Create trade record
         trade = Trade(

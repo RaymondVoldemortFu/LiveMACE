@@ -185,11 +185,6 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
                     _log_trade_execution(operation, symbol, target_portion, price, leverage, False, f"Invalid symbol: {symbol}")
                     save_ai_decision(db, account, decision, portfolio, executed=False)
                     continue
-                if market == "US" and direction == "short":
-                    logger.warning(f"Shorting not supported for US stocks: {symbol}")
-                    _log_trade_execution(operation, symbol, target_portion, price, leverage, False, "US stocks only support long")
-                    save_ai_decision(db, account, decision, portfolio, executed=False)
-                    continue
                 if market == "US":
                     status = get_market_status(symbol, "US")
                     if not status.get("is_trading", False):
@@ -251,7 +246,7 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
                     
                     # Set side based on direction
                     if market == "US":
-                        side = "BUY"
+                        side = "BUY" if direction == "long" else "SELL"
                     else:
                         side = "LONG" if direction == "long" else "SHORT"
 
@@ -310,7 +305,7 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
                     
                     # Set side to close the position: SELL closes LONG, BUY closes SHORT
                     if market == "US":
-                        side = "SELL"
+                        side = "SELL" if direction == "long" else "BUY"
                     else:
                         side = "SELL" if direction == "long" else "BUY"
                 

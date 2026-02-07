@@ -130,7 +130,7 @@ Additional decision rules:
   - MUST be one of the allowed symbols AND must appear in the provided `prices` list (if a `prices` list is given by the user or system).
 - market:
   - MUST be "CRYPTO" for crypto symbols and "US" for US stock symbols.
-  - US stocks only support "long" (no shorting).
+  - US stocks support both "long" and "short" when the market is open.
 
 - direction:
   - MUST be either "long" or "short".
