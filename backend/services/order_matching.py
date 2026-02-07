@@ -95,7 +95,7 @@ def create_order(db: Session, account: Account, symbol: str, name: str,
 
         if market == "US" and (position is None or position.side == "SHORT"):
             # Allow short selling for US stocks (open/increase short)
-            position = position
+            pass
         else:
             if not position or Decimal(str(position.available_quantity)) < Decimal(str(quantity)):
                 available_qty = float(position.available_quantity) if position else 0
