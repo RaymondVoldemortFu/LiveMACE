@@ -88,6 +88,7 @@ def register_public_api_tools(registry, limit: Optional[int] = None) -> int:
                 description=description,
                 parameters=parameters,
                 func=_make_public_api_func(name),
+                metadata={"tier": "noise"},
             )
         )
         count += 1

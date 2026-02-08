@@ -274,6 +274,7 @@ Do NOT call this repeatedly in the same decision cycle. One call with limit=5 is
                 },
                 "required": []
             },
-            func=lambda limit=5: get_decision_history(account_id, min(limit, 20), db)
+            func=lambda limit=5: get_decision_history(account_id, min(limit, 20), db),
+            metadata={"tier": "required"}
         )
 

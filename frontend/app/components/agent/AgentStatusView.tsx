@@ -207,6 +207,13 @@ export default function AgentStatusView({ accounts }: AgentStatusViewProps) {
                         </div>
                     )}
 
+                    {step.tool_output && typeof step.tool_output === 'object' && Array.isArray((step.tool_output as any).selected_tools) && (
+                        <div className="mt-2 bg-black/5 p-2 rounded text-xs font-mono overflow-x-auto whitespace-pre-wrap break-all">
+                            <div className="font-bold text-blue-600 mb-1">Selected Tools:</div>
+                            <pre className="whitespace-pre-wrap break-all">{(step.tool_output as any).selected_tools.join(', ')}</pre>
+                        </div>
+                    )}
+
                     {step.tool_output && (
                          <div className="mt-2 bg-black/5 p-2 rounded text-xs font-mono overflow-x-auto whitespace-pre-wrap break-all">
                             <div className="font-bold text-blue-600 mb-1">Tool Output:</div>

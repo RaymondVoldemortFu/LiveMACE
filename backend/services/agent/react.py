@@ -6,6 +6,11 @@ from datetime import timezone, timedelta
 from typing import Dict, Any, List, Callable, Optional
 from .llm_client import LLMClient
 from .tools import ToolRegistry
+from .tool_selector import (
+    ensure_tool_selector_tool,
+    REQUIRED_TOOL_NAMES,
+    META_TOOL_NAME,
+)
 from config.agent_config import AgentConfig
 from services.agent.prompts.system_prompts import get_trade_agent_prompt
 from .base import BaseAgent
@@ -15,13 +20,19 @@ from services.time_source import now_in_tz
 logger = logging.getLogger(__name__)
 llm_logger = logging.getLogger("llm_trace")
 agent_logger = logging.getLogger("agent_decision")
+tool_output_logger = logging.getLogger("tool_output")
 
 class ReActAgent(BaseAgent):
     def __init__(self, llm: LLMClient, tools: ToolRegistry, max_steps: int = AgentConfig.MAX_STEPS, user_id: str = None):
         super().__init__(llm, tools)
         self.max_steps = max_steps
         self.user_id = user_id
+<<<<<<< HEAD
         # Memory tools are now registered in env_wrapper.register_default_tools()
+=======
+        self.memory = get_memory_service()
+        ensure_tool_selector_tool(self.llm, self.tools)
+>>>>>>> 53baa21 (feat: add tool selection)
 
     def _missing_required_args(self, func: Callable, args: Dict[str, Any]) -> List[str]:
         """Return missing required callable parameters."""
@@ -86,6 +97,12 @@ class ReActAgent(BaseAgent):
                 "You must output final decision wrapped by <FINAL_JSON>...</FINAL_JSON>.\n"
             )
 
+        # Only expose required tools + tool selector at the start
+        initial_tools = list(REQUIRED_TOOL_NAMES)
+        if META_TOOL_NAME not in initial_tools:
+            initial_tools.append(META_TOOL_NAME)
+        self.tools.set_active_tools(initial_tools)
+
         messages: List[Dict[str, Any]] = [
             {"role": "system", "content": system_prompt_with_time},
             {
@@ -144,8 +161,49 @@ class ReActAgent(BaseAgent):
             if on_step:
                 on_step(resp_dict)
 
+<<<<<<< HEAD
             tool_calls = resp.tool_calls
             content = resp.content
+=======
+                        if parse_error:
+                            logger.warning(f"Invalid tool arguments for {name}: {parse_error}; raw={args_str!r}")
+                            result = {
+                                "error": f"Invalid tool arguments JSON for '{name}': {parse_error}. Please retry with valid JSON arguments."
+                            }
+                        elif not isinstance(args, dict):
+                            result = {
+                                "error": f"Invalid tool arguments for '{name}': expected object, got {type(args).__name__}."
+                            }
+                        else:
+                            try:
+                                tool = self.tools.get(name)
+                                missing = self._missing_required_args(tool, args)
+                                if missing:
+                                    result = {
+                                        "error": (
+                                            f"Missing required arguments for '{name}': {', '.join(missing)}. "
+                                            "Please retry with all required fields."
+                                        )
+                                    }
+                                else:
+                                    result = tool(**args)
+                                try:
+                                    tool_output_logger.info(
+                                        json.dumps(
+                                            {"name": name, "args": args, "result": result},
+                                            ensure_ascii=False,
+                                        )
+                                    )
+                                except Exception:
+                                    tool_output_logger.info(f"Tool result logged for {name}")
+                            except Exception as tool_err:
+                                # Never abort the whole run because one tool call fails.
+                                logger.error(f"Tool execution failed for {name}: {tool_err}")
+                                result = {"error": f"Tool execution failed: {str(tool_err)}"}
+                        
+                        # Log tool result
+                        agent_logger.info(f"Tool '{name}' result: {json.dumps(result, ensure_ascii=False)}")
+>>>>>>> 53baa21 (feat: add tool selection)
 
             # Requirement 2: Log LLM output content and tool calls
             agent_logger.info(f"--- Step {step+1} LLM Output ---")

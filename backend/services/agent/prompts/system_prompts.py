@@ -34,6 +34,9 @@ before deciding on any operation.
 ========================
 WORKFLOW: PLAN FIRST, THEN ACT
 ========================
+At the very beginning of the conversation, you MUST call the tool "select_tools" to choose the most relevant tools for this task.
+Only after tool selection is completed should you proceed with other tool calls.
+
 Before executing any tool call or issuing a final decision, the agent must determine its next actions by producing a high-level operational plan for the current step. This plan should describe:
 
 - What information the agent intends to obtain,

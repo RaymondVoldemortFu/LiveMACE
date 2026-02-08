@@ -45,7 +45,8 @@ def register_default_tools(registry, db: Session, account_id: int, trace_id: str
                 "market": market,
                 "price": float(get_last_price(symbol, market)),
                 "market_status": get_market_status(symbol, market)
-            }
+            },
+            metadata={"tier": "required"}
         )
     )
 
@@ -86,7 +87,8 @@ def register_default_tools(registry, db: Session, account_id: int, trace_id: str
             },
             func=lambda symbol, interval, start_time, end_time=None, market="CRYPTO": _get_kline_and_save(
                 container_service, account_id, symbol, interval, start_time, end_time, market
-            )
+            ),
+            metadata={"tier": "required"}
         )
     )
 
@@ -99,7 +101,8 @@ def register_default_tools(registry, db: Session, account_id: int, trace_id: str
             func=lambda: {
                 "account": _serialize_account(get_account(db, account_id)),
                 "positions": [_serialize_position(p) for p in list_positions(db, account_id)]
-            }
+            },
+            metadata={"tier": "required"}
         )
     )
 
@@ -144,7 +147,8 @@ def register_default_tools(registry, db: Session, account_id: int, trace_id: str
                 },
                 "required": ["query", "topic", "time_range"]
             },
-            func=lambda query, topic, time_range, search_depth="basic", max_results=5: search_agent.run(query, topic, time_range, search_depth, max_results)
+            func=lambda query, topic, time_range, search_depth="basic", max_results=5: search_agent.run(query, topic, time_range, search_depth, max_results),
+            metadata={"tier": "important"}
         )
     )
 
@@ -159,7 +163,8 @@ def register_default_tools(registry, db: Session, account_id: int, trace_id: str
                 },
                 "required": ["command"]
             },
-            func=lambda command: container_service.execute_command(account_id, command)
+            func=lambda command: container_service.execute_command(account_id, command),
+            metadata={"tier": "important"}
         )
     )
 
@@ -174,7 +179,8 @@ def register_default_tools(registry, db: Session, account_id: int, trace_id: str
                 },
                 "required": ["file_path"]
             },
-            func=lambda file_path: container_service.read_file(account_id, file_path)
+            func=lambda file_path: container_service.read_file(account_id, file_path),
+            metadata={"tier": "important"}
         )
     )
 
@@ -190,7 +196,8 @@ def register_default_tools(registry, db: Session, account_id: int, trace_id: str
                 },
                 "required": ["file_path", "content"]
             },
-            func=lambda file_path, content: container_service.write_file(account_id, file_path, content)
+            func=lambda file_path, content: container_service.write_file(account_id, file_path, content),
+            metadata={"tier": "important"}
         )
     )
 
@@ -205,7 +212,8 @@ def register_default_tools(registry, db: Session, account_id: int, trace_id: str
                 },
                 "required": ["script_content"]
             },
-            func=lambda script_content: _run_python_helper(container_service, account_id, script_content)
+            func=lambda script_content: _run_python_helper(container_service, account_id, script_content),
+            metadata={"tier": "important"}
         )
     )
 
