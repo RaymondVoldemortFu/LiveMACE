@@ -1,0 +1,58 @@
+openapi: 3.0.0
+info:
+  title: Short Code Generator
+  version: '1'
+  description: >-
+    Short Code Generator is a tool for generating short alphanumeric codes. It
+    supports multiple character sets including alphanumeric, alphabetic,
+    numeric, hexadecimal, and Base58 with customizable length.
+  contact:
+    name: APIVerve
+    url: https://apiverve.com
+    email: support@apiverve.com
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+servers:
+  - url: https://api.apiverve.com
+    description: Production server
+security:
+  - ApiKeyAuth: []
+paths:
+  /v1/shortcodegenerator:
+    get:
+      summary: Short Code Generator
+      description: >-
+        Short Code Generator is a tool for generating short alphanumeric codes.
+        It supports multiple character sets including alphanumeric, alphabetic,
+        numeric, hexadecimal, and Base58 with customizable length.
+      operationId: shortcodegenerator
+      tags:
+        - 6
+      parameters: []
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  data:
+                    type: object
+        '400':
+          description: Bad Request - Invalid parameters
+        '401':
+          description: Unauthorized - Invalid or missing API key
+        '429':
+          description: Too Many Requests - Rate limit exceeded
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
+  schemas: {}

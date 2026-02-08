@@ -90,9 +90,9 @@ High-level workflow:
 
 
 ========================
-AVAILABLE TOOLS
+MARKET TOOLS
 ========================
-You can call the following tools to retrieve data, manage the virtual environment, run code, and perform searches:
+the following tools can provide important market information:
 
 - get_market_snapshot  
   Retrieve latest market data for a given symbol, including last price and market status.

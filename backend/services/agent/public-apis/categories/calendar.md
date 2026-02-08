@@ -1,0 +1,58 @@
+# 📦 Calendar
+
+> 5 APIs in this category
+
+[← Back to API Catalog](../)
+
+---
+
+## Age Calculator
+
+<img src="https://apiverve.web.app/publicapis/logos/agecalculator.svg" width="60" height="60" />
+
+Age Calculator is a simple tool for calculating age from the date of birth. It returns the calculated age based on the date of birth provided.
+
+**[View Documentation →](https://apiverve.com/marketplace/agecalculator)** | **[OpenAPI Spec](../apis/agecalculator/openapi.yaml)** | **[Try in Postman](https://www.postman.com/apiverve/apiverve-workspace/collection/a6utjd8/apiverve-api-collection)**
+
+---
+
+## Date Calculator
+
+<img src="https://apiverve.web.app/publicapis/logos/datecalculator.svg" width="60" height="60" />
+
+Date Calculator is a simple tool for calculating date differences. It returns the calculated date difference based on the dates provided.
+
+**[View Documentation →](https://apiverve.com/marketplace/datecalculator)** | **[OpenAPI Spec](../apis/datecalculator/openapi.yaml)** | **[Try in Postman](https://www.postman.com/apiverve/apiverve-workspace/collection/a6utjd8/apiverve-api-collection)**
+
+---
+
+## Liturgical Calendar
+
+<img src="https://apiverve.web.app/publicapis/logos/liturgicalcalendar.svg" width="60" height="60" />
+
+Liturgical Calendar is a simple tool for getting the dates of the Liturgical Calendar. It returns the dates of the Liturgical Calendar for a given year.
+
+**[View Documentation →](https://apiverve.com/marketplace/liturgicalcalendar)** | **[OpenAPI Spec](../apis/liturgicalcalendar/openapi.yaml)** | **[Try in Postman](https://www.postman.com/apiverve/apiverve-workspace/collection/a6utjd8/apiverve-api-collection)**
+
+---
+
+## Working Days
+
+<img src="https://apiverve.web.app/publicapis/logos/workingdays.svg" width="60" height="60" />
+
+Working Days is a simple tool for getting the number of working days in a month. It returns the number of working days in the given month.
+
+**[View Documentation →](https://apiverve.com/marketplace/workingdays)** | **[OpenAPI Spec](../apis/workingdays/openapi.yaml)** | **[Try in Postman](https://www.postman.com/apiverve/apiverve-workspace/collection/a6utjd8/apiverve-api-collection)**
+
+---
+
+## World Holidays
+
+<img src="https://apiverve.web.app/publicapis/logos/worldholidays.svg" width="60" height="60" />
+
+World Holidays is a simple tool for getting the holidays of the world. It returns the holidays of the world for each day of the year.
+
+**[View Documentation →](https://apiverve.com/marketplace/worldholidays)** | **[OpenAPI Spec](../apis/worldholidays/openapi.yaml)** | **[Try in Postman](https://www.postman.com/apiverve/apiverve-workspace/collection/a6utjd8/apiverve-api-collection)**
+
+---
+

@@ -1,0 +1,56 @@
+openapi: 3.0.0
+info:
+  title: Text Language
+  version: '1'
+  description: >-
+    Text Language is a simple tool for detecting the language of a text. It
+    returns the language code.
+  contact:
+    name: APIVerve
+    url: https://apiverve.com
+    email: support@apiverve.com
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+servers:
+  - url: https://api.apiverve.com
+    description: Production server
+security:
+  - ApiKeyAuth: []
+paths:
+  /v1/textlanguage:
+    get:
+      summary: Text Language
+      description: >-
+        Text Language is a simple tool for detecting the language of a text. It
+        returns the language code.
+      operationId: textlanguage
+      tags:
+        - 22
+      parameters: []
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  data:
+                    type: object
+        '400':
+          description: Bad Request - Invalid parameters
+        '401':
+          description: Unauthorized - Invalid or missing API key
+        '429':
+          description: Too Many Requests - Rate limit exceeded
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
+  schemas: {}

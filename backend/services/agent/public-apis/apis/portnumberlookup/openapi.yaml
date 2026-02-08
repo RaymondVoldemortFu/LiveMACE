@@ -1,0 +1,58 @@
+openapi: 3.0.0
+info:
+  title: Port Number Lookup
+  version: '1'
+  description: >-
+    Port Number Lookup is a tool for looking up well-known port numbers and
+    network services. It provides information about ports including service
+    name, protocol, description, and category for common network services.
+  contact:
+    name: APIVerve
+    url: https://apiverve.com
+    email: support@apiverve.com
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+servers:
+  - url: https://api.apiverve.com
+    description: Production server
+security:
+  - ApiKeyAuth: []
+paths:
+  /v1/portnumberlookup:
+    get:
+      summary: Port Number Lookup
+      description: >-
+        Port Number Lookup is a tool for looking up well-known port numbers and
+        network services. It provides information about ports including service
+        name, protocol, description, and category for common network services.
+      operationId: portnumberlookup
+      tags:
+        - 26
+      parameters: []
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  data:
+                    type: object
+        '400':
+          description: Bad Request - Invalid parameters
+        '401':
+          description: Unauthorized - Invalid or missing API key
+        '429':
+          description: Too Many Requests - Rate limit exceeded
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
+  schemas: {}

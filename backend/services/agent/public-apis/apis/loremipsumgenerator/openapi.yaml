@@ -1,0 +1,56 @@
+openapi: 3.0.0
+info:
+  title: Lorem Ipsum Generator
+  version: '1'
+  description: >-
+    Lorem Ipsum Generator is a simple tool for generating lorem ipsum text. It
+    returns the generated text.
+  contact:
+    name: APIVerve
+    url: https://apiverve.com
+    email: support@apiverve.com
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+servers:
+  - url: https://api.apiverve.com
+    description: Production server
+security:
+  - ApiKeyAuth: []
+paths:
+  /v1/loremipsumgenerator:
+    get:
+      summary: Lorem Ipsum Generator
+      description: >-
+        Lorem Ipsum Generator is a simple tool for generating lorem ipsum text.
+        It returns the generated text.
+      operationId: loremipsumgenerator
+      tags:
+        - 6
+      parameters: []
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  data:
+                    type: object
+        '400':
+          description: Bad Request - Invalid parameters
+        '401':
+          description: Unauthorized - Invalid or missing API key
+        '429':
+          description: Too Many Requests - Rate limit exceeded
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
+  schemas: {}

@@ -1,0 +1,28 @@
+# 📦 Health/Wellness
+
+> 2 APIs in this category
+
+[← Back to API Catalog](../)
+
+---
+
+## BMI Calculator
+
+<img src="https://apiverve.web.app/publicapis/logos/bmicalculator.svg" width="60" height="60" />
+
+BMI Calculator is a simple tool for calculating body mass index. It returns the calculated BMI based on the weight and height provided.
+
+**[View Documentation →](https://apiverve.com/marketplace/bmicalculator)** | **[OpenAPI Spec](../apis/bmicalculator/openapi.yaml)** | **[Try in Postman](https://www.postman.com/apiverve/apiverve-workspace/collection/a6utjd8/apiverve-api-collection)**
+
+---
+
+## Exercises
+
+<img src="https://apiverve.web.app/publicapis/logos/exercises.svg" width="60" height="60" />
+
+Exercises is a simple tool for getting exercise information. It returns information on various exercises.
+
+**[View Documentation →](https://apiverve.com/marketplace/exercises)** | **[OpenAPI Spec](../apis/exercises/openapi.yaml)** | **[Try in Postman](https://www.postman.com/apiverve/apiverve-workspace/collection/a6utjd8/apiverve-api-collection)**
+
+---
+

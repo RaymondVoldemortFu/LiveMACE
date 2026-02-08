@@ -1,0 +1,56 @@
+openapi: 3.0.0
+info:
+  title: Word Opposites
+  version: '1'
+  description: >-
+    Word Opposites is a simple tool for getting the opposites of a word. It
+    returns a list of opposites for the given word.
+  contact:
+    name: APIVerve
+    url: https://apiverve.com
+    email: support@apiverve.com
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+servers:
+  - url: https://api.apiverve.com
+    description: Production server
+security:
+  - ApiKeyAuth: []
+paths:
+  /v1/wordopposite:
+    get:
+      summary: Word Opposites
+      description: >-
+        Word Opposites is a simple tool for getting the opposites of a word. It
+        returns a list of opposites for the given word.
+      operationId: wordopposite
+      tags:
+        - 22
+      parameters: []
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  data:
+                    type: object
+        '400':
+          description: Bad Request - Invalid parameters
+        '401':
+          description: Unauthorized - Invalid or missing API key
+        '429':
+          description: Too Many Requests - Rate limit exceeded
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
+  schemas: {}

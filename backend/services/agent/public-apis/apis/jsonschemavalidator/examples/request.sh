@@ -1,0 +1,4 @@
+# JSON Schema Validator - Example Request
+
+curl -X GET "https://api.apiverve.com/v1/jsonschemavalidator" \
+  -H "x-api-key: YOUR_API_KEY"

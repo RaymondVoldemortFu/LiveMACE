@@ -1,0 +1,58 @@
+openapi: 3.0.0
+info:
+  title: BIMI Record Validator
+  version: '1'
+  description: >-
+    BIMI Validator checks if a domain has a valid BIMI record published in DNS.
+    BIMI enables domain owners to display verified logos in supported email
+    clients.
+  contact:
+    name: APIVerve
+    url: https://apiverve.com
+    email: support@apiverve.com
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+servers:
+  - url: https://api.apiverve.com
+    description: Production server
+security:
+  - ApiKeyAuth: []
+paths:
+  /v1/bimivalidator:
+    get:
+      summary: BIMI Record Validator
+      description: >-
+        BIMI Validator checks if a domain has a valid BIMI record published in
+        DNS. BIMI enables domain owners to display verified logos in supported
+        email clients.
+      operationId: bimivalidator
+      tags:
+        - 10
+      parameters: []
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  data:
+                    type: object
+        '400':
+          description: Bad Request - Invalid parameters
+        '401':
+          description: Unauthorized - Invalid or missing API key
+        '429':
+          description: Too Many Requests - Rate limit exceeded
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
+  schemas: {}

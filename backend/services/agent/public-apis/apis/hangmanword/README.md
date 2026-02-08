@@ -1,0 +1,111 @@
+# Hangman Word Generator
+
+> Hangman Word Generator provides random words for hangman games with category filtering and difficulty levels based on word length.
+
+<img src="https://apiverve.web.app/publicapis/logos/hangmanword.svg" width="80" height="80" />
+
+[![npm](https://img.shields.io/npm/v/@apiverve/hangmanword.svg?style=flat&logo=npm)](https://www.npmjs.com/package/@apiverve/hangmanword)
+[![PyPI](https://img.shields.io/pypi/v/apiverve-hangmanword.svg?style=flat&logo=python)](https://pypi.org/project/apiverve-hangmanword/)
+[![NuGet](https://img.shields.io/nuget/v/APIVerve.API.HangmanWordGenerator.svg?style=flat&logo=nuget)](https://www.nuget.org/packages/APIVerve.API.HangmanWordGenerator)
+[![OpenAPI](https://img.shields.io/badge/OpenAPI-3.0-green.svg)](openapi.json)
+[![Try it](https://img.shields.io/badge/Try%20it-Postman-orange.svg)](https://www.postman.com/apiverve/apiverve-workspace/collection/a6utjd8/apiverve-api-collection)
+
+---
+
+## 🚀 Quick Start
+
+```bash
+curl -X GET "https://api.apiverve.com/v1/hangmanword" \
+  -H "x-api-key: YOUR_API_KEY"
+```
+
+[Get your API key →](https://dashboard.apiverve.com)
+
+**[🧪 Live Test this API →](https://apiverve.com/marketplace/hangmanword)**
+
+---
+
+## 📖 Description
+
+Hangman Word Generator provides random words for hangman games with category filtering and difficulty levels based on word length.
+
+---
+
+## ✅ Example Response
+
+```json
+{
+  "status": "ok",
+  "data": { ... }
+}
+```
+
+[See full examples →](examples/)
+
+---
+
+## 📄 Response Formats
+
+This API supports multiple response formats:
+
+| Format | Content-Type | How to Request |
+|--------|--------------|----------------|
+| JSON | `application/json` | Default, or `Accept: application/json` |
+| XML | `application/xml` | `Accept: application/xml` or `?format=xml` |
+| YAML | `application/yaml` | `Accept: application/yaml` or `?format=yaml` |
+
+---
+
+## 🔌 Advanced Access
+
+This API is also available via:
+
+- **[MCP Server](https://github.com/apiverve/mcp-server)** - Use with Claude Desktop, Cursor, and other MCP-compatible AI tools
+- **[GraphQL](https://docs.apiverve.com/graphql)** - Query multiple APIs in a single request
+
+---
+
+## 🔗 Resources
+
+- **[Live Test](https://apiverve.com/marketplace/hangmanword)** - Test in your browser
+- **[Try in Postman](https://www.postman.com/apiverve/apiverve-workspace/collection/a6utjd8/apiverve-api-collection)** - Import to Postman
+- **[OpenAPI Spec](openapi.json)** - Full API specification
+- **[Documentation](https://docs.apiverve.com/ref/hangmanword)** - Full documentation
+- **[Pricing](https://apiverve.com/pricing)** - View pricing plans
+
+---
+
+## 📊 API Information
+
+- **Category:** Games
+- **Average Latency:** 156ms
+- **Health Status:** 99%
+
+---
+
+## 📦 Installation
+
+### NPM
+```bash
+npm install @apiverve/hangmanword
+```
+
+### PyPI
+```bash
+pip install apiverve-hangmanword
+```
+
+### NuGet
+```bash
+dotnet add package APIVerve.API.HangmanWordGenerator
+```
+
+---
+
+## 🐛 Issues
+
+Found a bug? [Report it here](../../issues)
+
+---
+
+[← Back to API Catalog](../../)

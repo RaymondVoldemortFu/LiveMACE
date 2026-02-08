@@ -21,6 +21,7 @@ from services.agent.core import *
 from services.agent.env_wrapper import *
 from services.agent.llm_client import *
 from services.agent.tools import *
+from services.agent.public_apis_registry import register_public_api_tools
 from services.agent.history_tool import HistoryTool
 from services.container_service import ContainerService
 
@@ -633,7 +634,14 @@ def call_agent_for_decision(
 
         registry = ToolRegistry()
         register_default_tools(registry, db, account_id, trace_id=trace_id)
-        
+
+        # Register public-apis tools (tools_schema.json)
+        try:
+            registered_count = register_public_api_tools(registry)
+            logger.info(f"Registered {registered_count} public-apis tools")
+        except Exception as e:
+            logger.warning(f"Failed to register public-apis tools: {e}")
+
         # Register the new history tool
         registry.register(HistoryTool(db, account_id))
 
