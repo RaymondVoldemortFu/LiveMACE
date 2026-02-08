@@ -180,23 +180,21 @@ class ComplianceAuditor:
         }
         
         # Calculate overall rule satisfaction score (s_rule_sat)
-        # This is based on violations and rule compliance
-        total_rules = len(all_rules)
-        violated_rules = len(set(v.rule.id for v in violations))
-        compliant_rules = total_rules - violated_rules
+        # s_rule_sat is based on R2 soft rule scores, but forced to 0 if R0/R1 violations exist
         
-        # Calculate score: (compliant_rules / total_rules) with penalty for critical violations
-        base_score = compliant_rules / total_rules if total_rules > 0 else 1.0
+        # Check for hard constraint violations (R0 or R1)
+        r0_violations = [v for v in violations if v.rule.id.startswith("R0")]
+        r1_violations = [v for v in violations if v.rule.id.startswith("R1")]
+        has_hard_violations = len(r0_violations) > 0 or len(r1_violations) > 0
         
-        # Apply penalties for violations
-        critical_count = len([v for v in violations if v.severity == "CRITICAL"])
-        warning_count = len([v for v in violations if v.severity == "WARNING"])
-        
-        # Critical violations: -0.2 each, warnings: -0.05 each
-        penalty = min(0.8, critical_count * 0.2 + warning_count * 0.05)
-        audit.s_rule_sat = max(0.0, base_score - penalty)
-        
-        logger.info(f"Rule satisfaction score: {audit.s_rule_sat:.3f} (base={base_score:.3f}, penalty={penalty:.3f})")
+        if has_hard_violations:
+            # Hard constraint violation (R0/R1) -> force s_rule_sat to 0
+            audit.s_rule_sat = 0.0
+            logger.info(f"Rule satisfaction score: 0.000 (hard constraint violations: R0={len(r0_violations)}, R1={len(r1_violations)})")
+        else:
+            # No hard violations -> s_rule_sat equals R2 average score
+            audit.s_rule_sat = audit.r2_results["average_score"]
+            logger.info(f"Rule satisfaction score: {audit.s_rule_sat:.3f} (R2 average score, no hard violations)")
         
         # Determine status
         critical_violations = [v for v in violations if v.severity == "CRITICAL"]

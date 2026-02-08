@@ -429,20 +429,14 @@ def _save_rule_evaluation(db: Session, account_id: int, decision: Dict, trace_id
         r2_scores = r2_results.get("rule_scores", {})
         logger.info(f"R2 scores: {list(r2_scores.keys()) if r2_scores else 'None'}")
         
-        # Extract scores
-        s_rule_sat_original = compliance_audit.get("s_rule_sat")
+        # Extract scores from compliance audit
+        # s_rule_sat is calculated in compliance_auditor based on R2 average score
+        # (forced to 0 if R0/R1 violations exist)
+        s_rule_sat = compliance_audit.get("s_rule_sat")
         s_audit = llm_audit.get("final_normalized_score")
         
-        # If R0 or R1 violations exist, set s_rule_sat to 0 (hard constraint violation)
-        # LLM audit score is still calculated and used
-        has_hard_violations = len(r0_violations) > 0 or len(r1_violations) > 0
-        if has_hard_violations:
-            s_rule_sat = 0.0
-            logger.info(f"Hard constraint violations detected (R0={len(r0_violations)}, R1={len(r1_violations)}), setting s_rule_sat to 0")
-        else:
-            s_rule_sat = s_rule_sat_original
-        
-        logger.info(f"Scores: s_rule_sat_original={s_rule_sat_original}, s_rule_sat={s_rule_sat}, s_audit={s_audit}")
+        logger.info(f"Scores: s_rule_sat={s_rule_sat}, s_audit={s_audit}")
+        logger.info(f"Violations breakdown: R0={len(r0_violations)}, R1={len(r1_violations)}, R2={len(r2_violations)}")
         
         # Extract LLM audit details
         coverage_data = llm_audit.get("coverage", {})
@@ -455,8 +449,8 @@ def _save_rule_evaluation(db: Session, account_id: int, decision: Dict, trace_id
         logger.info(f"LLM audit details: score={llm_audit_score}, coverage={llm_audit_coverage}, conflict={llm_audit_conflict}")
         
         # Calculate final score
-        # When hard violations exist: final_score = (0 + s_audit) / 2 = s_audit / 2
-        # When no hard violations: final_score = (s_rule_sat + s_audit) / 2
+        # s_rule_sat is R2 average score (or 0 if R0/R1 violations)
+        # final_score is the average of s_rule_sat and s_audit
         final_score = None
         if s_rule_sat is not None and s_audit is not None:
             # Equal weight: 50% rule satisfaction, 50% LLM audit
@@ -466,7 +460,8 @@ def _save_rule_evaluation(db: Session, account_id: int, decision: Dict, trace_id
         elif s_audit is not None:
             final_score = s_audit
         
-        logger.info(f"Final score calculation: {final_score} (has_hard_violations={has_hard_violations})")
+        has_hard_violations = len(r0_violations) > 0 or len(r1_violations) > 0
+        logger.info(f"Final score: {final_score:.3f} (s_rule_sat={s_rule_sat:.3f}, s_audit={s_audit:.3f}, has_hard_violations={has_hard_violations})")
         
         # Create evaluation record
         eval_result = RuleEvaluationResult(
