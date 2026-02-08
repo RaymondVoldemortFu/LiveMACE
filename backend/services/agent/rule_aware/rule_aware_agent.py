@@ -307,24 +307,13 @@ class RuleAwareAgent(BaseAgent):
                                     "final_normalized_score": 0.0
                                 }
                         
-                        # Check if decision passed compliance
+                        # Log compliance status (but don't block execution even if FAIL)
                         if compliance_audit.final_status == "FAIL":
-                            logger.warning("Decision FAILED compliance audit - reverting to HOLD")
-                            agent_logger.warning(f"COMPLIANCE FAILURE: {len(compliance_audit.violations)} critical violations")
-                            
-                            # Save llm_audit before overriding decision
-                            llm_audit_data = decision.get("llm_audit")
-                            
-                            # Override to HOLD
-                            decision = self._create_hold_decision(
-                                f"Compliance failure: {len(compliance_audit.violations)} rule violations detected"
-                            )
-                            decision["compliance_audit"] = compliance_audit.to_dict()
-                            
-                            # Preserve llm_audit data even when failing compliance
-                            if llm_audit_data:
-                                decision["llm_audit"] = llm_audit_data
-                                logger.info("Preserved LLM audit data in HOLD decision after compliance failure")
+                            logger.warning(f"Decision has compliance violations but will still execute: {len(compliance_audit.violations)} critical violations")
+                            agent_logger.warning(f"COMPLIANCE WARNING: {len(compliance_audit.violations)} critical violations - decision will execute anyway")
+                        
+                        # Note: Previous behavior was to override to HOLD on FAIL status
+                        # Now we allow execution even with R0/R1 violations, but track them in audit
                         
                         break
                         

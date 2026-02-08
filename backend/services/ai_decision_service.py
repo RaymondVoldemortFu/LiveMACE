@@ -411,11 +411,12 @@ def _save_rule_evaluation(db: Session, account_id: int, decision: Dict, trace_id
         logger.info(f"llm_audit keys: {list(llm_audit.keys()) if llm_audit else 'None'}")
         
         # Extract compliance data
-        # gate_pass 表示是否通过硬约束检查（R0和R1）
-        # PASS = 完全通过，ADJUSTED = 有软约束违规(R2)但允许执行，FAIL = 有硬约束违规(R0/R1)阻止执行
+        # gate_pass 表示是否通过硬约束检查（R0和R1）用于记录和监控
+        # PASS = 完全通过，ADJUSTED = 有软约束违规(R2)但允许执行，FAIL = 有硬约束违规(R0/R1)
+        # Note: 即使 gate_pass=false (FAIL状态)，决策仍会执行，但会被标记和记录
         final_status = compliance_audit.get("final_status", "")
         gate_pass = final_status in ["PASS", "ADJUSTED"]
-        logger.info(f"Gate pass: {gate_pass}, final_status={final_status}")
+        logger.info(f"Gate pass: {gate_pass}, final_status={final_status} (execution continues regardless)")
         
         # Extract violations and classify by rule level (从rule_id提取：R0-xx, R1-xx, R2-xx)
         violations = compliance_audit.get("violations", [])
