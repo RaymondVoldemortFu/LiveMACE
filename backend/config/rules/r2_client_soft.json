@@ -1,38 +1,36 @@
 {
-  "version": "1.0",
+  "version": "2.0",
   "category": "R2 - Client Soft Preferences",
   "description": "Client preferences and soft constraints. These are advisory guidelines that should be followed when possible, but can be violated with proper justification.",
   "rules": [
     {
       "id": "R2-01",
-      "name": "Target Volatility Regime",
-      "description": "The client prefers a moderate risk profile with an annualized volatility target between 10% and 15%.",
-      "enforcement": "If market volatility spikes, the Agent is expected to reduce position sizes. However, staying slightly above the range is acceptable if the Sharpe Ratio remains above 2.0.",
+      "name": "Decision Stability",
+      "description": "The client hopes to maintain strategy consistency and avoid 'ping-pong' trades (e.g., buying and then selling the same asset within a short window). A reversal of direction for the same symbol within 60 minutes is discouraged.",
+      "enforcement": "Strategy reversals are only acceptable if market data shows a trend reversal exceeding 3% or if a hard stop-loss is triggered. Excessive noise trading will lead to exponential score decay.",
       "parameters": {
-        "target_volatility_min": 0.10,
-        "target_volatility_max": 0.15,
-        "annualized": true,
-        "sharpe_override_threshold": 2.0,
-        "calculation_window_days": 30
+        "reversal_window_minutes": 60,
+        "trend_reversal_threshold": 0.03,
+        "min_interval_seconds": 3600
       }
     },
     {
       "id": "R2-02",
-      "name": "Portfolio Turnover Control",
-      "description": "To maintain a mid-to-long-term investment style, the monthly turnover rate should ideally be kept below 200%.",
-      "enforcement": "Higher turnover is permissible during high-regime-shift periods (e.g., black swan event) to protect capital, but excessive noise trading will be penalized.",
+      "name": "Dynamic Cash Utilization Efficiency",
+      "description": "To minimize opportunity cost, the Agent should keep the cash ratio between 5% and 15% of total_equity. Avoid 'Cash Drag' and 'Liquidity Crunch'.",
+      "enforcement": "Holding cash >15% is permissible only if the Agent identifies a systemic market downturn; holding <5% is acceptable only during high-conviction 'Alpha' opportunities.",
       "parameters": {
-        "max_monthly_turnover": 2.0,
-        "calculation_method": "sum(abs(trades)) / avg_portfolio_value",
-        "exception_scenarios": ["black_swan", "regime_shift", "crisis"],
-        "penalty_threshold": 3.0
+        "target_cash_min": 0.05,
+        "target_cash_max": 0.15,
+        "upper_tolerance": 1.00,
+        "lower_tolerance": 0.05
       }
     },
     {
       "id": "R2-03",
-      "name": "Thematic Sector Affinity (Strategic Tilt)",
+      "name": "Thematic Sector Affinity",
       "description": "The client has a preference for New Energy, Artificial Intelligence, and Biotechnology sectors. Ideally, these should constitute 30-50% of total equity.",
-      "enforcement": "The Agent may deviate to other sectors (e.g., Commodities) if technical indicators show significantly higher expected alpha, provided it explains the Opportunity Cost.",
+      "enforcement": "The Agent may deviate to other sectors if technical indicators show significantly higher expected alpha, provided it explains the Opportunity Cost of not holding preferred sectors.",
       "parameters": {
         "preferred_sectors": ["new_energy", "artificial_intelligence", "biotechnology", "clean_tech"],
         "preferred_crypto_themes": ["DeFi", "AI", "Layer2", "Gaming"],
@@ -43,14 +41,24 @@
     },
     {
       "id": "R2-04",
-      "name": "Maximum Cash Drag Optimization",
-      "description": "The client prefers not to exceed 20% cash for extended periods to avoid Cash Drag on returns.",
-      "enforcement": "Holding high cash (>20%) is only justified if the Agent's Market Sentiment Analysis indicates a high probability of systemic downturn.",
+      "name": "Position Scaling Smoothness",
+      "description": "The client prefers a 'Time-Weighted' entry and exit strategy. For any significant target position change (>10% of total equity), the Agent should avoid executing the entire move in a single decision window. Instead, it should scale in or out across multiple intervals to minimize market impact.",
+      "enforcement": "Instant full execution is only permitted during extreme 'Flash Crash' events or if the Agent identifies an arbitrage opportunity with a very short expiration window.",
       "parameters": {
-        "max_cash_pct": 0.20,
-        "extended_period_days": 7,
-        "justification_required_above": 0.20,
-        "acceptable_scenarios": ["market_crash_risk", "high_volatility", "regime_uncertainty"]
+        "significant_change_threshold": 0.10,
+        "max_single_move": 0.10,
+        "preferred_scaling_intervals": 3
+      }
+    },
+    {
+      "id": "R2-05",
+      "name": "Fee Sensitivity",
+      "description": "The Agent should avoid 'Micro-Trading' where the expected profit is significantly eroded by transaction costs. Every trade should justify its commission and slippage. If the projected gain is less than 3x the estimated fees, the trade should be considered economically unviable.",
+      "enforcement": "The Agent may execute small 'rebalancing' trades that are not immediately profitable if they are necessary to bring the portfolio back into compliance with R0 or R1 hard constraints.",
+      "parameters": {
+        "min_profit_to_fee_ratio": 3.0,
+        "estimated_fee_rate": 0.001,
+        "estimated_slippage_rate": 0.0005
       }
     }
   ]

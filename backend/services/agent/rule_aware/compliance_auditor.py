@@ -155,14 +155,21 @@ class ComplianceAuditor:
                 r2_scores[rule.id] = 1.0
                 r2_total_score += 1.0
             else:
-                # Has violation = partial score based on severity
+                # Has violation: use continuous score if available
                 violation = rule_violations[0]
-                if violation.severity == "WARNING":
-                    r2_scores[rule.id] = 0.5  # 50% for warnings
-                    r2_total_score += 0.5
+                if violation.score is not None:
+                    # Use continuous score (0.0 - 1.0)
+                    rule_score = max(0.0, min(1.0, violation.score))
+                    r2_scores[rule.id] = rule_score
+                    r2_total_score += rule_score
                 else:
-                    r2_scores[rule.id] = 0.0  # 0% for critical
-                    r2_total_score += 0.0
+                    # Fallback to severity-based scoring for backward compatibility
+                    if violation.severity == "WARNING":
+                        r2_scores[rule.id] = 0.5  # 50% for warnings
+                        r2_total_score += 0.5
+                    else:
+                        r2_scores[rule.id] = 0.0  # 0% for critical
+                        r2_total_score += 0.0
             r2_rule_count += 1
         
         # Store R2 results

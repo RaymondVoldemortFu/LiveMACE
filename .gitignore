@@ -315,5 +315,7 @@ backend/test_*.py
 test_*.py
 docs_local/*
 test_local/*
+clear_*
+print_*
 toolenv
 data.db-journal

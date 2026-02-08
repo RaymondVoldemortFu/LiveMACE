@@ -6,6 +6,7 @@ import sys
 import os
 from typing import Dict, Any, List, Tuple, Optional
 from decimal import Decimal
+from datetime import datetime, timedelta
 
 from .rule_engine import RuleEngine, Rule, RuleLevel
 
@@ -14,16 +15,19 @@ from .rule_engine import RuleEngine, Rule, RuleLevel
 get_db = None
 AssetMetadata = None
 Position = None
+AIDecisionLog = None
+Order = None
+Trade = None
 
 try:
     # First try relative import (when running from backend/)
     from database.connection import get_db
-    from database.models import AssetMetadata, Position
+    from database.models import AssetMetadata, Position, AIDecisionLog, Order, Trade
 except ImportError:
     try:
         # Fallback for absolute import (when running from project root)
         from backend.database.connection import get_db
-        from backend.database.models import AssetMetadata, Position
+        from backend.database.models import AssetMetadata, Position, AIDecisionLog, Order, Trade
     except ImportError:
         # If both fail, log warning
         pass
@@ -37,18 +41,20 @@ if not get_db:
 class RuleViolation:
     """Represents a rule violation"""
     
-    def __init__(self, rule: Rule, severity: str, message: str, actual_value: Any = None, expected_value: Any = None):
+    def __init__(self, rule: Rule, severity: str, message: str, actual_value: Any = None, expected_value: Any = None, score: Optional[float] = None):
         self.rule = rule
         self.severity = severity  # "CRITICAL", "WARNING", "INFO"
         self.message = message
         self.actual_value = actual_value
         self.expected_value = expected_value
+        self.score = score  # For R2 rules: continuous score 0-1 (1=perfect, 0=worst)
     
     def __repr__(self):
-        return f"RuleViolation({self.rule.id}, {self.severity}: {self.message})"
+        score_str = f", score={self.score:.3f}" if self.score is not None else ""
+        return f"RuleViolation({self.rule.id}, {self.severity}: {self.message}{score_str})"
     
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        result = {
             "rule_id": self.rule.id,
             "rule_name": self.rule.name,
             "severity": self.severity,
@@ -56,6 +62,9 @@ class RuleViolation:
             "actual_value": self.actual_value,
             "expected_value": self.expected_value
         }
+        if self.score is not None:
+            result["score"] = self.score
+        return result
 
 
 class RuleValidator:
@@ -331,17 +340,93 @@ class RuleValidator:
                         expected_value=f">= {min_cash_pct}"
                     )
         
-        # R2-01: Target Volatility Regime (10%-15%)
+        # R2-01: Decision Stability - Avoid ping-pong trades
         elif rule_id == "R2-01":
-            # This is soft rule - warning only, requires historical data
-            # Usually evaluated in batch mode, not per-decision
-            pass
+            # Check if database models are available
+            if not get_db or not AIDecisionLog:
+                logger.warning("Database models not available for R2-01 validation")
+                return None
+            
+            reversal_window_minutes = params.get("reversal_window_minutes", 60)
+            symbol = decision.get("symbol")
+            operation = decision.get("operation", "").lower()
+            account_id = portfolio.get("account_id")
+            
+            if not symbol or not account_id or operation not in ["open", "close"]:
+                return None  # Can only check for actual trading operations
+            
+            # Query recent decisions for the same symbol
+            db = next(get_db())
+            try:
+                cutoff_time = datetime.utcnow() - timedelta(minutes=reversal_window_minutes)
+                recent_decisions = db.query(AIDecisionLog).filter(
+                    AIDecisionLog.account_id == account_id,
+                    AIDecisionLog.symbol == symbol,
+                    AIDecisionLog.created_at >= cutoff_time,
+                    AIDecisionLog.operation.in_(["open", "close"])
+                ).order_by(AIDecisionLog.created_at.desc()).all()
+                
+                if recent_decisions:
+                    latest = recent_decisions[0]
+                    # Check for direction reversal (open->close or close->open)
+                    if latest.operation != operation:
+                        # Calculate time since reversal
+                        time_diff = datetime.utcnow() - latest.created_at
+                        interval_minutes = time_diff.total_seconds() / 60.0
+                        
+                        # Score: quadratic (smooth) function for gradual penalty
+                        # 60 min = 1.0, 30 min = 0.25, 15 min = 0.0625, 0 min = 0.0
+                        # This provides stronger penalty for very short intervals
+                        ratio = min(1.0, interval_minutes / reversal_window_minutes)
+                        score = ratio ** 2  # Quadratic smoothing for softer curve
+                        
+                        return RuleViolation(
+                            rule, severity,
+                            f"Direction reversal detected for {symbol} after {interval_minutes:.1f} minutes (target: >{reversal_window_minutes} min)",
+                            actual_value=interval_minutes,
+                            expected_value=f"> {reversal_window_minutes} minutes",
+                            score=score
+                        )
+            except Exception as e:
+                logger.warning(f"R2-01: Could not query decision history: {e}")
+            finally:
+                db.close()
         
-        # R2-02: Portfolio Turnover Control (<= 200%)
+        # R2-02: Dynamic Cash Utilization Efficiency (5%-15%)
         elif rule_id == "R2-02":
-            # This is soft rule - warning only, requires historical data
-            # Usually evaluated in batch mode, not per-decision
-            pass
+            target_min = params.get("target_cash_min", 0.05)
+            target_max = params.get("target_cash_max", 0.15)
+            
+            cash = portfolio.get("cash", 0)
+            total_equity = portfolio.get("total_equity") or portfolio.get("total_assets", cash)
+            
+            if total_equity > 0:
+                cash_ratio = cash / total_equity
+                
+                # Check if outside target range
+                if cash_ratio < target_min or cash_ratio > target_max:
+                    # Calculate score based on deviation
+                    if cash_ratio > target_max:
+                        # Too much cash: score decays as cash increases
+                        # 15%=1.0, 50%=0.58, 100%=0.0
+                        deviation = cash_ratio - target_max
+                        max_acceptable_deviation = 1.0 - target_max  # 0.85
+                        score = max(0.0, 1.0 - deviation / max_acceptable_deviation)
+                    else:
+                        # Too little cash: score decays as cash decreases
+                        # 5%=1.0, 2.5%=0.5, 0%=0.0
+                        deviation = target_min - cash_ratio
+                        max_acceptable_deviation = target_min  # 0.05
+                        score = max(0.0, 1.0 - deviation / max_acceptable_deviation)
+                    
+                    direction = "above" if cash_ratio > target_max else "below"
+                    return RuleViolation(
+                        rule, severity,
+                        f"Cash ratio {cash_ratio:.2%} is {direction} target range {target_min:.2%}-{target_max:.2%}",
+                        actual_value=cash_ratio,
+                        expected_value=f"{target_min:.2%}-{target_max:.2%}",
+                        score=score
+                    )
         
         # R2-03: Thematic Sector Affinity (30-50% in preferred sectors)
         elif rule_id == "R2-03":
@@ -389,37 +474,92 @@ class RuleValidator:
                         preferred_ratio = preferred_value / total_value
                         
                         if preferred_ratio < target_min or preferred_ratio > target_max:
+                            # Calculate continuous score
+                            target_mid = (target_min + target_max) / 2.0  # 0.40
+                            deviation = abs(preferred_ratio - target_mid)
+                            # Max acceptable deviation: 0.40 (allows 0%-80% range)
+                            max_deviation = 0.40
+                            score = max(0.0, 1.0 - deviation / max_deviation)
+                            
                             return RuleViolation(
                                 rule, severity,
                                 f"Preferred sector allocation {preferred_ratio:.2%} outside target range {target_min:.2%}-{target_max:.2%}",
                                 actual_value=preferred_ratio,
-                                expected_value=f"{target_min:.2%}-{target_max:.2%}"
+                                expected_value=f"{target_min:.2%}-{target_max:.2%}",
+                                score=score
                             )
                 except Exception as e:
-                    # Gracefully handle database errors (e.g., missing tables in test environment)
-                    import logging
-                    logging.warning(f"R2-03: Could not query positions/asset metadata: {e}")
+                    # Gracefully handle database errors
+                    logger.warning(f"R2-03: Could not query positions/asset metadata: {e}")
                 finally:
                     db.close()
         
-        # R2-04: Maximum Cash Drag Optimization (<= 20%)
+        # R2-04: Position Scaling Smoothness
         elif rule_id == "R2-04":
-            max_cash_pct = params.get("max_cash_pct", 0.20)
-            extended_period_days = params.get("extended_period_days", 7)
+            significant_threshold = params.get("significant_change_threshold", 0.10)
+            max_single_move = params.get("max_single_move", 0.10)
             
-            cash = portfolio.get("cash", 0)
-            total_equity = portfolio.get("total_equity") or portfolio.get("total_assets", cash)
+            target_portion = decision.get("target_portion_of_balance", 0)
+            symbol = decision.get("symbol")
+            operation = decision.get("operation", "").lower()
             
-            if total_equity > 0:
-                cash_pct = cash / total_equity
+            # Only check for actual position changes
+            if operation not in ["open", "close"] or not symbol:
+                return None
+            
+            # Check if position change exceeds threshold
+            if target_portion > significant_threshold:
+                # Calculate score: penalize large single moves
+                # 10%=1.0, 50%=0.56, 100%=0.0
+                excess = target_portion - significant_threshold
+                max_excess = 1.0 - significant_threshold  # 0.90
+                score = max(0.0, 1.0 - excess / max_excess)
                 
-                if cash_pct > max_cash_pct:
-                    return RuleViolation(
-                        rule, severity,
-                        f"Cash position {cash_pct:.2%} exceeds maximum {max_cash_pct:.2%} (may cause cash drag)",
-                        actual_value=cash_pct,
-                        expected_value=f"<= {max_cash_pct}"
-                    )
+                return RuleViolation(
+                    rule, severity,
+                    f"Position change {target_portion:.2%} exceeds smoothness threshold {significant_threshold:.2%} (prefer scaling across multiple decisions)",
+                    actual_value=target_portion,
+                    expected_value=f"<= {significant_threshold:.2%}",
+                    score=score
+                )
+        
+        # R2-05: Fee Sensitivity
+        elif rule_id == "R2-05":
+            min_profit_to_fee_ratio = params.get("min_profit_to_fee_ratio", 3.0)
+            estimated_fee_rate = params.get("estimated_fee_rate", 0.001)
+            estimated_slippage_rate = params.get("estimated_slippage_rate", 0.0005)
+            
+            symbol = decision.get("symbol")
+            target_portion = decision.get("target_portion_of_balance", 0)
+            operation = decision.get("operation", "").lower()
+            
+            if operation not in ["open", "close"] or not symbol:
+                return None
+            
+            # Calculate estimated trade size
+            total_equity = portfolio.get("total_equity") or portfolio.get("total_assets", 0)
+            trade_value = total_equity * target_portion
+            
+            # Estimate total fees (commission + slippage)
+            estimated_fees = trade_value * (estimated_fee_rate + estimated_slippage_rate)
+            
+            # For fee sensitivity, we use a heuristic:
+            # Small trades are penalized. Score based on trade size as proxy for fee efficiency
+            # Minimum viable trade: 0.5% of equity (assumed to be ~3x fees for typical holding period)
+            min_viable_portion = 0.005
+            
+            if target_portion > 0 and target_portion < min_viable_portion:
+                # Score: linear scale from 0 to min_viable_portion
+                # 0.5%=1.0, 0.25%=0.5, 0%=0.0
+                score = min(1.0, target_portion / min_viable_portion)
+                
+                return RuleViolation(
+                    rule, severity,
+                    f"Trade size {target_portion:.2%} may be too small relative to fees (estimated fees: ${estimated_fees:.2f})",
+                    actual_value=target_portion,
+                    expected_value=f">= {min_viable_portion:.2%}",
+                    score=score
+                )
         
         # Add more rule checks as needed...
         
