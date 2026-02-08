@@ -43,8 +43,10 @@ class ToolRegistry:
 
     def _iter_tools(self, use_active: bool = True):
         if use_active and self.active_tool_names:
-            return [self.tools[name] for name in self.active_tool_names if name in self.tools]
-        return list(self.tools.values())
+            tools = [self.tools[name] for name in self.active_tool_names if name in self.tools]
+        else:
+            tools = list(self.tools.values())
+        return sorted(tools, key=lambda t: t.name)
 
     @property
     def openai_tools(self):

@@ -34,8 +34,10 @@ before deciding on any operation.
 ========================
 WORKFLOW: PLAN FIRST, THEN ACT
 ========================
-At the very beginning of the conversation, you MUST call the tool "select_tools" to choose the most relevant tools for this task.
+At the very beginning of the conversation, you MUST first reason about the task and the tools that could be useful, and then call the tool "select_tools" to choose the most relevant tools for this task.
 Only after tool selection is completed should you proceed with other tool calls.
+The set of tools include basic assess to the market, account and internet, also a docker virtual machine that is able to run python code, file operations and execute shell commands, and a dozen of other tools that may be useful for the task.
+the description for tool selection must be general and describe the task and poteinal needs, not a specific step, you shall tell the tool selector to consider everything that could be useful for the task.
 
 Before executing any tool call or issuing a final decision, the agent must determine its next actions by producing a high-level operational plan for the current step. This plan should describe:
 
@@ -95,7 +97,7 @@ High-level workflow:
 ========================
 MARKET TOOLS
 ========================
-the following tools can provide important market information:
+the following tools can provide important market information and are always included in the tool list: 
 
 - get_market_snapshot  
   Retrieve latest market data for a given symbol, including last price and market status.
@@ -110,31 +112,6 @@ the following tools can provide important market information:
 - get_history_decisions
   Get the recent trading decision history for this account to understand past actions and reasoning
 
-- consult_search_agent  
-  Use a search sub-agent to perform web/news queries.
-  Use it for: crypto/project news, macro data, regulatory news, funding events, sentiment, and any other external information.
-  It returns structured summaries and sources.
-  You MUST call this at least once per decision-making process.
-
-- execute_shell_command  
-  Execute arbitrary shell commands in a virtual Linux environment.
-  Use this for file inspection, environment checks, and auxiliary utilities, when needed.
-
-- read_file  
-  Read contents of a file in the virtual environment (may be truncated).
-  For large or structured data, prefer loading and analyzing via Python code using `run_python_script` instead of manually reading everything.
-
-- write_file  
-  Write content to a file in the virtual environment. Missing directories will be created automatically.
-
-- run_python_script  
-  Run Python code in the virtual environment. The script will be saved as a temporary file and executed.
-  Use this for:
-  - Parsing and analyzing kline/history data
-  - Portfolio statistics
-  - Risk/return calculations
-  - Any non-trivial quantitative or data processing tasks
-
 - execute_trade
   Execute REAL trade immediately.
   This tool supports:
@@ -144,6 +121,11 @@ the following tools can provide important market information:
     - operation="all_in" for full-position entry
     - operation="close_all" for liquidation
   You can call execute_trade multiple times in one decision process.
+
+- select_tools
+  select the most relevant tools for the task
+  this tool is always included in the tool list, you can call it at any time to select necessary tools
+
 
 ========================
 MEMORY SYSTEM (CRITICAL FOR LEARNING)
@@ -312,6 +294,8 @@ Common constraints:
 - For leverage, keep within [1, 10] and use leverage=1 for US market.
 """
 
+# TODO: memory prompts should be moved to a separate file, and load dynamically from the file system. 
+# TODO: Trade tool should be included in basic tools and always available.
 
 def get_trade_agent_prompt(memory_enabled: bool = False) -> str:
     """

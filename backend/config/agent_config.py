@@ -8,15 +8,15 @@ class AgentConfig:
     AGENT_TYPE = "react"  # default agent architecture
     MAX_STEPS = 100
     STEP_REMINDER_THRESHOLD = 5
-<<<<<<< HEAD
     # Decision protocol:
     # - "tool": default, agent executes trades via execute_trade tool and ends with termination token
     # - "final_json": legacy mode, agent returns one decision inside <FINAL_JSON>...</FINAL_JSON>
     TRADE_DECISION_PROTOCOL = os.getenv("TRADE_DECISION_PROTOCOL", "tool").strip().lower()
     AGENT_TRADE_TERMINATION_TOKEN = os.getenv("AGENT_TRADE_TERMINATION_TOKEN", "<TRADE_DONE>")
-=======
+
     TOOL_SELECTOR_TOP_K = 30
->>>>>>> 53baa21 (feat: add tool selection)
+    TOOL_SELECTOR_MAX_RETRIES = 10
+    TOOL_SELECTOR_MIN_EXTRA = 5
 
     # Docker Configuration
     DOCKER_IMAGE_NAME = "agent-sandbox:latest"

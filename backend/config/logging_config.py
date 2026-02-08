@@ -141,6 +141,18 @@ def setup_logging():
     tool_output_handler.setFormatter(formatter)
     tool_output_logger.addHandler(tool_output_handler)
 
+    # 8. Tool Selector Trace Logger (Independent file, no propagation)
+    tool_selector_trace_logger = logging.getLogger("tool_selector_trace")
+    tool_selector_trace_logger.setLevel(logging.INFO)
+    tool_selector_trace_logger.propagate = False
+
+    tool_selector_trace_log_file = os.path.join(log_dir, "tool_selector_trace.log")
+    tool_selector_trace_handler = logging.handlers.TimedRotatingFileHandler(
+        tool_selector_trace_log_file, when="midnight", interval=1, backupCount=30, encoding="utf-8"
+    )
+    tool_selector_trace_handler.setFormatter(formatter)
+    tool_selector_trace_logger.addHandler(tool_selector_trace_handler)
+
     # Uvicorn loggers integration
     logging.getLogger("uvicorn").handlers = []
     logging.getLogger("uvicorn.access").handlers = []

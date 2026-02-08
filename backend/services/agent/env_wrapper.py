@@ -154,7 +154,7 @@ def register_default_tools(registry, db: Session, account_id: int, trace_id: str
 
     registry.register(
         Tool(
-            name="execute_shell_command",
+            name="docker.execute_shell_command",
             description="在虚拟Linux环境中执行Shell命令。返回(exit_code, output)。",
             parameters={
                 "type": "object",
@@ -170,7 +170,7 @@ def register_default_tools(registry, db: Session, account_id: int, trace_id: str
 
     registry.register(
         Tool(
-            name="read_file",
+            name="docker.read_file",
             description="读取虚拟环境中的文件内容。内容长度受限。",
             parameters={
                 "type": "object",
@@ -186,7 +186,7 @@ def register_default_tools(registry, db: Session, account_id: int, trace_id: str
 
     registry.register(
         Tool(
-            name="write_file",
+            name="docker.write_file",
             description="向虚拟环境中的文件写入内容。如果文件不存在会自动创建，如果目录不存在也会创建。",
             parameters={
                 "type": "object",

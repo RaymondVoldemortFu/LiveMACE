@@ -187,6 +187,16 @@ class ReActAgent(BaseAgent):
                                     }
                                 else:
                                     result = tool(**args)
+                                    # Meta tool handling, optional for special tools
+                                    if name == META_TOOL_NAME and isinstance(result, dict):
+                                        llm_trace = result.pop("_llm_trace", None)
+                                        if llm_trace and on_step:
+                                            on_step(
+                                                {
+                                                    "role": "llm_trace",
+                                                    "content": json.dumps(llm_trace, ensure_ascii=False),
+                                                }
+                                            )
                                 try:
                                     tool_output_logger.info(
                                         json.dumps(
