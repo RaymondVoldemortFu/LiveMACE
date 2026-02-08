@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List, Dict
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -19,6 +19,17 @@ def _to_float(x) -> Optional[float]:
         return float(x)
     except Exception:
         return None
+
+
+def _to_iso_utc(dt: Optional[datetime]) -> Optional[str]:
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+    # Use a stable UTC representation for frontend parsing
+    return dt.isoformat().replace("+00:00", "Z")
 
 
 @router.get("/checkpoints/account/{account_id}")
@@ -49,13 +60,13 @@ def list_account_checkpoints(
         "interval_seconds": interval_seconds,
         "items": [
             {
-                "period_start": r.period_start,
-                "period_end": r.period_end,
+                "period_start": _to_iso_utc(r.period_start),
+                "period_end": _to_iso_utc(r.period_end),
                 "equity_start": _to_float(r.equity_start),
                 "equity_end": _to_float(r.equity_end),
                 "pnl": _to_float(r.pnl),
                 "return_rate": r.return_rate,
-                "created_at": r.created_at,
+                "created_at": _to_iso_utc(r.created_at),
             }
             for r in rows
         ],
@@ -99,7 +110,7 @@ def leaderboard(
 
     return {
         "interval_seconds": interval_seconds,
-        "period_end": period_end,
+        "period_end": _to_iso_utc(period_end),
         "order_by": order_by,
         "items": [
             {
@@ -144,8 +155,8 @@ def compare_agents(
             {
                 "account_id": r.account_id,
                 "agent_name": account_map.get(r.account_id).name if account_map.get(r.account_id) else None,
-                "period_start": r.period_start,
-                "period_end": r.period_end,
+                "period_start": _to_iso_utc(r.period_start),
+                "period_end": _to_iso_utc(r.period_end),
                 "pnl": _to_float(r.pnl),
                 "return_rate": r.return_rate,
             }

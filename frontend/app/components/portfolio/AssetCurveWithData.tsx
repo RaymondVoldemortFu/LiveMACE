@@ -66,6 +66,11 @@ export default function AssetCurve({ data: initialData, wsRef }: AssetCurveProps
           setLoading(false)
           setError(null)
           setIsInitialized(true)
+        } else if (msg.type === 'asset_curve_error' && msg.timeframe === timeframe) {
+          setData([])
+          setLoading(false)
+          setError(msg.message || 'Failed to load asset curve')
+          setIsInitialized(true)
         } else if (msg.type === 'asset_curve_update' && msg.timeframe === timeframe) {
           // Real-time update for current timeframe
           setData(msg.data || [])
@@ -86,6 +91,9 @@ export default function AssetCurve({ data: initialData, wsRef }: AssetCurveProps
   // Request data when timeframe changes
   useEffect(() => {
     if (wsRef?.current && wsRef.current.readyState === WebSocket.OPEN) {
+      // Clear previous timeframe data to avoid showing stale curves
+      // (e.g. 1h snapshot) under a different timeframe tab.
+      setData([])
       setLoading(true)
       setError(null)
       wsRef.current.send(JSON.stringify({
@@ -135,6 +143,17 @@ export default function AssetCurve({ data: initialData, wsRef }: AssetCurveProps
 
   // Group data by timestamp/date and create datasets for each user
   // Use explicit profit calculation: profit = total_assets - initial_capital (fallback if profit not provided)
+  const parseKeyToDate = (key: string): Date => {
+    const trimmed = (key || '').trim()
+    if (/^\d+$/.test(trimmed)) {
+      const num = Number(trimmed)
+      // Heuristic: 10 digits ~ seconds; 13 digits ~ ms
+      if (trimmed.length <= 10) return new Date(num * 1000)
+      return new Date(num)
+    }
+    return new Date(trimmed)
+  }
+
   const groupedData = data.reduce((acc, item) => {
     const key = item.datetime_str || item.date || item.timestamp?.toString() || ''
     if (!acc[key]) {
@@ -147,7 +166,9 @@ export default function AssetCurve({ data: initialData, wsRef }: AssetCurveProps
     return acc
   }, {} as Record<string, Record<string, number>>)
 
-  const timestamps = Object.keys(groupedData).sort()
+  const timestamps = Object.keys(groupedData)
+    .filter(Boolean)
+    .sort((a, b) => parseKeyToDate(a).getTime() - parseKeyToDate(b).getTime())
   const users = Array.from(new Set(data.map(item => item.username))).sort()
 
   // Generate colors for each user
@@ -164,22 +185,24 @@ export default function AssetCurve({ data: initialData, wsRef }: AssetCurveProps
 
   // Format labels based on timeframe
   const formatLabel = (timestamp: string) => {
-    const d = new Date(timestamp)
+    const d = parseKeyToDate(timestamp)
     if (timeframe === '5m') {
-      return d.toLocaleTimeString('en-US', {
+      return d.toLocaleTimeString('zh-CN', {
         hour: '2-digit',
-        minute: '2-digit'
+        minute: '2-digit',
+        hour12: false,
       })
     } else if (timeframe === '1h') {
-      return d.toLocaleString('en-US', {
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit'
+      return d.toLocaleString('zh-CN', {
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        hour12: false,
       })
     } else {
-      return d.toLocaleDateString('en-US', {
-        month: 'short',
-        day: 'numeric'
+      return d.toLocaleDateString('zh-CN', {
+        month: '2-digit',
+        day: '2-digit',
       })
     }
   }

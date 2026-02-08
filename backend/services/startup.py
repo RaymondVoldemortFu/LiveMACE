@@ -65,13 +65,30 @@ def initialize_services():
         # Start periodic evaluation checkpoint job (PnL/return per time slice)
         # The job is idempotent per (account, interval, period_end), so we can poll frequently.
         try:
-            from services.evaluation.checkpoint_service import run_checkpoint_job
+            from services.evaluation.checkpoint_service import run_checkpoint_jobs
 
-            interval_seconds = int(os.getenv("EVAL_CHECKPOINT_INTERVAL_SECONDS", "3600"))
+            raw_intervals = os.getenv("EVAL_CHECKPOINT_INTERVAL_SECONDS", "900,3600,86400")
             poll_seconds = int(os.getenv("EVAL_CHECKPOINT_POLL_SECONDS", "30"))
 
+            intervals: list[int] = []
+            for part in (raw_intervals or "").split(","):
+                part = part.strip()
+                if not part:
+                    continue
+                try:
+                    val = int(part)
+                    if val > 0:
+                        intervals.append(val)
+                except ValueError:
+                    logger.warning(f"Ignoring invalid EVAL_CHECKPOINT_INTERVAL_SECONDS item: {part}")
+
+            if not intervals:
+                intervals = [3600]
+
+            intervals = sorted(set(intervals))
+
             def _run_eval_checkpoint_job():
-                return run_checkpoint_job(interval_seconds=interval_seconds)
+                return run_checkpoint_jobs(intervals)
 
             task_scheduler.add_interval_task(
                 task_func=_run_eval_checkpoint_job,
@@ -79,7 +96,7 @@ def initialize_services():
                 task_id="eval_checkpoint_job",
             )
             logger.info(
-                f"Evaluation checkpoint job started: interval={interval_seconds}s, poll={poll_seconds}s"
+                f"Evaluation checkpoint job started: intervals={intervals}, poll={poll_seconds}s"
             )
         except Exception as e:
             logger.error(f"Failed to start evaluation checkpoint job: {e}")

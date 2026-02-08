@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from typing import Optional, List
+from typing import Optional, List, Iterable
 import logging
 
 from sqlalchemy.orm import Session
@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from database.connection import SessionLocal
 from database.models import Account, AgentPeriodCheckpoint
 from services.asset_calculator import calc_positions_market_value
+from services.time_source import now_utc
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +88,8 @@ def create_checkpoint_if_due(
     equity_start is taken from the previous checkpoint's equity_end; if none exists,
     equity_start falls back to account.initial_capital.
     """
-    now = now or datetime.now(timezone.utc)
+    # Use unified virtual time source across the system (supports DELTA_T_MINUTES simulation).
+    now = now or now_utc()
     boundary = align_to_interval_end(now, interval_seconds)
 
     # Avoid writing the same period multiple times
@@ -130,12 +132,31 @@ def create_checkpoint_if_due(
 
 
 def run_checkpoint_job(interval_seconds: int = 3600) -> int:
-    """Scheduled job: create checkpoints for all active AI accounts.
+    """Scheduled job: create checkpoints for all active AI accounts for a single interval.
 
     Returns number of created checkpoints.
     """
+    return run_checkpoint_jobs([interval_seconds])
+
+
+def run_checkpoint_jobs(interval_seconds_list: Iterable[int]) -> int:
+    """Create checkpoints for all active AI accounts for multiple intervals.
+
+    This reuses one DB session and a single 'now' timestamp, keeping period alignment
+    consistent within a poll.
+
+    Returns number of created checkpoints in total.
+    """
+    intervals = [int(x) for x in interval_seconds_list if int(x) > 0]
+    # De-duplicate while keeping deterministic order
+    intervals = sorted(set(intervals))
+    if not intervals:
+        return 0
+
     db: Session = SessionLocal()
     created = 0
+    # Use unified virtual time source across the system (supports DELTA_T_MINUTES simulation).
+    now = now_utc()
     try:
         accounts: List[Account] = (
             db.query(Account)
@@ -143,16 +164,22 @@ def run_checkpoint_job(interval_seconds: int = 3600) -> int:
             .all()
         )
 
-        for account in accounts:
-            try:
-                ckpt = create_checkpoint_if_due(db, account, interval_seconds=interval_seconds)
-                if ckpt is not None:
-                    created += 1
-            except Exception as e:
-                logger.error(
-                    f"Checkpoint creation failed for account {account.id} ({account.name}): {e}",
-                    exc_info=True,
-                )
+        for interval_seconds in intervals:
+            for account in accounts:
+                try:
+                    ckpt = create_checkpoint_if_due(
+                        db,
+                        account,
+                        interval_seconds=interval_seconds,
+                        now=now,
+                    )
+                    if ckpt is not None:
+                        created += 1
+                except Exception as e:
+                    logger.error(
+                        f"Checkpoint creation failed for account {account.id} ({account.name}) interval={interval_seconds}s: {e}",
+                        exc_info=True,
+                    )
 
         if created:
             db.commit()

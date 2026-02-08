@@ -12,6 +12,7 @@ import logging
 
 from database.connection import SessionLocal
 from database.models import Account, Position, Trade, CryptoPrice
+from services.time_source import now_utc
 
 logger = logging.getLogger(__name__)
 
@@ -336,7 +337,7 @@ async def get_asset_curve_by_timeframe(
         
         if not unique_symbols:
             # No trades yet, return initial capital for all accounts
-            now = datetime.now()
+            now = now_utc()
             return [{
                 "timestamp": int(now.timestamp()),
                 "datetime_str": now.isoformat(),
