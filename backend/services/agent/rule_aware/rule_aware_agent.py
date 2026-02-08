@@ -312,11 +312,19 @@ class RuleAwareAgent(BaseAgent):
                             logger.warning("Decision FAILED compliance audit - reverting to HOLD")
                             agent_logger.warning(f"COMPLIANCE FAILURE: {len(compliance_audit.violations)} critical violations")
                             
+                            # Save llm_audit before overriding decision
+                            llm_audit_data = decision.get("llm_audit")
+                            
                             # Override to HOLD
                             decision = self._create_hold_decision(
                                 f"Compliance failure: {len(compliance_audit.violations)} rule violations detected"
                             )
                             decision["compliance_audit"] = compliance_audit.to_dict()
+                            
+                            # Preserve llm_audit data even when failing compliance
+                            if llm_audit_data:
+                                decision["llm_audit"] = llm_audit_data
+                                logger.info("Preserved LLM audit data in HOLD decision after compliance failure")
                         
                         break
                         
