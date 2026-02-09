@@ -17,6 +17,9 @@ import logging
 from services.asset_curve_calculator import get_all_asset_curves_data_new
 
 
+logger = logging.getLogger(__name__)
+
+
 class ConnectionManager:
     def __init__(self):
         self.active_connections: Dict[int, Set[WebSocket]] = {}

@@ -32,6 +32,17 @@ def _to_iso_utc(dt: Optional[datetime]) -> Optional[str]:
     return dt.isoformat().replace("+00:00", "Z")
 
 
+def _to_naive_utc(dt: datetime) -> datetime:
+    """Normalize an incoming datetime to UTC-naive.
+
+    This project stores datetimes in SQLite without tzinfo. FastAPI may parse
+    ISO datetimes as tz-aware (e.g. 'Z'), which would cause filters to miss.
+    """
+    if dt.tzinfo is None:
+        return dt
+    return dt.astimezone(timezone.utc).replace(tzinfo=None)
+
+
 @router.get("/checkpoints/account/{account_id}")
 def list_account_checkpoints(
     account_id: int,
@@ -81,6 +92,10 @@ def leaderboard(
     order_by: str = Query("return", description="return|pnl"),
     db: Session = Depends(get_db),
 ):
+    order_by = (order_by or "return").strip().lower()
+    if order_by not in {"return", "pnl"}:
+        raise HTTPException(status_code=400, detail="order_by must be 'return' or 'pnl'")
+
     q = db.query(AgentPeriodCheckpoint).filter(AgentPeriodCheckpoint.interval_seconds == interval_seconds)
 
     if period_end is None:
@@ -93,6 +108,8 @@ def leaderboard(
         if not latest:
             return {"interval_seconds": interval_seconds, "period_end": None, "items": []}
         period_end = latest[0]
+    else:
+        period_end = _to_naive_utc(period_end)
 
     q = q.filter(AgentPeriodCheckpoint.period_end == period_end)
 
@@ -137,9 +154,9 @@ def compare_agents(
 ):
     q = db.query(AgentPeriodCheckpoint).filter(AgentPeriodCheckpoint.interval_seconds == interval_seconds)
     if start is not None:
-        q = q.filter(AgentPeriodCheckpoint.period_end >= start)
+        q = q.filter(AgentPeriodCheckpoint.period_end >= _to_naive_utc(start))
     if end is not None:
-        q = q.filter(AgentPeriodCheckpoint.period_end <= end)
+        q = q.filter(AgentPeriodCheckpoint.period_end <= _to_naive_utc(end))
 
     rows = q.order_by(AgentPeriodCheckpoint.period_end.desc()).limit(limit).all()
     if not rows:

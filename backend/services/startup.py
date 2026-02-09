@@ -3,6 +3,7 @@
 import logging
 import threading
 import os
+import dotenv
 
 from services.auto_trader import (
     place_ai_driven_crypto_order,
@@ -14,6 +15,11 @@ from services.scheduler import start_scheduler, setup_market_tasks, task_schedul
 from services.container_service import ContainerService
 
 logger = logging.getLogger(__name__)
+
+# Load environment variables from a .env file (searched from current working dir upwards).
+# This keeps local development configuration in one place without overriding real env vars
+# (e.g. Docker/K8s injected values).
+dotenv.load_dotenv(dotenv_path=dotenv.find_dotenv(usecwd=True), override=False)
 
 
 def initialize_services():
@@ -67,8 +73,24 @@ def initialize_services():
         try:
             from services.evaluation.checkpoint_service import run_checkpoint_jobs
 
+            # Configure these in your `.env` for local development if needed:
+            # - EVAL_CHECKPOINT_INTERVAL_SECONDS=900,3600,86400
+            # - EVAL_CHECKPOINT_POLL_SECONDS=30
             raw_intervals = os.getenv("EVAL_CHECKPOINT_INTERVAL_SECONDS", "900,3600,86400")
-            poll_seconds = int(os.getenv("EVAL_CHECKPOINT_POLL_SECONDS", "30"))
+            raw_poll = os.getenv("EVAL_CHECKPOINT_POLL_SECONDS", "30")
+            try:
+                poll_seconds = int(str(raw_poll).strip())
+            except Exception:
+                poll_seconds = 30
+                logger.warning(
+                    f"Invalid EVAL_CHECKPOINT_POLL_SECONDS={raw_poll!r}; falling back to {poll_seconds}s"
+                )
+
+            if poll_seconds < 1:
+                logger.warning(
+                    f"EVAL_CHECKPOINT_POLL_SECONDS={poll_seconds} is too small; clamping to 1s"
+                )
+                poll_seconds = 1
 
             intervals: list[int] = []
             for part in (raw_intervals or "").split(","):

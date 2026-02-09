@@ -45,6 +45,11 @@ interface AssetCurveProps {
   wsRef?: React.MutableRefObject<WebSocket | null>
 }
 
+type TooltipLabelContext = {
+  dataset: { label?: string }
+  parsed: { y: unknown }
+}
+
 type Timeframe = '5m' | '1h' | '1d'
 
 export default function AssetCurve({ data: initialData, wsRef }: AssetCurveProps) {
@@ -53,6 +58,23 @@ export default function AssetCurve({ data: initialData, wsRef }: AssetCurveProps
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [isInitialized, setIsInitialized] = useState(false)
+
+  const locale = typeof navigator !== 'undefined' ? navigator.language : undefined
+  const number2Formatter = new Intl.NumberFormat(locale, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })
+  const currency2Formatter = new Intl.NumberFormat(locale, {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })
+  const currency0Formatter = new Intl.NumberFormat(locale, {
+    style: 'currency',
+    currency: 'USD',
+    maximumFractionDigits: 0,
+  })
 
   // Listen for WebSocket asset curve updates
   useEffect(() => {
@@ -187,20 +209,20 @@ export default function AssetCurve({ data: initialData, wsRef }: AssetCurveProps
   const formatLabel = (timestamp: string) => {
     const d = parseKeyToDate(timestamp)
     if (timeframe === '5m') {
-      return d.toLocaleTimeString('zh-CN', {
+      return d.toLocaleTimeString(locale, {
         hour: '2-digit',
         minute: '2-digit',
         hour12: false,
       })
     } else if (timeframe === '1h') {
-      return d.toLocaleString('zh-CN', {
+      return d.toLocaleString(locale, {
         month: '2-digit',
         day: '2-digit',
         hour: '2-digit',
         hour12: false,
       })
     } else {
-      return d.toLocaleDateString('zh-CN', {
+      return d.toLocaleDateString(locale, {
         month: '2-digit',
         day: '2-digit',
       })
@@ -234,13 +256,13 @@ export default function AssetCurve({ data: initialData, wsRef }: AssetCurveProps
         mode: 'index',
         intersect: false,
         callbacks: {
-          label: (context) => {
+          label: (context: TooltipLabelContext) => {
             const label = context.dataset.label || ''
-            const value = context.parsed.y
-            return `${label}: $${value?.toLocaleString('en-US', {
-              minimumFractionDigits: 2,
-              maximumFractionDigits: 2
-            })}`
+            const value = Number(context.parsed.y)
+            const formatted = !Number.isNaN(value)
+              ? currency2Formatter.format(value)
+              : ''
+            return `${label}: ${formatted}`
           },
         },
       },
@@ -260,10 +282,11 @@ export default function AssetCurve({ data: initialData, wsRef }: AssetCurveProps
           text: 'Profit (USD)',
         },
         ticks: {
-          callback: function(value) {
+          callback: (value: string | number) => {
             const num = Number(value)
-            const sign = num >= 0 ? '+' : ''
-            return sign + '$' + num.toLocaleString('en-US')
+            if (Number.isNaN(num)) return ''
+            const sign = num >= 0 ? '+' : '-'
+            return sign + currency0Formatter.format(Math.abs(num))
           },
         },
       },
@@ -322,10 +345,16 @@ export default function AssetCurve({ data: initialData, wsRef }: AssetCurveProps
                     ? latestData.profit_percentage
                     : (initial > 0 ? (profit / initial) * 100 : 0))
                 : 0
+
+              const formattedProfit = (profit >= 0 ? '+' : '') + currency2Formatter.format(profit)
+              const formattedProfitPercentage =
+                (profitPercentage >= 0 ? '+' : '') + number2Formatter.format(profitPercentage) + '%'
               return {
                 username,
                 profit,
                 profitPercentage,
+                formattedProfit,
+                formattedProfitPercentage,
               }
             })
             .sort((a, b) => b.profit - a.profit)
@@ -340,10 +369,7 @@ export default function AssetCurve({ data: initialData, wsRef }: AssetCurveProps
                     {account.username.replace('default_', '').toUpperCase()}
                   </div>
                   <div className={`text-lg font-bold ${account.profit >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                    {account.profit >= 0 ? '+' : ''}${account.profit.toLocaleString('en-US', {
-                      minimumFractionDigits: 2,
-                      maximumFractionDigits: 2,
-                    })} ({account.profit >= 0 ? '+' : ''}{account.profitPercentage.toFixed(2)}%)
+                    {account.formattedProfit} ({account.formattedProfitPercentage})
                   </div>
                 </div>
               </div>

@@ -16,6 +16,21 @@ from services.time_source import now_utc
 logger = logging.getLogger(__name__)
 
 
+def _list_active_ai_accounts(db: Session) -> List[Account]:
+    # Account.is_active is stored as a string in this project; keep this tolerant
+    # so we don't silently skip accounts due to casing/data drift.
+    active_values = ["true", "True", "TRUE", "1", "yes", "YES", "y", "Y"]
+    accounts = (
+        db.query(Account)
+        .filter(Account.account_type == "AI", Account.is_active.in_(active_values))
+        .all()
+    )
+    if accounts:
+        return accounts
+    # Fallback: keep demo functional even if is_active values are inconsistent
+    return db.query(Account).filter(Account.account_type == "AI").all()
+
+
 @dataclass(frozen=True)
 class PeriodBoundary:
     interval_seconds: int
@@ -158,11 +173,7 @@ def run_checkpoint_jobs(interval_seconds_list: Iterable[int]) -> int:
     # Use unified virtual time source across the system (supports DELTA_T_MINUTES simulation).
     now = now_utc()
     try:
-        accounts: List[Account] = (
-            db.query(Account)
-            .filter(Account.account_type == "AI", Account.is_active == "true")
-            .all()
-        )
+        accounts: List[Account] = _list_active_ai_accounts(db)
 
         for interval_seconds in intervals:
             for account in accounts:

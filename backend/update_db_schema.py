@@ -5,7 +5,7 @@ import os
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from database.connection import engine, Base
-from database.models import AgentTrace, AIDecisionLog, Account, AgentMemory, AgentPeriodCheckpoint
+from database import models
 from sqlalchemy import text
 
 def update_schema():
@@ -13,7 +13,14 @@ def update_schema():
     
     # 1. Create all tables (AgentTrace, AgentMemory, etc.) if they don't exist
     print("Creating tables if not exist...")
-    Base.metadata.create_all(bind=engine)
+    required_tables = [
+        models.AgentTrace.__table__,
+        models.AgentMemory.__table__,
+        models.AIDecisionLog.__table__,
+        models.Account.__table__,
+        models.AgentPeriodCheckpoint.__table__,
+    ]
+    Base.metadata.create_all(bind=engine, tables=required_tables)
     
     with engine.connect() as conn:
         try:
