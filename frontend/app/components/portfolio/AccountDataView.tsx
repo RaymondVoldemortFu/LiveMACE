@@ -282,12 +282,13 @@ export default function AccountDataView({
                       <TableHead>Agent</TableHead>
                       <TableHead className="text-right">PnL</TableHead>
                       <TableHead className="text-right">Return</TableHead>
+                      <TableHead className="text-right">Volatility</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {leaderboardItems.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={4} className="text-sm text-muted-foreground">
+                        <TableCell colSpan={5} className="text-sm text-muted-foreground">
                           暂无结算结果（等待产生 checkpoint）
                         </TableCell>
                       </TableRow>
@@ -295,6 +296,7 @@ export default function AccountDataView({
                       leaderboardItems.map((it, idx) => {
                         const pnl = typeof it.pnl === 'number' ? it.pnl : null
                         const rr = typeof it.return_rate === 'number' ? it.return_rate : null
+                        const vol = typeof it.volatility === 'number' ? it.volatility : null
                         return (
                           <TableRow
                             key={`${it.account_id}-${idx}`}
@@ -316,6 +318,9 @@ export default function AccountDataView({
                             </TableCell>
                             <TableCell className="text-right">
                               {rr === null ? '-' : `${(rr * 100).toFixed(2)}%`}
+                            </TableCell>
+                            <TableCell className="text-right">
+                              {vol === null ? '-' : `${(vol * 100).toFixed(2)}%`}
                             </TableCell>
                           </TableRow>
                         )
@@ -370,12 +375,13 @@ export default function AccountDataView({
                       <TableHead>周期截止</TableHead>
                       <TableHead className="text-right">PnL</TableHead>
                       <TableHead className="text-right">Return</TableHead>
+                      <TableHead className="text-right">Volatility</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {checkpointItems.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={3} className="text-sm text-muted-foreground">
+                        <TableCell colSpan={4} className="text-sm text-muted-foreground">
                           {checkpointLoading ? '加载中…' : '暂无 checkpoint'}
                         </TableCell>
                       </TableRow>
@@ -383,11 +389,13 @@ export default function AccountDataView({
                       checkpointItems.map((it, idx) => {
                         const pnl = typeof it.pnl === 'number' ? it.pnl : null
                         const rr = typeof it.return_rate === 'number' ? it.return_rate : null
+                        const vol = typeof it.volatility === 'number' ? it.volatility : null
                         return (
                           <TableRow key={`${it.period_end}-${idx}`}>
                             <TableCell>{new Date(it.period_end).toLocaleString()}</TableCell>
                             <TableCell className="text-right">{pnl === null ? '-' : pnl.toFixed(2)}</TableCell>
                             <TableCell className="text-right">{rr === null ? '-' : `${(rr * 100).toFixed(2)}%`}</TableCell>
+                            <TableCell className="text-right">{vol === null ? '-' : `${(vol * 100).toFixed(2)}%`}</TableCell>
                           </TableRow>
                         )
                       })

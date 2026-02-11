@@ -284,6 +284,7 @@ class AgentPeriodCheckpoint(Base):
     equity_end = Column(DECIMAL(18, 6), nullable=False)
     pnl = Column(DECIMAL(18, 6), nullable=False)
     return_rate = Column(Float, nullable=False)  # pnl / equity_start
+    volatility = Column(Float, nullable=False, default=0.0)  # rolling stddev of return_rate
 
     created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
 

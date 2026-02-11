@@ -77,6 +77,7 @@ def list_account_checkpoints(
                 "equity_end": _to_float(r.equity_end),
                 "pnl": _to_float(r.pnl),
                 "return_rate": r.return_rate,
+                "volatility": getattr(r, "volatility", None),
                 "created_at": _to_iso_utc(r.created_at),
             }
             for r in rows
@@ -89,12 +90,12 @@ def leaderboard(
     interval_seconds: int = Query(3600, description="Slice size in seconds"),
     period_end: Optional[datetime] = Query(None, description="Exact period_end; if omitted, use latest"),
     limit: int = Query(50, ge=1, le=500),
-    order_by: str = Query("return", description="return|pnl"),
+    order_by: str = Query("return", description="return|pnl|volatility"),
     db: Session = Depends(get_db),
 ):
     order_by = (order_by or "return").strip().lower()
-    if order_by not in {"return", "pnl"}:
-        raise HTTPException(status_code=400, detail="order_by must be 'return' or 'pnl'")
+    if order_by not in {"return", "pnl", "volatility"}:
+        raise HTTPException(status_code=400, detail="order_by must be 'return', 'pnl', or 'volatility'")
 
     q = db.query(AgentPeriodCheckpoint).filter(AgentPeriodCheckpoint.interval_seconds == interval_seconds)
 
@@ -115,6 +116,9 @@ def leaderboard(
 
     if order_by == "pnl":
         q = q.order_by(AgentPeriodCheckpoint.pnl.desc())
+    elif order_by == "volatility":
+        # Smaller volatility is generally better (more stable), so sort ascending.
+        q = q.order_by(AgentPeriodCheckpoint.volatility.asc())
     else:
         q = q.order_by(AgentPeriodCheckpoint.return_rate.desc())
 
@@ -138,6 +142,7 @@ def leaderboard(
                 "equity_end": _to_float(r.equity_end),
                 "pnl": _to_float(r.pnl),
                 "return_rate": r.return_rate,
+                "volatility": getattr(r, "volatility", None),
             }
             for r in rows
         ],
@@ -176,6 +181,7 @@ def compare_agents(
                 "period_end": _to_iso_utc(r.period_end),
                 "pnl": _to_float(r.pnl),
                 "return_rate": r.return_rate,
+                "volatility": getattr(r, "volatility", None),
             }
             for r in rows
         ],

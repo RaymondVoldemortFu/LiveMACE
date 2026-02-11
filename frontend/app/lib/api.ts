@@ -79,12 +79,13 @@ export interface EvalLeaderboardItem {
   equity_end?: number | null
   pnl?: number | null
   return_rate: number
+  volatility?: number | null
 }
 
 export interface EvalLeaderboardResponse {
   interval_seconds: number
   period_end: string | null
-  order_by: 'return' | 'pnl'
+  order_by: 'return' | 'pnl' | 'volatility'
   items: EvalLeaderboardItem[]
 }
 
@@ -95,6 +96,7 @@ export interface EvalAccountCheckpointItem {
   equity_end?: number | null
   pnl?: number | null
   return_rate: number
+  volatility?: number | null
   created_at?: string
 }
 
@@ -107,7 +109,7 @@ export interface EvalAccountCheckpointsResponse {
 
 export async function getEvalLeaderboard(
   intervalSeconds: number = 3600,
-  orderBy: 'return' | 'pnl' = 'pnl'
+  orderBy: 'return' | 'pnl' | 'volatility' = 'pnl'
 ): Promise<EvalLeaderboardResponse> {
   const response = await apiRequest(
     `/evaluation/checkpoints/leaderboard?interval_seconds=${intervalSeconds}&order_by=${orderBy}`

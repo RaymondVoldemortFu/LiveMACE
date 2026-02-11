@@ -47,6 +47,18 @@ def update_schema():
                 print("Column agent_type added.")
             else:
                 print("Column agent_type already exists.")
+
+            # 4. Add volatility column to AgentPeriodCheckpoint if it doesn't exist
+            print("Checking for volatility column in agent_period_checkpoints...")
+            result = conn.execute(text("PRAGMA table_info(agent_period_checkpoints)"))
+            columns = [row[1] for row in result]
+
+            if "volatility" not in columns:
+                print("Adding volatility column to agent_period_checkpoints...")
+                conn.execute(text("ALTER TABLE agent_period_checkpoints ADD COLUMN volatility FLOAT DEFAULT 0.0 NOT NULL"))
+                print("Column volatility added.")
+            else:
+                print("Column volatility already exists.")
                 
         except Exception as e:
             print(f"Error updating schema: {e}")

@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Optional, List, Iterable
 import logging
+import math
 
 from sqlalchemy.orm import Session
 
@@ -14,6 +15,52 @@ from services.asset_calculator import calc_positions_market_value
 from services.time_source import now_utc
 
 logger = logging.getLogger(__name__)
+
+
+VOLATILITY_LOOKBACK = 20
+
+
+def _compute_return_rate_volatility(
+    db: Session,
+    account_id: int,
+    interval_seconds: int,
+    period_end: datetime,
+    current_return_rate: float,
+    lookback: int = VOLATILITY_LOOKBACK,
+) -> float:
+    """Compute rolling volatility as stddev of return_rate over last N checkpoints.
+
+    Uses only checkpoints (as requested) and includes the current return_rate.
+    If fewer than 2 samples, returns 0.0.
+    """
+    n = int(lookback)
+    if n < 2:
+        return 0.0
+
+    prev_rows = (
+        db.query(AgentPeriodCheckpoint.return_rate)
+        .filter(
+            AgentPeriodCheckpoint.account_id == account_id,
+            AgentPeriodCheckpoint.interval_seconds == interval_seconds,
+            AgentPeriodCheckpoint.period_end < period_end,
+        )
+        .order_by(AgentPeriodCheckpoint.period_end.desc())
+        .limit(n - 1)
+        .all()
+    )
+
+    rates: List[float] = [float(current_return_rate)]
+    for (rr,) in prev_rows:
+        if rr is None:
+            continue
+        rates.append(float(rr))
+
+    if len(rates) < 2:
+        return 0.0
+
+    mean = sum(rates) / len(rates)
+    var = sum((x - mean) ** 2 for x in rates) / len(rates)
+    return math.sqrt(var)
 
 
 def _list_active_ai_accounts(db: Session) -> List[Account]:
@@ -131,15 +178,25 @@ def create_checkpoint_if_due(
     pnl = equity_end - equity_start
     return_rate = float(pnl / equity_start) if equity_start > 0 else 0.0
 
+    period_end_naive = boundary.period_end.replace(tzinfo=None)
+    volatility = _compute_return_rate_volatility(
+        db,
+        account_id=account.id,
+        interval_seconds=interval_seconds,
+        period_end=period_end_naive,
+        current_return_rate=return_rate,
+    )
+
     checkpoint = AgentPeriodCheckpoint(
         account_id=account.id,
         interval_seconds=interval_seconds,
         period_start=boundary.period_start.replace(tzinfo=None),
-        period_end=boundary.period_end.replace(tzinfo=None),
+        period_end=period_end_naive,
         equity_start=equity_start,
         equity_end=equity_end,
         pnl=pnl,
         return_rate=return_rate,
+        volatility=volatility,
     )
 
     db.add(checkpoint)
