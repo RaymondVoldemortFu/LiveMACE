@@ -99,11 +99,11 @@ def create_memory_tools(db: Session):
     
     memory_add_tool = Tool(
         name="memory_add",
-        description="Add an experience, insight, or lesson learned to your long-term memory.",
+        description="Store a reusable trading rule to long-term memory. Format: [CONDITION] → [OBSERVATION] → [RULE], 1-3 sentences max. Do NOT store news, specific dates/prices, or event logs — only generalizable patterns.",
         parameters={
             "type": "object",
             "properties": {
-                "experience": {"type": "string", "description": "The experience or insight to remember"},
+                "experience": {"type": "string", "description": "A reusable trading rule in the format: [CONDITION] → [OBSERVATION] → [RULE]. Strip specific dates and prices. Max 1-3 sentences."},
                 "account_id": {"type": "string", "description": "Your account ID"},
                 "metadata": {"type": "string", "description": "Optional JSON string with additional context", "default": None}
             },
@@ -111,14 +111,14 @@ def create_memory_tools(db: Session):
         },
         func=memory_add_with_db
     )
-    
+
     memory_search_tool = Tool(
         name="memory_search",
-        description="Search your long-term memory for relevant experiences and insights.",
+        description="Search long-term memory for trading rules relevant to current market conditions. Query with pattern descriptions (e.g. 'altcoin oversold during BTC downtrend'), not specific events or dates.",
         parameters={
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "What you want to search for in your memories"},
+                "query": {"type": "string", "description": "A pattern description of the market condition you want rules for (e.g. 'high leverage risk in downtrend', 'SOL support breakdown patterns')"},
                 "account_id": {"type": "string", "description": "Your account ID"},
                 "limit": {"type": "integer", "description": "Maximum number of memories to return (default: 2, max: 5)", "default": 2}
             },
