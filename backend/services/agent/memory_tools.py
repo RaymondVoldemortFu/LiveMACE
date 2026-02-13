@@ -13,6 +13,9 @@ logger = logging.getLogger(__name__)
 # Global memory service instance
 _memory_service = None
 
+# Similarity threshold for deduplication
+DEDUP_SIMILARITY_THRESHOLD = 0.85
+
 def get_or_create_memory_service():
     """Get or create memory service singleton"""
     global _memory_service
@@ -31,13 +34,24 @@ def create_memory_tools(db: Session):
         Tuple of (memory_add_tool, memory_search_tool)
     """
     memory_service = get_or_create_memory_service()
-    
+
     def memory_add_with_db(experience: str, account_id: str, metadata: Optional[str] = None) -> dict:
-        """Add memory using provided db session"""
+        """Add memory using provided db session, with automatic deduplication"""
         try:
             if not memory_service:
                 return {"status": "error", "message": "Memory service is not available"}
-            
+
+            # Hard dedup: search for similar memories before adding
+            existing = memory_service.search(query=experience, account_id=account_id, limit=1, db=db)
+            if existing and existing[0].get("similarity", 0) >= DEDUP_SIMILARITY_THRESHOLD:
+                dup = existing[0]
+                logger.info(f"Memory dedup: rejected for account {account_id} (similarity={dup['similarity']:.3f}): {experience[:80]}...")
+                return {
+                    "status": "rejected",
+                    "message": f"Too similar to existing memory (similarity={dup['similarity']:.2f}). Not saved.",
+                    "existing_memory": dup["content"]
+                }
+
             import json
             metadata_dict = {}
             if metadata:
@@ -45,10 +59,10 @@ def create_memory_tools(db: Session):
                     metadata_dict = json.loads(metadata)
                 except json.JSONDecodeError:
                     logger.warning(f"Invalid metadata JSON: {metadata}")
-            
+
             memory_service.add(content=experience, account_id=account_id, metadata=metadata_dict, db=db)
             logger.info(f"Memory added for account {account_id}: {experience[:100]}...")
-            
+
             return {
                 "status": "success",
                 "message": "Memory saved successfully",
