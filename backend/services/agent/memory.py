@@ -176,6 +176,19 @@ class LocalMemory(MemoryInterface):
             results.sort(key=lambda x: x["similarity"], reverse=True)
             top_results = results[:limit]
 
+            # Update retrieval count for returned memories
+            if top_results:
+                returned_ids = [r["id"] for r in top_results]
+                db.query(AgentMemory).filter(
+                    AgentMemory.memory_id.in_(returned_ids)
+                ).update(
+                    {
+                        AgentMemory.retrieval_count: AgentMemory.retrieval_count + 1,
+                        AgentMemory.last_retrieved_at: datetime.now()
+                    },
+                    synchronize_session=False
+                )
+
             logger.info(f"Found {len(top_results)} relevant memories for account {account_id}")
             return top_results
 

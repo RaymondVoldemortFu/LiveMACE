@@ -232,11 +232,14 @@ class AIDecisionLog(Base):
     reason = Column(String(1000), nullable=False)  # AI reasoning for the decision
     operation = Column(String(10), nullable=False)  # open/close/hold
     symbol = Column(String(20), nullable=True)  # symbol for buy/sell operations
+    direction = Column(String(10), nullable=True)  # long/short
     prev_portion = Column(DECIMAL(10, 6), nullable=False, default=0)  # previous balance portion
     target_portion = Column(DECIMAL(10, 6), nullable=False)  # target balance portion
     total_balance = Column(DECIMAL(18, 2), nullable=False)  # total balance at decision time
     executed = Column(String(10), nullable=False, default="false")  # whether the decision was executed
     order_id = Column(Integer, ForeignKey("orders.id"), nullable=True)  # linked order if executed
+    execution_price = Column(DECIMAL(18, 6), nullable=True)  # actual execution price
+    execution_quantity = Column(DECIMAL(18, 8), nullable=True)  # actual execution quantity
     leverage = Column(Integer, nullable=False, default=1)
     trace_id = Column(String(36), nullable=True)  # UUID for linking to detailed traces
     created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
@@ -278,6 +281,10 @@ class AgentMemory(Base):
     # Local vector embedding (stored as JSON array for similarity search)
     embedding = Column(JSON, nullable=True)  # Vector embedding as JSON array [0.1, 0.2, ...]
 
+    # Usage tracking
+    retrieval_count = Column(Integer, default=0, nullable=False)  # Times this memory was retrieved
+    last_retrieved_at = Column(DateTime, nullable=True)  # Last retrieval timestamp
+
     created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
     updated_at = Column(TIMESTAMP, server_default=func.current_timestamp(), onupdate=func.current_timestamp())
 
@@ -287,6 +294,32 @@ class AgentMemory(Base):
     account = relationship("Account", back_populates="memories")
 
 
+class AccountSnapshot(Base):
+    """Account state snapshots for performance tracking"""
+    __tablename__ = "account_snapshots"
+
+    id = Column(Integer, primary_key=True, index=True)
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False)
+    snapshot_time = Column(TIMESTAMP, server_default=func.current_timestamp(), index=True)
+
+    # Account balances
+    total_assets = Column(DECIMAL(18, 2), nullable=False)
+    cash = Column(DECIMAL(18, 2), nullable=False)
+    positions_value = Column(DECIMAL(18, 2), nullable=False)
+
+    # Performance metrics
+    total_pnl = Column(DECIMAL(18, 2), nullable=False, default=0)
+    total_pnl_percent = Column(DECIMAL(10, 4), nullable=False, default=0)
+
+    # Optional: link to decision that triggered this snapshot
+    decision_id = Column(Integer, ForeignKey("ai_decision_logs.id"), nullable=True)
+
+    created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
+
+    # Relationships
+    account = relationship("Account")
+
+
 # CRYPTO market trading configuration constants
 CRYPTO_MIN_COMMISSION = 0.1  # $0.1 minimum commission
 CRYPTO_COMMISSION_RATE = 0.001  # 0.1% commission rate
@@ -294,7 +327,7 @@ CRYPTO_MIN_ORDER_QUANTITY = 0.0001  # Minimum 0.0001 BTC (supports fractional cr
 CRYPTO_LOT_SIZE = 0.0001  # Lot size for crypto
 
 # Leverage trading constants (Hyperliquid-style)
-CRYPTO_TAKER_FEE_RATE = 0.0007  # 0.07% taker fee
+CRYPTO_TAKER_FEE_RATE = 0.00035  # 0.035% taker fee
 CRYPTO_INTEREST_RATE_HOURLY = 0.0000125  # 0.00125%/hour (0.03%/day)
 CRYPTO_MAX_LEVERAGE = 50  # Maximum leverage allowed
 CRYPTO_MAINTENANCE_MARGIN_RATIO = 0.5  # 50% of initial margin
