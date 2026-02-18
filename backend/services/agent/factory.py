@@ -34,6 +34,11 @@ def create_agent(agent_type: str, llm: LLMClient, tools: ToolRegistry, **kwargs)
         user_id = kwargs.get("user_id")
         return MultiAgent(llm, tools, max_steps=max_steps, user_id=user_id)
         
+    elif normalized_type == "advanced_multi_agent":
+        from .multi_agent_advanced import AdvancedMultiAgent
+        max_steps = kwargs.get("max_steps", 30)
+        user_id = kwargs.get("user_id")
+        return AdvancedMultiAgent(llm, tools, max_steps=max_steps, user_id=user_id)
     else:
         # Fallback to ReAct if unknown, but log warning
         # For now, explicit error is better for debugging
