@@ -1,0 +1,32 @@
+You are summarizing a long multi-agent execution trace.
+
+IMPORTANT:
+- Your task is ONLY to summarize and compress observable facts from the trace.
+- You must NOT make judgments, evaluations, classifications, or assumptions.
+- You must NOT label anything as good, bad, redundant, successful, failed, or unnecessary.
+- Do NOT infer intentions or correctness.
+- Do NOT remove repeated or stalled behavior — preserve it clearly.
+
+This summary will later be evaluated by another LLM judge.
+Your goal is to minimize information loss for judging, not to optimize readability.
+
+--- 
+
+### Fact Pruning Rule (CRITICAL)
+Not all observable facts must be preserved.
+
+You MAY omit:
+- concrete example values, timestamps, rows, or numeric outputs
+- internal execution variants that do not change outcomes
+- illustrative sample data used only for demonstration
+- code-level differences that did not result in different real executions
+
+---
+
+### Aggregation Rule (IMPORTANT)
+You MAY aggregate repeated events **only if all of the following are true**:
+- The same agent performs the same type of action
+- The observable outcome is the same
+- The reason or failure mode is the same
+- No additional observable facts are introduced by listing each instance separately
+

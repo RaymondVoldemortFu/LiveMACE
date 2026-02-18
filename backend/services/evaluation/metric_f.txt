@@ -1,0 +1,71 @@
+You are evaluating how a multi-agent system reasons about the necessity and cost of collaboration.
+
+Based ONLY on the execution trace, assess whether agents appropriately decide when to involve other agents or tools, versus when to act independently.
+
+Collaboration is not inherently good or bad.
+The focus is on whether agents demonstrate awareness of the trade-off between:
+- The potential benefit of collaboration (additional information, validation, or perspective)
+- The coordination cost (latency, redundancy, unnecessary communication)
+
+Do NOT judge correctness of the final decision.
+Do NOT infer hidden intentions.
+Only evaluate what is explicitly visible in the execution trace.
+
+Judge based on the following observable aspects (cumulatively):
+
+1. Collaboration necessity awareness
+- Whether agent calls are motivated by a clear information gap or uncertainty.
+- Whether tasks that could be handled with existing information still trigger collaboration.
+- Penalize reflexive or habitual agent/tool invocation.
+
+2. Justification of collaboration decisions
+- Whether the Manager or agents explain why another agent or tool is needed.
+- Whether they explain why collaboration is unnecessary in certain steps.
+- Whether reasoning references expected benefit versus added coordination cost.
+
+3. Communication efficiency
+- Whether communication volume is proportional to task complexity.
+- Whether redundant agent calls or repeated analysis are avoided.
+- Whether unnecessary communication is reduced during tool-heavy or decisive phases.
+
+Scoring notes:
+- To score 2, the Manager or agents must explicitly mention the benefit vs coordination cost trade-off.
+- If collaboration is invoked without explicit justification, score must be 0 or 1.
+
+Scoring principles:
+- Determinism: use only explicit trace evidence.
+- Consistency: apply the same thresholds across traces.
+- Tie-breaker: if between two scores, choose the lower one unless higher criteria are fully met.
+
+Score from 0 to 4:
+
+0: No awareness of coordination trade-offs  
+- Collaboration is triggered unconditionally or reflexively.  
+- No justification is provided for involving other agents or tools.  
+- Redundant or unnecessary communication is common.
+
+1: Minimal awareness  
+- Collaboration is sometimes reasonable but inconsistently justified.  
+- Agents occasionally mention uncertainty or possible benefit of collaboration.  
+- Coordination cost is implied but not explicitly considered.
+
+2: Moderate awareness  
+- Collaboration is sometimes selectively used based on information needs.  
+- Some explicit justifications exist, but coordination cost is not clearly weighed.
+
+3: Clear trade-off awareness  
+- Collaboration is selectively used based on clear information needs.  
+- Agents explicitly justify when and why collaboration is necessary or unnecessary.  
+- Communication is efficient, and redundant interactions are actively avoided.
+
+4: Strong, explicit cost–benefit reasoning  
+- The Manager or agents explicitly weigh benefit vs coordination cost.  
+- Multiple explicit decisions show choosing to collaborate or not based on that trade-off.  
+- Communication is consistently efficient with minimal redundancy.
+
+Only use evidence explicitly present in the execution trace.
+Cite specific agent messages or decision steps when justifying your assessment.
+
+Provide a step-by-step justification.
+End your response with:
+"The score is [score]."

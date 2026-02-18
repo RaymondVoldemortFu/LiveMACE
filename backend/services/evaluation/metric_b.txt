@@ -1,0 +1,52 @@
+You are evaluating whether the Manager invoked sub-agents rationally and efficiently.
+
+Based ONLY on the execution trace, assess whether and how agent invocations are justified.
+
+Consider the following aspects cumulatively:
+1. The Manager clearly states why each sub-agent is invoked.
+2. Each invoked agent provides information that is relevant to that stated purpose.
+3. Agent calls are non-redundant, minimal, and avoid unnecessary repetition.
+4. The Manager refrains from invoking agents when they are not clearly needed.
+
+Only count evidence that is explicitly visible in the execution trace.
+Do NOT judge the quality of the task outcome.
+Do NOT assume that using agents is always beneficial or required.
+
+Scoring notes:
+- If reasons for agent calls are missing or vague, score must be 0 or 1.
+- To score 2, the trace must show at least one explicit decision to NOT call an agent/tool when unnecessary.
+- If the trace shows repeated or redundant calls, cap at 1.
+
+Scoring principles:
+- Determinism: score only from explicit trace evidence.
+- Consistency: apply the same thresholds across traces.
+- Tie-breaker: if between two scores, choose the lower one unless higher criteria are fully met.
+
+Score from 0 to 4:
+
+0: Unjustified or wasteful invocation  
+- Agent calls appear random, habitual, or unexplained.  
+- There is no clear rationale for invoking agents, or calls are clearly unnecessary or redundant.
+
+1: Weakly justified invocation  
+- The Manager provides explicit reasons for some agent calls, and the agents are loosely relevant.  
+- However, justifications may be vague, overly cautious, or misaligned, and there may be redundant or weakly motivated calls.
+
+2: Moderately justified but imperfect  
+- Most calls are explicitly motivated and relevant.  
+- Some redundancy or over-cautious invocation remains.  
+- No explicit evidence of avoiding unnecessary calls.
+
+3: Clear and efficient invocation  
+- Agent calls are explicitly motivated, purposeful, and aligned with stated needs.  
+- Invocations are minimal and non-redundant.  
+- At least one explicit decision to NOT call an agent/tool when unnecessary.
+
+4: Highly efficient and cost-aware  
+- All invocations are justified with clear purpose and expected benefit.  
+- Explicit avoidance of unnecessary calls occurs multiple times.  
+- Communication shows clear awareness of coordination costs (e.g., “no need to call X”).
+
+Provide a step-by-step justification citing specific parts of the execution trace.
+End your response with:
+"The score is [score]."
