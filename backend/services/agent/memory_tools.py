@@ -26,20 +26,35 @@ def get_or_create_memory_service():
 def create_memory_tools(db: Session):
     """
     Factory function to create memory tools with a specific database session.
-    
+
     Args:
         db: SQLAlchemy Session to use for database operations
-        
+
     Returns:
         Tuple of (memory_add_tool, memory_search_tool)
     """
     memory_service = get_or_create_memory_service()
+
+    def _resolve_account_id(account_id: str) -> str:
+        """Resolve account_id: if it's a name instead of numeric ID, look up the real ID."""
+        if account_id.isdigit():
+            return account_id
+        # LLM passed account name instead of ID, look it up
+        from database.models import Account
+        account = db.query(Account).filter(Account.name == account_id).first()
+        if account:
+            logger.info(f"Resolved account name '{account_id}' to ID {account.id}")
+            return str(account.id)
+        logger.warning(f"Could not resolve account_id '{account_id}', using as-is")
+        return account_id
 
     def memory_add_with_db(experience: str, account_id: str, metadata: Optional[str] = None) -> dict:
         """Add memory using provided db session, with automatic deduplication"""
         try:
             if not memory_service:
                 return {"status": "error", "message": "Memory service is not available"}
+
+            account_id = _resolve_account_id(account_id)
 
             # Hard dedup: search for similar memories before adding
             existing = memory_service.search(query=experience, account_id=account_id, limit=1, db=db)
@@ -78,7 +93,9 @@ def create_memory_tools(db: Session):
         try:
             if not memory_service:
                 return {"status": "error", "message": "Memory service is not available"}
-            
+
+            account_id = _resolve_account_id(account_id)
+
             limit = min(limit, 5)
             results = memory_service.search(query=query, account_id=account_id, limit=limit, db=db)
             
