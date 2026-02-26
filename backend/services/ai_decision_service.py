@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from database.models import Position, Account, AIDecisionLog, AgentTrace
 import uuid
 import asyncio
-from services.asset_calculator import calc_positions_value
+from services.asset_calculator import calc_positions_market_value
 from services.news_feed import fetch_latest_news
 
 from services.agent.core import *
@@ -72,7 +72,7 @@ def _get_portfolio_data(db: Session, account: Account) -> Dict:
         "cash": float(account.current_cash),
         "frozen_cash": float(account.frozen_cash),
         "positions": portfolio,
-        "total_assets": float(account.current_cash) + calc_positions_value(db, account.id)
+        "total_assets": float(account.current_cash) + calc_positions_market_value(db, account.id)
     }
 
 
@@ -314,7 +314,7 @@ Rules:
         return None
 
 
-def save_ai_decision(db: Session, account: Account, decision: Dict, portfolio: Dict, executed: bool = False, order_id: Optional[int] = None) -> None:
+def save_ai_decision(db: Session, account: Account, decision: Dict, portfolio: Dict, executed: bool = False, order_id: Optional[int] = None, execution_price: Optional[float] = None, execution_quantity: Optional[float] = None) -> None:
     """Save AI decision to the decision log"""
     try:
         operation = decision.get("operation", "").lower() if decision.get("operation") else ""
@@ -348,11 +348,14 @@ def save_ai_decision(db: Session, account: Account, decision: Dict, portfolio: D
             reason=reason,
             operation=operation,
             symbol=symbol if operation != "hold" else None,
+            direction=decision.get("direction", "long"),
             prev_portion=Decimal(str(prev_portion)),
             target_portion=Decimal(str(target_portion)),
             total_balance=Decimal(str(portfolio["total_assets"])),
             executed="true" if executed else "false",
             order_id=order_id,
+            execution_price=Decimal(str(execution_price)) if execution_price is not None else None,
+            execution_quantity=Decimal(str(execution_quantity)) if execution_quantity is not None else None,
             leverage=leverage_val,
             trace_id=trace_id
         )

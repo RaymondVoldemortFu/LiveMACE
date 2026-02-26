@@ -294,32 +294,6 @@ class AgentMemory(Base):
     account = relationship("Account", back_populates="memories")
 
 
-class AccountSnapshot(Base):
-    """Account state snapshots for performance tracking"""
-    __tablename__ = "account_snapshots"
-
-    id = Column(Integer, primary_key=True, index=True)
-    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False)
-    snapshot_time = Column(TIMESTAMP, server_default=func.current_timestamp(), index=True)
-
-    # Account balances
-    total_assets = Column(DECIMAL(18, 2), nullable=False)
-    cash = Column(DECIMAL(18, 2), nullable=False)
-    positions_value = Column(DECIMAL(18, 2), nullable=False)
-
-    # Performance metrics
-    total_pnl = Column(DECIMAL(18, 2), nullable=False, default=0)
-    total_pnl_percent = Column(DECIMAL(10, 4), nullable=False, default=0)
-
-    # Optional: link to decision that triggered this snapshot
-    decision_id = Column(Integer, ForeignKey("ai_decision_logs.id"), nullable=True)
-
-    created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
-
-    # Relationships
-    account = relationship("Account")
-
-
 # CRYPTO market trading configuration constants
 CRYPTO_MIN_COMMISSION = 0.1  # $0.1 minimum commission
 CRYPTO_COMMISSION_RATE = 0.001  # 0.1% commission rate

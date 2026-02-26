@@ -308,7 +308,9 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
 
                 # Save decision with final execution status (only called once)
                 order_id = order.id if order else None
-                save_ai_decision(db, account, decision, portfolio, executed=executed, order_id=order_id)
+                exec_price = float(order.price) if order and order.price else None
+                exec_quantity = float(order.filled_quantity) if order and order.filled_quantity else None
+                save_ai_decision(db, account, decision, portfolio, executed=executed, order_id=order_id, execution_price=exec_price, execution_quantity=exec_quantity)
 
             except Exception as account_err:
                 logger.error(f"AI-driven order placement failed for account {account.name}: {account_err}", exc_info=True)
