@@ -10,7 +10,7 @@ This tool gives the agent visibility into:
 import logging
 import json
 from typing import Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 from database.models import AIDecisionLog, Order, Position, Account, CRYPTO_TAKER_FEE_RATE
 from services.agent.tools import Tool
@@ -139,8 +139,9 @@ def get_decision_history(account_id: int, limit: int = 5, db: Session = None) ->
         # Build decision history with P&L tracking
         history = []
         for d in decisions:
-            # Calculate time since decision
-            time_diff = datetime.now() - d.decision_time
+            # Calculate time since decision (use UTC to match SQLite's current_timestamp)
+            decision_time = d.decision_time.replace(tzinfo=timezone.utc) if d.decision_time.tzinfo is None else d.decision_time
+            time_diff = datetime.now(timezone.utc) - decision_time
             hours_ago = time_diff.total_seconds() / 3600
 
             # Basic decision info
