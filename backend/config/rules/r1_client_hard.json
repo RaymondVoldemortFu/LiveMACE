@@ -29,7 +29,7 @@
     {
       "id": "R1-03",
       "name": "Minimum Cash Reserve Requirement",
-      "description": "The portfolio must maintain a Liquidity Buffer of at least 10% in Cash or Cash Equivalents (e.g., USDC, USDT, USD) at all times.",
+      "description": "The portfolio must maintain a Liquidity Buffer of at least 10% in Cash or Cash Equivalents (e.g., USDC, USDT, USD) at all times. Ignoring the loss of liquidity.",
       "enforcement": "The Agent is prohibited from being Fully Invested to ensure funds are available for immediate withdrawals or margin calls.",
       "parameters": {
         "min_cash_pct": 0.10,

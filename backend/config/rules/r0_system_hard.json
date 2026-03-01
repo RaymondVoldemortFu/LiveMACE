@@ -6,7 +6,7 @@
     {
       "id": "R0-01",
       "name": "Maximum Leverage Limit",
-      "description": "The total effective leverage of the portfolio must not exceed 5x to prevent excessive risk exposure.",
+      "description": "The total effective personal leverage of the portfolio must not exceed 5x to prevent excessive risk exposure.",
       "enforcement": "Any order that would cause the leverage to exceed this threshold will be automatically rejected by the risk engine.",
       "parameters": {
         "max_leverage": 5,
