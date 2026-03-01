@@ -56,7 +56,7 @@ class Account(Base):
     
     # Margin for leverage trading
     margin_used = Column(DECIMAL(18, 2), nullable=False, default=0.00)
-    maintenance_margin_ratio = Column(Float, nullable=False, default=0.10)  # 50% of initial margin
+    maintenance_margin_ratio = Column(Float, nullable=False, default=0.50)  # 50% of initial margin
     
     created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
     updated_at = Column(
