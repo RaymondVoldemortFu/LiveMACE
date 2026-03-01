@@ -545,12 +545,12 @@ class RuleValidator:
             
             # For fee sensitivity, we use a heuristic:
             # Small trades are penalized. Score based on trade size as proxy for fee efficiency
-            # Minimum viable trade: 0.5% of equity (assumed to be ~3x fees for typical holding period)
-            min_viable_portion = 0.005
+            # Minimum viable trade: 1% of equity (assumed to be ~3x fees for typical holding period)
+            min_viable_portion = 0.01
             
             if target_portion > 0 and target_portion < min_viable_portion:
                 # Score: linear scale from 0 to min_viable_portion
-                # 0.5%=1.0, 0.25%=0.5, 0%=0.0
+                # 1%=1.0, 0.5%=0.5, 0%=0.0
                 score = min(1.0, target_portion / min_viable_portion)
                 
                 return RuleViolation(

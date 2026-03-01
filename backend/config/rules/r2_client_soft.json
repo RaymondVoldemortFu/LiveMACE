@@ -53,8 +53,8 @@
     {
       "id": "R2-05",
       "name": "Fee Sensitivity",
-      "description": "The Agent should avoid 'Micro-Trading' where transaction costs may significantly erode profits. Trades smaller than 0.5% of total equity are discouraged, as they are assumed to have insufficient scale to justify commission and slippage costs (which total approximately 0.15% per trade).",
-      "enforcement": "The Agent may execute small 'rebalancing' trades that fall below the 0.5% threshold if they are necessary to bring the portfolio back into compliance with R0 or R1 hard constraints.",
+      "description": "The Agent should avoid 'Micro-Trading' where transaction costs may significantly erode profits. Trades smaller than 1% of total equity are discouraged, as they are assumed to have insufficient scale to justify commission and slippage costs (which total approximately 0.15% per trade).",
+      "enforcement": "The Agent may execute small 'rebalancing' trades that fall below the 1% threshold if they are necessary to bring the portfolio back into compliance with R0 or R1 hard constraints.",
       "parameters": {
         "min_profit_to_fee_ratio": 3.0,
         "estimated_fee_rate": 0.001,
