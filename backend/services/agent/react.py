@@ -27,12 +27,9 @@ class ReActAgent(BaseAgent):
         super().__init__(llm, tools)
         self.max_steps = max_steps
         self.user_id = user_id
-<<<<<<< HEAD
         # Memory tools are now registered in env_wrapper.register_default_tools()
-=======
-        self.memory = get_memory_service()
+        # self.memory = get_memory_service()
         ensure_tool_selector_tool(self.llm, self.tools)
->>>>>>> 53baa21 (feat: add tool selection)
 
     def _missing_required_args(self, func: Callable, args: Dict[str, Any]) -> List[str]:
         """Return missing required callable parameters."""
@@ -119,6 +116,8 @@ class ReActAgent(BaseAgent):
 
         decision = None
         executed_trades: List[Dict[str, Any]] = []
+        tool_call_cache = {}
+        tool_call_counts = {}
 
         for step in range(self.max_steps):
             # Check if we need to remind the agent about remaining steps
@@ -161,69 +160,21 @@ class ReActAgent(BaseAgent):
             if on_step:
                 on_step(resp_dict)
 
-<<<<<<< HEAD
             tool_calls = resp.tool_calls
             content = resp.content
-=======
-                        if parse_error:
-                            logger.warning(f"Invalid tool arguments for {name}: {parse_error}; raw={args_str!r}")
-                            result = {
-                                "error": f"Invalid tool arguments JSON for '{name}': {parse_error}. Please retry with valid JSON arguments."
-                            }
-                        elif not isinstance(args, dict):
-                            result = {
-                                "error": f"Invalid tool arguments for '{name}': expected object, got {type(args).__name__}."
-                            }
-                        else:
-                            try:
-                                tool = self.tools.get(name)
-                                missing = self._missing_required_args(tool, args)
-                                if missing:
-                                    result = {
-                                        "error": (
-                                            f"Missing required arguments for '{name}': {', '.join(missing)}. "
-                                            "Please retry with all required fields."
-                                        )
-                                    }
-                                else:
-                                    result = tool(**args)
-                                    # Meta tool handling, optional for special tools
-                                    if name == META_TOOL_NAME and isinstance(result, dict):
-                                        llm_trace = result.pop("_llm_trace", None)
-                                        if llm_trace and on_step:
-                                            on_step(
-                                                {
-                                                    "role": "llm_trace",
-                                                    "content": json.dumps(llm_trace, ensure_ascii=False),
-                                                }
-                                            )
-                                try:
-                                    tool_output_logger.info(
-                                        json.dumps(
-                                            {"name": name, "args": args, "result": result},
-                                            ensure_ascii=False,
-                                        )
-                                    )
-                                except Exception:
-                                    tool_output_logger.info(f"Tool result logged for {name}")
-                            except Exception as tool_err:
-                                # Never abort the whole run because one tool call fails.
-                                logger.error(f"Tool execution failed for {name}: {tool_err}")
-                                result = {"error": f"Tool execution failed: {str(tool_err)}"}
-                        
-                        # Log tool result
-                        agent_logger.info(f"Tool '{name}' result: {json.dumps(result, ensure_ascii=False)}")
->>>>>>> 53baa21 (feat: add tool selection)
 
             # Requirement 2: Log LLM output content and tool calls
             agent_logger.info(f"--- Step {step+1} LLM Output ---")
             agent_logger.info(f"Content: {content}")
             if tool_calls:
-                agent_logger.info(f"Tool Calls: {json.dumps([t.model_dump() if hasattr(t, 'model_dump') else str(t) for t in tool_calls], ensure_ascii=False)}")
+                agent_logger.info(
+                    f"Tool Calls: {json.dumps([t.model_dump() if hasattr(t, 'model_dump') else str(t) for t in tool_calls], ensure_ascii=False)}"
+                )
 
             # 1) 有工具调用：执行工具并把结果回传给模型
             if tool_calls:
                 logger.info(f"LLM requested {len(tool_calls)} tool calls")
+                tool_messages = []
                 for tc in tool_calls:
                     name = tc.function.name
                     args_str = tc.function.arguments or "{}"
@@ -250,34 +201,82 @@ class ReActAgent(BaseAgent):
                             "error": f"Invalid tool arguments for '{name}': expected object, got {type(args).__name__}."
                         }
                     else:
-                        try:
-                            tool = self.tools.get(name)
-                            missing = self._missing_required_args(tool, args)
-                            if missing:
-                                result = {
-                                    "error": (
-                                        f"Missing required arguments for '{name}': {', '.join(missing)}. "
-                                        "Please retry with all required fields."
+                        cache_key = f"{name}:{json.dumps(args, sort_keys=True)}"
+                        tool_call_counts[cache_key] = tool_call_counts.get(cache_key, 0) + 1
+                        dup_count = tool_call_counts[cache_key]
+                        dup_limit = getattr(AgentConfig, "TOOL_CALL_DUP_MAX", 5)
+                        dup_warn = getattr(AgentConfig, "TOOL_CALL_DUP_WARN", 10)
+
+                        if dup_count > dup_limit:
+                            result = {
+                                "error": (
+                                    f"Refused to execute tool '{name}' with identical parameters "
+                                    f"more than {dup_limit} times."
+                                )
+                            }
+                            if dup_count > dup_warn:
+                                result["warning"] = (
+                                    "Repeated identical tool calls exceeded 10 times. "
+                                    "Consider selecting other tools, use select-tools to get more tools according to your need, or changing parameters."
+                                )
+                        elif cache_key in tool_call_cache:
+                            result = tool_call_cache[cache_key]
+                            logger.info(f"Using cached result for tool: {name}")
+                            agent_logger.info(f"Using cached result for tool '{name}' with args: {args_str}")
+                        else:
+                            try:
+                                tool = self.tools.get(name)
+                                missing = self._missing_required_args(tool, args)
+                                if missing:
+                                    result = {
+                                        "error": (
+                                            f"Missing required arguments for '{name}': {', '.join(missing)}. "
+                                            "Please retry with all required fields."
+                                        )
+                                    }
+                                else:
+                                    result = tool(**args)
+                                    tool_call_cache[cache_key] = result
+                                    # Meta tool handling, optional for special tools
+                                    if name == META_TOOL_NAME and isinstance(result, dict):
+                                        llm_trace = result.pop("_llm_trace", None)
+                                        if llm_trace and on_step:
+                                            on_step(
+                                                {
+                                                    "role": "llm_trace",
+                                                    "content": json.dumps(llm_trace, ensure_ascii=False),
+                                                }
+                                            )
+                                try:
+                                    tool_output_logger.info(
+                                        json.dumps(
+                                            {"name": name, "args": args, "result": result},
+                                            ensure_ascii=False,
+                                        )
                                     )
-                                }
-                            else:
-                                result = tool(**args)
-                        except Exception as tool_err:
-                            # Never abort the whole run because one tool call fails.
-                            logger.error(f"Tool execution failed for {name}: {tool_err}")
-                            result = {"error": f"Tool execution failed: {str(tool_err)}"}
+                                except Exception:
+                                    tool_output_logger.info(f"Tool result logged for {name}")
+                            except Exception as tool_err:
+                                # Never abort the whole run because one tool call fails.
+                                logger.error(f"Tool execution failed for {name}: {tool_err}")
+                                result = {"error": f"Tool execution failed: {str(tool_err)}"}
 
                     # Log tool result
                     agent_logger.info(f"Tool '{name}' result: {json.dumps(result, ensure_ascii=False)}")
                     if name == "execute_trade":
                         executed_trades.append(result if isinstance(result, dict) else {"raw_result": str(result)})
 
-                    tool_msg = {
-                        "role": "tool",
-                        "tool_call_id": tc.id,
-                        "name": name,
-                        "content": json.dumps(result, ensure_ascii=False),
-                    }
+                    tool_messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "name": name,
+                            "content": json.dumps(result, ensure_ascii=False),
+                        }
+                    )
+
+                # Append tool outputs only after the whole batch completes
+                for tool_msg in tool_messages:
                     messages.append(tool_msg)
                     if on_step:
                         on_step(tool_msg)

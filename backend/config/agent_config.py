@@ -17,6 +17,8 @@ class AgentConfig:
     TOOL_SELECTOR_TOP_K = 30
     TOOL_SELECTOR_MAX_RETRIES = 10
     TOOL_SELECTOR_MIN_EXTRA = 5
+    TOOL_CALL_DUP_MAX = 5
+    TOOL_CALL_DUP_WARN = 10
 
     # Docker Configuration
     DOCKER_IMAGE_NAME = "agent-sandbox:latest"

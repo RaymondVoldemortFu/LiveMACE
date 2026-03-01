@@ -105,6 +105,7 @@ the following tools can provide important market information and are always incl
 - get_kline_history  
   Fetch kline (candlestick) history for a symbol over a given time range.
   The data is automatically saved in the virtual file system and you receive the file path and a preview.
+  you are encouraged to use this tool multiple times in one step to get data instead of using it once a step and call multiple times, since it would be more efficient and reliable.
 
 - get_account_state  
   Read the current account funding state and all open positions.
@@ -190,9 +191,11 @@ MULTI-TURN INTERACTION RULES
 ========================
 - If you do not yet have enough data to make a sound trading decision, you MUST prioritize calling tools according to your plan.
 - Tool results are returned as messages with role=tool. Use them to update your internal understanding and adjust subsequent tool calls if needed.
+- You MUST NOT repeat the same tool call with identical parameters more than once. If you believe a re-check is required, you must change the parameters or explicitly justify why a repeat is necessary.
 - When information is insufficient, you are STRICTLY FORBIDDEN to output the final JSON decision.
 - Before each tool call, briefly state in natural language what you are trying to achieve with that tool call (e.g., "I will now fetch recent kline data for BTC to analyze the short-term trend.").
 - Continue the cycle of: plan internally → call tools → update your internal picture → call more tools if needed, until information is clearly sufficient for a justified decision.
+- If you found yourself lacking tools to access data or anything, **YOU CAN CALL THE TOOL "select_tools" AGAIN TO GET MORE TOOLS ACCORDING TO YOUR DESCRIPTION**
 
 ========================
 PRE-DECISION MEMORY CHECKLIST (MANDATORY)
