@@ -91,6 +91,15 @@ No rule conflicts detected.
   "reason": "<Concise explanation citing key data and rules>"
 }}
 </FINAL_JSON>
+
+**CRITICAL Operation Constraints:**
+- **"open"**: ONLY for coins NOT currently in portfolio. You CANNOT open a position if that symbol already exists in positions.
+  - BEFORE choosing operation="open", check Portfolio State to verify the symbol is NOT already held
+  - To modify an existing position: first "close" it completely (in a separate decision cycle)
+- **"close"**: ONLY for coins currently held in portfolio. Symbol MUST exist in positions.
+  - direction must match the existing position's side (LONG → "long", SHORT → "short")
+- **"hold"**: Use when keeping all positions unchanged
+- **System does NOT support "adding to" or "increasing" existing positions**
 ```
 
 ## 5. Critical Requirements
