@@ -31,12 +31,14 @@ def create_agent(agent_type: str, llm: LLMClient, tools: ToolRegistry, **kwargs)
     if normalized_type == "react" or normalized_type == "default":
         max_steps = kwargs.get("max_steps", AgentConfig.MAX_STEPS)
         user_id = kwargs.get("user_id")
-        return ReActAgent(llm, tools, max_steps=max_steps, user_id=user_id)
+        agent_name = kwargs.get("agent_name")
+        return ReActAgent(llm, tools, max_steps=max_steps, user_id=user_id, agent_name=agent_name)
         
     elif normalized_type == "multi_agent":
         max_steps = kwargs.get("max_steps", 15) # Default less steps for manager loop
         user_id = kwargs.get("user_id")
-        return MultiAgent(llm, tools, max_steps=max_steps, user_id=user_id)
+        agent_name = kwargs.get("agent_name")
+        return MultiAgent(llm, tools, max_steps=max_steps, user_id=user_id, agent_name=agent_name)
     
     elif normalized_type == "rule_aware":
         # Import rule-aware components

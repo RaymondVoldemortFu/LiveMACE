@@ -22,7 +22,7 @@ except ImportError:
 
 
 class SearchSubAgent:
-    def __init__(self, model: str = "gpt-4o-mini", api_key: str = None, base_url: str = None):
+    def __init__(self, model: str = "gpt-4o-mini", api_key: str = None, base_url: str = None, agent_name: Optional[str] = None):
         self.tavily_api_key = ToolConfig.tavily_api_key
         self.client = None
         if self.tavily_api_key:
@@ -42,6 +42,7 @@ class SearchSubAgent:
         self.model = model
         self.max_steps = ToolConfig.MAX_SEARCH_STEPS
         self.max_context_tokens = ToolConfig.MAX_CONTEXT_TOKENS
+        self.agent_name = agent_name or "SearchSubAgent"
         
         # Initialize tokenizer for accurate counting if available
         self.tokenizer = None
@@ -184,8 +185,9 @@ class SearchSubAgent:
         if not self.llm_client or not self.client:
             return {"error": "Sub-agent not fully initialized (missing LLM or Tavily key)."}
 
-        agent_logger.info(f"=== Starting Search Sub-Agent ===")
-        agent_logger.info(f"Query: {query}, Topic: {topic}, Time: {time_range}")
+        agent_name = self.agent_name
+        agent_logger.info(f"[{agent_name}] === Starting Search Sub-Agent ===")
+        agent_logger.info(f"[{agent_name}] Query: {query}, Topic: {topic}, Time: {time_range}")
 
         messages = [
             {"role": "system", "content": SUB_AGENT_SYSTEM_PROMPT.format(max_steps=self.max_steps)},
@@ -228,7 +230,7 @@ class SearchSubAgent:
         ]
 
         for step in range(self.max_steps):
-            agent_logger.info(f"--- Sub-Agent Step {step+1}/{self.max_steps} ---")
+            agent_logger.info(f"[{agent_name}] --- Sub-Agent Step {step+1}/{self.max_steps} ---")
             
             # Check token count before making request
             current_tokens = self._estimate_tokens(messages)
@@ -243,8 +245,8 @@ class SearchSubAgent:
             
             try:
                 # Log Request
-                llm_logger.info(f"--- Sub-Agent Step {step+1} Request ---")
-                llm_logger.info(json.dumps(messages, ensure_ascii=False, indent=2))
+                llm_logger.info(f"[{agent_name}] --- Sub-Agent Step {step+1} Request ---")
+                llm_logger.info(json.dumps({"agent": agent_name, "payload": messages}, ensure_ascii=False, indent=2))
 
                 msg = self.llm_client.call(messages, tools)
 
@@ -253,15 +255,15 @@ class SearchSubAgent:
                 messages.append(msg_dict)
 
                 # Log Response
-                llm_logger.info(f"--- Sub-Agent Step {step+1} Response ---")
-                llm_logger.info(json.dumps(msg_dict, ensure_ascii=False, indent=2))
-
-                agent_logger.info(f"Sub-Agent Content: {LLMClient.extract_text_content(msg)}")
+                llm_logger.info(f"[{agent_name}] --- Sub-Agent Step {step+1} Response ---")
+                llm_logger.info(json.dumps({"agent": agent_name, "payload": msg_dict}, ensure_ascii=False, indent=2))
+                content = LLMClient.extract_text_content(msg)
+                agent_logger.info(f"[{agent_name}] Sub-Agent Content: {content}")
 
                 # Check for tool calls
                 tool_calls = msg.tool_calls if hasattr(msg, 'tool_calls') else (msg_dict.get('tool_calls') or [])
                 if tool_calls:
-                    agent_logger.info(f"Sub-Agent requested {len(tool_calls)} tools")
+                    agent_logger.info(f"[{agent_name}] Sub-Agent requested {len(tool_calls)} tools")
                     for tc in tool_calls:
                         # Support both object and dict formats
                         if isinstance(tc, dict):
@@ -298,7 +300,7 @@ class SearchSubAgent:
                             search_logger.info(json.dumps(result, ensure_ascii=False, indent=2))
                             
                             # In agent_logger, just note success
-                            agent_logger.info("Search completed (results logged to search_results.log)")
+                            agent_logger.info(f"[{agent_name}] Search completed (results logged to search_results.log)")
                             
                         elif func_name == "extract_tool":
                             url = args.get("url")
@@ -309,7 +311,7 @@ class SearchSubAgent:
                             search_logger.info(f"--- Extract Results for '{url}' ---")
                             search_logger.info(json.dumps(result, ensure_ascii=False, indent=2))
                             
-                            agent_logger.info("Extraction completed (results logged to search_results.log)")
+                            agent_logger.info(f"[{agent_name}] Extraction completed (results logged to search_results.log)")
                         
                         messages.append({
                             "role": "tool",
@@ -319,27 +321,26 @@ class SearchSubAgent:
                         })
                 else:
                     # No tool calls, check for final response in content
-                    content = LLMClient.extract_text_content(msg)
                     match = re.search(r"<FINAL_RESPONSE>(.*?)</FINAL_RESPONSE>", content, re.DOTALL)
                     if match:
                         try:
                             final_json = json.loads(match.group(1).strip())
-                            agent_logger.info(f"Sub-Agent Final Response: {json.dumps(final_json, ensure_ascii=False)}")
+                            agent_logger.info(f"[{agent_name}] Sub-Agent Final Response: {json.dumps(final_json, ensure_ascii=False)}")
                             return final_json
                         except json.JSONDecodeError:
                             logger.error("Failed to parse final JSON from sub-agent.")
-                            agent_logger.error("Failed to parse final JSON from sub-agent.")
+                            agent_logger.error(f"[{agent_name}] Failed to parse final JSON from sub-agent.")
                             return {"summary": content, "sources": []} # Fallback
                     
                     # If no final tag but loop is ending or just chatter?
                     # If it's the last step and no final response, try to return content
                     if step == self.max_steps - 1:
-                         agent_logger.warning("Max steps reached without <FINAL_RESPONSE>")
+                         agent_logger.warning(f"[{agent_name}] Max steps reached without <FINAL_RESPONSE>")
                          return {"summary": content, "sources": []}
 
             except Exception as e:
                 logger.error(f"Sub-agent step failed: {e}")
-                agent_logger.error(f"Sub-agent step failed: {e}")
+                agent_logger.error(f"[{agent_name}] Sub-agent step failed: {e}")
                 return {"error": str(e)}
 
         return {"error": "Max steps reached without final response."}

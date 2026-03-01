@@ -26,29 +26,32 @@ REQUIRED_TOOL_NAMES = [
 REQUIRED_TOOLS_TEXT = ", ".join(REQUIRED_TOOL_NAMES)
 
 TOOL_SELECTOR_PROMPT = (
-    "You are a tool-selection assistant. "
-    "Given a task description and a full list of tool schemas, "
-    "choose the most useful tools for completing the task. "
+    "You are a tool-routing assistant. "
+    "Given the agent conversation context and a full list of tool schemas, "
+    "choose the most useful tools for the next step. "
     f"Required tools ({REQUIRED_TOOLS_TEXT}) are already selected and must always be included. "
     "You MUST return at least {min_k} tool names. "
     "Return ONLY valid JSON with the structure: "
     "{{\"selected_tools\": [\"tool_name\", ...]}}.\n"
     "Rules:\n"
     "- Choose only tool names that appear in the provided tool list.\n"
-    "- **Do NOT include duplicate tool names.**\n"
+    "- Do NOT include duplicate tool names.\n"
     "- Do not include explanations or extra fields.\n"
-    # "- Prefer tools that are directly helpful for the task and avoid noisy tools.\n"
 )
 
 
-def build_task_description(portfolio: Dict[str, Any], prices: Dict[str, Any]) -> str:
-    symbols = list(prices.keys()) if isinstance(prices, dict) else []
-    positions = list((portfolio or {}).get("positions", {}).keys())
-    return (
-        "Task: Make a trading decision using the agent. "
-        f"Symbols available in prices: {symbols}. "
-        f"Existing positions: {positions}."
-    )
+def _compact_messages(messages: List[Dict[str, Any]], limit: int = 30) -> List[Dict[str, Any]]:
+    trimmed = messages[-limit:] if len(messages) > limit else messages
+    compact = []
+    for msg in trimmed:
+        compact.append(
+            {
+                "role": msg.get("role"),
+                "content": msg.get("content"),
+                "name": msg.get("name"),
+            }
+        )
+    return compact
 
 
 def _extract_json(text: str) -> Optional[Dict[str, Any]]:
@@ -75,9 +78,10 @@ def _available_tool_names(tool_schemas: Iterable[Dict[str, Any]]) -> List[str]:
 
 def select_tools_with_llm(
     llm: LLMClient,
-    task_description: str,
+    messages: List[Dict[str, Any]],
     tool_schemas: List[Dict[str, Any]],
     min_k: int,
+    agent_name: str,
 ) -> Dict[str, Any]:
     max_retries = getattr(AgentConfig, "TOOL_SELECTOR_MAX_RETRIES", 10)
     last_trace = None
@@ -85,7 +89,7 @@ def select_tools_with_llm(
 
     for attempt in range(max_retries):
         prompt_payload = {
-            "task_description": task_description,
+            "context": _compact_messages(messages),
             "required_tools": REQUIRED_TOOL_NAMES,
             "min_k": min_k,
             "tools": tool_schemas,
@@ -110,6 +114,7 @@ def select_tools_with_llm(
         content = response.content or ""
         trace = {
             "type": "tool_selector",
+            "agent": agent_name,
             "attempt": attempt + 1,
             "request": messages,
             "response": content,
@@ -180,8 +185,8 @@ def _calculate_min_k(registry: ToolRegistry) -> int:
 def select_tools_for_task(
     llm: LLMClient,
     registry: ToolRegistry,
-    task_description: str,
-    top_k: Optional[int] = None,
+    messages: List[Dict[str, Any]],
+    agent_name: str = "ReActAgent",
 ) -> Dict[str, Any]:
     min_k = _calculate_min_k(registry)
 
@@ -190,7 +195,7 @@ def select_tools_for_task(
     ]
     tool_schemas = sorted(tool_schemas, key=lambda t: t.get("function", {}).get("name") or "")
 
-    selection_result = select_tools_with_llm(llm, task_description, tool_schemas, min_k)
+    selection_result = select_tools_with_llm(llm, messages, tool_schemas, min_k, agent_name)
     selected = selection_result.get("selected_tools", [])
     llm_trace = selection_result.get("llm_trace")
     combined = _apply_tool_selection(registry, selected)
@@ -198,7 +203,8 @@ def select_tools_for_task(
         tool_selection_logger.info(
             json.dumps(
                 {
-                    "task": task_description,
+                    "agent": agent_name,
+                    "context_size": len(messages),
                     "min_k": min_k,
                     "selected_tools": combined,
                 },
@@ -219,7 +225,7 @@ def ensure_tool_selector_tool(llm: LLMClient, registry: ToolRegistry):
         return
 
     def _select(task: str):
-        return select_tools_for_task(llm, registry, task, None)
+        return select_tools_for_task(llm, registry, [{"role": "user", "content": task}], agent_name="ToolSelector")
 
     registry.register(
         Tool(
@@ -236,6 +242,6 @@ def ensure_tool_selector_tool(llm: LLMClient, registry: ToolRegistry):
                 "required": ["task"],
             },
             func=_select,
-            metadata={"tier": "required"},
+            metadata={"tier": "meta"},
         )
     )

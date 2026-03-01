@@ -664,6 +664,7 @@ def call_agent_for_decision(
                 max_steps=AgentConfig.MAX_STEPS,
                 user_id=str(account.id),
                 account_id=account.id,
+                agent_name=account_name,
                 enable_llm_audit=True  # Enable LLM-based audit scoring
             )
             logger.info(f"Rule-Aware Agent created successfully for account {account.name}")
@@ -676,7 +677,8 @@ def call_agent_for_decision(
                 llm=llm,
                 tools=registry,
                 max_steps=AgentConfig.MAX_STEPS,
-                user_id=str(account.id)
+                user_id=str(account.id),
+                agent_name=account_name
             )
             logger.info(f"Standard {agent_type} agent created successfully for account {account.name}")
 

@@ -42,7 +42,7 @@ class ToolRegistry:
         self.active_tool_names = None
 
     def _iter_tools(self, use_active: bool = True):
-        if use_active and self.active_tool_names:
+        if use_active and self.active_tool_names is not None:
             tools = [self.tools[name] for name in self.active_tool_names if name in self.tools]
         else:
             tools = list(self.tools.values())

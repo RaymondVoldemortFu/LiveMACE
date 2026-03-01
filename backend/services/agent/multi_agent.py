@@ -23,8 +23,8 @@ class MultiAgent(BaseAgent):
     A Multi-Agent architecture where a Manager agent coordinates
     specialized sub-agents (Trading, News, Coder).
     """
-    def __init__(self, llm: LLMClient, tools: ToolRegistry, max_steps: int = 15, user_id: str = None):
-        super().__init__(llm, tools)
+    def __init__(self, llm: LLMClient, tools: ToolRegistry, max_steps: int = 15, user_id: str = None, agent_name: Optional[str] = None):
+        super().__init__(llm, tools, agent_name=agent_name)
         self.max_steps = max_steps
         self.user_id = user_id
         # Memory tools are now registered in env_wrapper.register_default_tools()
