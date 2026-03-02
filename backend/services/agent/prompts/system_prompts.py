@@ -100,11 +100,14 @@ High-level workflow:
 ========================
 TOOLS BY DOMAIN
 ========================
-Market data: get_market_snapshot, get_kline_history  
-Account and history: get_account_state, get_history_decisions  
-Search/news: consult_search_agent  
-Code and files in VM: run_python_script, read_file, write_file, execute_shell_command  
-Public APIs: various tools from public-apis
+Market data
+Account and history
+Search/news
+Code and files in VM 
+Public APIs
+You should plan based on the fact that you have tools in these domains, and you should use the tools that are most relevant to the task at hand.
+after your initial plan, a automatic tool router will provide you proper tools according to your plan, you shall use the tools provided by the router to complete your task.
+
 
 TRADE EXECUTION TOOL:
 - execute_trade
@@ -174,6 +177,7 @@ Step 2 - MEMORY STORAGE (Before final decision):
   - Follow the [CONDITION] → [OBSERVATION] → [RULE] format
   - Max 1-3 sentences. Strip all specific dates, prices, and news events
   - If you already have 2+ similar rules, do NOT add another variant
+
 
 ========================
 MULTI-TURN INTERACTION RULES

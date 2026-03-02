@@ -32,6 +32,44 @@ def _build_registry(db, account_id: int) -> ToolRegistry:
     return registry
 
 
+def _load_public_tools_schema() -> Dict[str, Dict[str, Any]]:
+    schema_path = os.path.join(
+        os.path.dirname(__file__),
+        "..",
+        "agent",
+        "public-apis",
+        "tools_schema.json",
+    )
+    schema_path = os.path.normpath(schema_path)
+    if not os.path.isfile(schema_path):
+        return {}
+    try:
+        with open(schema_path, "r", encoding="utf-8") as f:
+            tools = json.load(f)
+    except Exception:
+        return {}
+    out: Dict[str, Dict[str, Any]] = {}
+    for entry in tools or []:
+        if not isinstance(entry, dict):
+            continue
+        func = entry.get("function") or {}
+        name = func.get("name")
+        if name:
+            out[name] = func.get("parameters", {}) or {}
+    return out
+
+
+def _build_full_tool_schemas(db, account_id: int) -> Dict[str, Dict[str, Any]]:
+    registry = _build_registry(db, account_id)
+    schemas = {
+        t["function"]["name"]: t["function"].get("parameters", {})
+        for t in registry.openai_tools_all
+    }
+    public_schemas = _load_public_tools_schema()
+    schemas.update(public_schemas)
+    return schemas
+
+
 def _group_traces(traces: List[Any]) -> Dict[str, List[Any]]:
     grouped = defaultdict(list)
     for t in traces:
@@ -96,11 +134,7 @@ def run():
     for account in eval_accounts:
         traces = loader.get_traces(account.id)
         grouped = _group_traces(traces)
-        registry = _build_registry(db, account.id)
-        tool_schemas = {
-            t["function"]["name"]: t["function"].get("parameters", {})
-            for t in registry.openai_tools_all
-        }
+        tool_schemas = _build_full_tool_schemas(db, account.id)
 
         total_traces = len(grouped)
         processed = 0
