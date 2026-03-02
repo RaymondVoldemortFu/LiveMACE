@@ -24,6 +24,22 @@ KLINE_CACHE_PERIOD = "1m"
 KLINE_CACHE_MAX_STALE_SECONDS = 120
 
 
+def _period_to_seconds(period: str) -> int | None:
+    if not period:
+        return None
+    p = str(period).strip().lower()
+    try:
+        if p.endswith("m"):
+            return int(p[:-1]) * 60
+        if p.endswith("h"):
+            return int(p[:-1]) * 60 * 60
+        if p.endswith("d"):
+            return int(p[:-1]) * 24 * 60 * 60
+    except ValueError:
+        return None
+    return None
+
+
 def _normalize_market(market: str | None) -> str:
     if not market:
         return "CRYPTO"
@@ -92,10 +108,17 @@ def _get_cached_klines(symbol: str, market: str, period: str, count: int) -> Lis
             return []
 
         rows_sorted = sorted(rows, key=lambda r: r.timestamp)
-        if period == KLINE_CACHE_PERIOD:
-            latest_ts = rows_sorted[-1].timestamp
-            if (now_timestamp() - latest_ts) > KLINE_CACHE_MAX_STALE_SECONDS:
-                return []
+        latest_ts = rows_sorted[-1].timestamp
+        period_seconds = _period_to_seconds(period)
+        # Period-aware stale threshold:
+        # - For small periods, require fairly fresh data
+        # - For large periods (e.g., 1d), allow data within a candle duration
+        stale_threshold = max(
+            KLINE_CACHE_MAX_STALE_SECONDS,
+            int(period_seconds) if period_seconds else KLINE_CACHE_MAX_STALE_SECONDS,
+        )
+        if (now_timestamp() - latest_ts) > stale_threshold:
+            return []
 
         return [
             {

@@ -11,11 +11,13 @@ from repositories.position_repo import list_positions
 from services.asset_calculator import calc_positions_value, calc_positions_market_value
 from services.market_data import get_last_price
 from services.scheduler import add_account_snapshot_job, remove_account_snapshot_job
-from database.models import Trade, User, Account, CryptoPrice, AIDecisionLog
-from sqlalchemy import func
-from datetime import datetime, timedelta, date
+from database.models import Trade, AIDecisionLog
+from datetime import datetime
 import logging
 from services.asset_curve_calculator import get_all_asset_curves_data_new
+
+
+logger = logging.getLogger(__name__)
 
 
 class ConnectionManager:
@@ -69,9 +71,6 @@ class ConnectionManager:
                     # Log the error and remove broken connection
                     logging.warning(f"Failed to broadcast message to WebSocket: {e}")
                     websockets.discard(ws)
-
-
-manager = ConnectionManager()
 
 
 async def broadcast_asset_curve_update(timeframe: str = "1h"):
@@ -536,8 +535,18 @@ async def websocket_endpoint(websocket: WebSocket):
                     if timeframe not in ["5m", "1h", "1d"]:
                         await websocket.send_text(json.dumps({"type": "error", "message": "Invalid timeframe. Must be 5m, 1h, or 1d"}))
                         continue
-                    
-                    asset_curves = get_all_asset_curves_data(db, timeframe)
+
+                    try:
+                        asset_curves = get_all_asset_curves_data(db, timeframe)
+                    except Exception:
+                        logging.exception("Failed to get asset curve")
+                        await websocket.send_text(json.dumps({
+                            "type": "asset_curve_error",
+                            "timeframe": timeframe,
+                            "message": "Failed to compute asset curve"
+                        }))
+                        continue
+
                     await websocket.send_text(json.dumps({
                         "type": "asset_curve_data",
                         "timeframe": timeframe,
@@ -625,9 +634,7 @@ async def websocket_endpoint(websocket: WebSocket):
                             break
                     except Exception as e:
                         # Unexpected errors
-                        import traceback
-                        print(f"Order placement error: {e}")
-                        print(traceback.format_exc())
+                        logging.exception("Order placement error")
                         try:
                             await websocket.send_text(json.dumps({"type": "error", "message": f"order placement failed: {str(e)}"}))
                         except:
