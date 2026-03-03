@@ -146,7 +146,11 @@ class ReActAgent(BaseAgent):
                     for tc in tool_calls:
                         name = tc.function.name
                         args_str = tc.function.arguments or "{}"
-                        args = json.loads(args_str)
+                        try:
+                            args = json.loads(args_str)
+                        except json.JSONDecodeError as e:
+                            logger.warning(f"Invalid tool arguments for {name}: {e}; raw={args_str!r}")
+                            args = {}
                         
                         # Console output (Simple)
                         logger.info(f"Executing tool: {name}")
@@ -154,8 +158,13 @@ class ReActAgent(BaseAgent):
                         # File output (Detailed)
                         agent_logger.info(f"Executing tool '{name}' with args: {args_str}")
 
-                        tool = self.tools.get(name)
-                        result = tool(**args)
+                        try:
+                            tool = self.tools.get(name)
+                            result = tool(**args)
+                        except Exception as tool_err:
+                            # Never abort the whole run because one tool call fails.
+                            logger.error(f"Tool execution failed for {name}: {tool_err}")
+                            result = {"error": f"Tool execution failed: {str(tool_err)}"}
                         
                         # Log tool result
                         agent_logger.info(f"Tool '{name}' result: {json.dumps(result, ensure_ascii=False)}")

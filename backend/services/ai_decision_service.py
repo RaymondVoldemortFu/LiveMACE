@@ -410,7 +410,17 @@ def call_agent_for_decision(
 
     # Lease a container for the agent session
     container_service = ContainerService()
-    container_service.lease_container(account_id)
+    leased_container_id = container_service.lease_container(account_id)
+    if not leased_container_id:
+        logger.error(f"Failed to lease sandbox container for account {account_name} (ID: {account_id})")
+        return {
+            "operation": "hold",
+            "symbol": "",
+            "direction": "long",
+            "target_portion_of_balance": 0.0,
+            "leverage": 1,
+            "reason": "Container unavailable, fallback hold",
+        }
 
     trace_id = str(uuid.uuid4())
     step_counter = 0
@@ -454,6 +464,10 @@ def call_agent_for_decision(
             db.commit()
         except Exception as e:
             logger.error(f"Failed to save agent trace: {e}")
+            try:
+                db.rollback()
+            except Exception:
+                pass
 
     try:
         llm = LLMClient(
@@ -493,4 +507,5 @@ def call_agent_for_decision(
         return None
     finally:
         # Always release the container
-        container_service.release_container(account_id)
+        if leased_container_id:
+            container_service.release_container(account_id)
