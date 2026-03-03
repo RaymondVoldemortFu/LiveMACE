@@ -431,6 +431,16 @@ def call_agent_for_decision(
         try:
             role = message.get("role", "unknown")
             content = message.get("content")
+            if content in (None, ""):
+                # Some OpenAI-compatible providers return reasoning text in
+                # reasoning_content while keeping content=null when tool_calls exist.
+                reasoning_content = message.get("reasoning_content")
+                if reasoning_content not in (None, ""):
+                    content = reasoning_content
+                else:
+                    reasoning = message.get("reasoning")
+                    if reasoning not in (None, ""):
+                        content = reasoning
             
             # Handle tool calls serialization
             tool_calls_data = message.get("tool_calls")
@@ -438,10 +448,12 @@ def call_agent_for_decision(
             if tool_calls_data:
                 tool_calls_list = []
                 for t in tool_calls_data:
-                    if hasattr(t, "model_dump"):
+                    if isinstance(t, dict):
+                        tool_calls_list.append(t)
+                    elif hasattr(t, "model_dump"):
                         tool_calls_list.append(t.model_dump())
                     elif hasattr(t, "dict"):
-                         tool_calls_list.append(t.dict())
+                        tool_calls_list.append(t.dict())
                     else:
                         tool_calls_list.append(str(t))
                 tool_calls_str = json.dumps(tool_calls_list, ensure_ascii=False)

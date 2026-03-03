@@ -223,9 +223,9 @@ export default function AccountDataView({
   }
 
   return (
-    <div className="h-full flex flex-col space-y-6">
+    <div className="min-h-full flex flex-col space-y-6">
       {/* Main Content */}
-      <div className={`grid gap-6 overflow-hidden ${showAssetCurves ? 'grid-cols-5' : 'grid-cols-1'} h-full`}>
+      <div className={`grid gap-6 ${showAssetCurves ? 'grid-cols-5' : 'grid-cols-1'}`}>
         {/* Asset Curves */}
         {showAssetCurves && (
           <div className="col-span-3">
@@ -234,7 +234,7 @@ export default function AccountDataView({
         )}
 
         {/* Tabs and Trading Panel */}
-        <div className={`${showAssetCurves ? 'col-span-2' : 'col-span-1'} overflow-hidden flex flex-col`}>
+        <div className={`${showAssetCurves ? 'col-span-2' : 'col-span-1'} flex flex-col`}>
           {/* Account Selector */}
           <div className="flex justify-end mb-4">
             <AccountSelector
@@ -407,10 +407,10 @@ export default function AccountDataView({
           </Card>
 
           {/* Content Area */}
-          <div className={`flex-1 overflow-hidden ${showTradingPanel ? 'grid grid-cols-4 gap-4' : ''}`}>
+          <div className={`${showTradingPanel ? 'grid grid-cols-4 gap-4' : ''}`}>
             {/* Tabs */}
-            <div className={`${showTradingPanel ? 'col-span-3' : 'col-span-1'} overflow-hidden`}>
-              <Tabs defaultValue="ai-decisions" className="h-full flex flex-col">
+            <div className={`${showTradingPanel ? 'col-span-3' : 'col-span-1'}`}>
+              <Tabs defaultValue="ai-decisions" className="flex flex-col">
                 <TabsList className="grid w-full grid-cols-4">
                   <TabsTrigger value="ai-decisions">AI Decisions</TabsTrigger>
                   <TabsTrigger value="positions">Positions</TabsTrigger>
@@ -418,23 +418,23 @@ export default function AccountDataView({
                   <TabsTrigger value="trades">Trades</TabsTrigger>
                 </TabsList>
 
-                <div className="flex-1 overflow-hidden">
-                  <TabsContent value="ai-decisions" className="h-full overflow-y-auto">
+                <div>
+                  <TabsContent value="ai-decisions" className="overflow-y-auto">
                     <AIDecisionLog aiDecisions={aiDecisions} />
                   </TabsContent>
 
-                  <TabsContent value="positions" className="h-full overflow-y-auto">
+                  <TabsContent value="positions" className="overflow-y-auto">
                     <div className="space-y-6">
                       <PortfolioPieChart overview={overview} positions={positions} />
                       <PositionList positions={positions} />
                     </div>
                   </TabsContent>
 
-                  <TabsContent value="orders" className="h-full overflow-y-auto">
+                  <TabsContent value="orders" className="overflow-y-auto">
                     <OrderBook orders={orders} onCancelOrder={cancelOrder} />
                   </TabsContent>
 
-                  <TabsContent value="trades" className="h-full overflow-y-auto">
+                  <TabsContent value="trades" className="overflow-y-auto">
                     <TradeHistory trades={trades} />
                   </TabsContent>
                 </div>
@@ -443,7 +443,7 @@ export default function AccountDataView({
 
             {/* Trading Panel */}
             {showTradingPanel && (
-              <div className="col-span-1 overflow-hidden">
+              <div className="col-span-1">
                 <TradingPanel
                   onPlace={(payload) => {
                     // Handle order placement via websocket

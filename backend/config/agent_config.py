@@ -21,6 +21,11 @@ class AgentConfig:
     # Agent execution concurrency
     AGENT_MAX_CONCURRENCY = 4
 
+    # US stock data source behavior (Alpaca)
+    # True: force feed=IEX
+    # False: do not pass feed argument (Alpaca default routing)
+    ALPACA_USE_IEX_FEED = os.getenv("ALPACA_USE_IEX_FEED", "true").strip().lower() in {"1", "true", "yes", "on"}
+
     # Memory Configuration
     MEMORY_ENABLED = False
     MEMORY_PROVIDER = "mem0"
