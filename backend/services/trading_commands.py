@@ -366,7 +366,7 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
                         continue
                     
                     # Open a new position - calculate quantity based on available cash and target portion
-                    available_cash = account.current_cash
+                    available_cash = float(account.current_cash)
                     order_value = available_cash * target_portion
                     if market == "US":
                         quantity = int(Decimal(str(order_value)) / Decimal(str(price)))
