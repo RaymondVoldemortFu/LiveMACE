@@ -156,8 +156,9 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
         logger.warning("AI trading loop is already running; skip this trigger to avoid overlap")
         return
 
-    db = SessionLocal()
+    db = None
     try:
+        db = SessionLocal()
         accounts = get_active_ai_accounts(db)
         if not accounts:
             logger.debug("No available accounts, skipping AI trading")
@@ -432,9 +433,11 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
 
     except Exception as err:
         logger.error(f"AI-driven order placement failed: {err}", exc_info=True)
-        db.rollback()
+        if db is not None:
+            db.rollback()
     finally:
-        db.close()
+        if db is not None:
+            db.close()
         _ai_trade_run_lock.release()
 
 
