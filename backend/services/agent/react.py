@@ -28,8 +28,9 @@ class ReActAgent(BaseAgent):
 
     def _missing_required_args(self, func: Callable, args: Dict[str, Any]) -> List[str]:
         """Return missing required callable parameters."""
+        target = getattr(func, "func", func)
         try:
-            sig = inspect.signature(func)
+            sig = inspect.signature(target)
         except Exception:
             return []
 

@@ -34,8 +34,9 @@ class MultiAgent(BaseAgent):
         self.context = []
 
     def _missing_required_args(self, func: Callable, args: Dict[str, Any]) -> List[str]:
+        target = getattr(func, "func", func)
         try:
-            sig = inspect.signature(func)
+            sig = inspect.signature(target)
         except Exception:
             return []
 
