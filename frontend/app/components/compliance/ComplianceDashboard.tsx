@@ -254,7 +254,7 @@ export default function ComplianceDashboard({ accounts }: ComplianceDashboardPro
         mode: 'index',
         intersect: false,
         callbacks: {
-          label: function(context) {
+          label: function(context: any) {
             let label = context.dataset.label || '';
             if (label) {
               label += ': ';
@@ -274,7 +274,7 @@ export default function ComplianceDashboard({ accounts }: ComplianceDashboardPro
         beginAtZero: true,
         max: 1.0,
         ticks: {
-          callback: function(value) {
+          callback: function(value: any) {
             return (Number(value) * 100).toFixed(0) + '%';
           }
         },
@@ -469,7 +469,7 @@ export default function ComplianceDashboard({ accounts }: ComplianceDashboardPro
         <div className="mt-4 text-xs text-muted-foreground">
           <p>• <span className="text-blue-600 font-semibold">Rule Sat</span>: Rule satisfaction score (compliance with R0/R1/R2 rules)</p>
           <p>• <span className="text-purple-600 font-semibold">Audit Score</span>: LLM audit score (reasoning quality and rule awareness)</p>
-          <p>• <span className="text-green-600 font-semibold">Final Score</span>: Combined score (60% Rule Sat + 40% Audit Score)</p>
+          <p>• <span className="text-green-600 font-semibold">Final Score</span>: Combined score (50% Rule Sat + 50% Audit Score)</p>
         </div>
       </div>
     </div>
