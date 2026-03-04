@@ -17,7 +17,7 @@ class AgentConfig:
     DOCKERFILE_PATH = os.path.join(os.path.dirname(__file__), "../services/agent/docker")
 
     # Memory Configuration
-    MEMORY_ENABLED = True
+    # Note: Memory is now controlled per-account via account.memory_enabled field
     # Lightweight embedding model (384 dimensions)
     MEMORY_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
     # Memory backend: "local" (SQLite) or "chroma" (vector database)

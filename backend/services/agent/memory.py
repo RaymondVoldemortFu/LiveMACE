@@ -240,13 +240,10 @@ class LocalMemory(MemoryInterface):
 def get_memory_service() -> Optional[MemoryInterface]:
     """
     Get the memory service instance based on configuration.
-    Returns ChromaMemory or LocalMemory if enabled, None otherwise.
+    Returns ChromaMemory or LocalMemory, None if dependencies unavailable.
     """
-    if not AgentConfig.MEMORY_ENABLED:
-        return None
-
     if not SENTENCE_TRANSFORMERS_AVAILABLE:
-        logger.warning("AgentConfig.MEMORY_ENABLED is True, but sentence-transformers is not installed.")
+        logger.warning("sentence-transformers is not installed.")
         logger.warning("Install with: pip install sentence-transformers")
         return None
 

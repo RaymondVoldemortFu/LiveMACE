@@ -6,7 +6,7 @@ from typing import Dict, Any, List, Callable, Optional
 from .llm_client import LLMClient
 from .tools import ToolRegistry
 from config.agent_config import AgentConfig
-from services.agent.prompts.system_prompts import TRADE_AGENT_PROMPT
+from services.agent.prompts.system_prompts import get_trade_agent_prompt
 from .base import BaseAgent
 
 # Define loggers
@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 llm_logger = logging.getLogger("llm_trace")
 agent_logger = logging.getLogger("agent_decision")
 
-SYSTEM_PROMPT = TRADE_AGENT_PROMPT
+SYSTEM_PROMPT = None
 
 class ReActAgent(BaseAgent):
     def __init__(self, llm: LLMClient, tools: ToolRegistry, max_steps: int = AgentConfig.MAX_STEPS, user_id: str = None):
@@ -39,12 +39,16 @@ class ReActAgent(BaseAgent):
         agent_logger.info(f"Portfolio: {json.dumps(portfolio, ensure_ascii=False)}")
         agent_logger.info(f"Prices: {json.dumps(prices, ensure_ascii=False)}")
 
+        # Check if memory tools are available
+        has_memory = any(tool.name in ['memory_add', 'memory_search'] for tool in self.tools.tools.values())
+        system_prompt = get_trade_agent_prompt(memory_enabled=has_memory)
+
         # Get current UTC+8 time
         tz_utc_8 = timezone(timedelta(hours=8))
         current_time = datetime.now(tz_utc_8).strftime("%Y-%m-%d %H:%M:%S")
 
         # Add time context to system prompt
-        system_prompt_with_time = f"{SYSTEM_PROMPT}\n\nCurrent Time (UTC+8): {current_time}"
+        system_prompt_with_time = f"{system_prompt}\n\nCurrent Time (UTC+8): {current_time}"
 
         messages: List[Dict[str, Any]] = [
             {"role": "system", "content": system_prompt_with_time},

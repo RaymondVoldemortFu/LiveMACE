@@ -275,3 +275,72 @@ Remember:
 - Outside of the final output, the string "<FINAL_JSON>" MUST NOT appear.
 - Inside the tags, the content MUST be valid JSON.
 """
+
+
+def get_trade_agent_prompt(memory_enabled: bool = False) -> str:
+    """
+    Get trading agent prompt based on memory configuration.
+
+    Args:
+        memory_enabled: Whether memory system is enabled for this account
+
+    Returns:
+        System prompt string
+    """
+    if not memory_enabled:
+        # Remove memory-related sections for accounts without memory
+        prompt = TRADE_AGENT_PROMPT
+
+        # Remove memory workflow steps (lines 61-80)
+        prompt = prompt.replace("""
+3. MEMORY RETRIEVAL (After full analysis):
+   - Now you have complete context: positions, prices, trends, news
+   - Ask: "Have I seen similar market conditions or patterns before?"
+   - Call memory_search with a specific query based on your findings:
+     * "BTC volume spike patterns" or "ETH resistance breakout"
+     * "high leverage risk during news events"
+     * "managing underwater long positions"
+   - Use retrieved insights to refine your decision
+
+4. SYNTHESIS AND EVALUATION:
+   - Combine: market data + news + memory insights
+   - Evaluate risk, position sizing, leverage
+   - Form your trading decision
+
+5. MEMORY STORAGE (Before final decision):
+   - Ask: "Did I discover something new worth remembering?"
+   - If YES: search first to check for duplicates
+   - Only add if meaningfully different from existing memories
+
+6. Complete the PRE-DECISION MEMORY CHECKLIST, then output your final JSON decision.""", """
+3. SYNTHESIS AND EVALUATION:
+   - Combine: market data + news insights
+   - Evaluate risk, position sizing, leverage
+   - Form your trading decision
+
+4. Output your final JSON decision.""")
+
+        # Remove memory system section (lines 127-180)
+        start_marker = "========================\nMEMORY SYSTEM (CRITICAL FOR LEARNING)\n========================"
+        end_marker = "========================\nMULTI-TURN INTERACTION RULES\n========================"
+
+        start_idx = prompt.find(start_marker)
+        end_idx = prompt.find(end_marker)
+
+        if start_idx != -1 and end_idx != -1:
+            prompt = prompt[:start_idx] + prompt[end_idx:]
+
+        # Remove memory checklist (lines 191-207)
+        checklist_start = "========================\nPRE-DECISION MEMORY CHECKLIST (MANDATORY)\n========================"
+        checklist_end = "========================\nFINAL OUTPUT REQUIREMENTS\n========================"
+
+        checklist_start_idx = prompt.find(checklist_start)
+        checklist_end_idx = prompt.find(checklist_end)
+
+        if checklist_start_idx != -1 and checklist_end_idx != -1:
+            prompt = prompt[:checklist_start_idx] + prompt[checklist_end_idx:]
+
+        return prompt
+
+    return TRADE_AGENT_PROMPT
+
