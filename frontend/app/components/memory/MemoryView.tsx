@@ -11,7 +11,12 @@ interface MemoryViewProps {
 }
 
 export function MemoryView({ account, accounts }: MemoryViewProps) {
-  const [selectedAccountId, setSelectedAccountId] = useState<number | null>(account?.id || null)
+  // Filter accounts with memory enabled
+  const memoryEnabledAccounts = accounts.filter(acc => acc.memory_enabled === 'true')
+
+  const [selectedAccountId, setSelectedAccountId] = useState<number | null>(
+    memoryEnabledAccounts.find(a => a.id === account?.id)?.id || memoryEnabledAccounts[0]?.id || null
+  )
   const [memories, setMemories] = useState<any[]>([])
   const [metrics, setMetrics] = useState<any>(null)
   const [timeline, setTimeline] = useState<any[]>([])
@@ -20,10 +25,10 @@ export function MemoryView({ account, accounts }: MemoryViewProps) {
 
   // Update selected account when prop changes
   useEffect(() => {
-    if (account?.id && !selectedAccountId) {
+    if (account?.id && account.memory_enabled === 'true' && !selectedAccountId) {
       setSelectedAccountId(account.id)
     }
-  }, [account?.id, selectedAccountId])
+  }, [account?.id, account?.memory_enabled, selectedAccountId])
 
   useEffect(() => {
     if (!selectedAccountId) {
@@ -52,6 +57,15 @@ export function MemoryView({ account, accounts }: MemoryViewProps) {
   }, [selectedAccountId])
 
   const selectedAccount = accounts.find(a => a.id === selectedAccountId)
+
+  if (memoryEnabledAccounts.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center h-96 space-y-4">
+        <p className="text-muted-foreground text-lg">No accounts with memory enabled</p>
+        <p className="text-sm text-muted-foreground">Enable memory in account settings to use this feature</p>
+      </div>
+    )
+  }
 
   if (!selectedAccountId) {
     return (
@@ -87,7 +101,7 @@ export function MemoryView({ account, accounts }: MemoryViewProps) {
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {accounts.map((acc) => (
+              {memoryEnabledAccounts.map((acc) => (
                 <SelectItem key={acc.id} value={acc.id.toString()}>
                   {acc.name} ({acc.account_type})
                 </SelectItem>
@@ -113,7 +127,7 @@ export function MemoryView({ account, accounts }: MemoryViewProps) {
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {accounts.map((acc) => (
+            {memoryEnabledAccounts.map((acc) => (
               <SelectItem key={acc.id} value={acc.id.toString()}>
                 {acc.name} ({acc.account_type})
               </SelectItem>

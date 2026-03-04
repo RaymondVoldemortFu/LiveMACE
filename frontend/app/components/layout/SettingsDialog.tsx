@@ -9,6 +9,8 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Switch } from '@/components/ui/switch'
+import { Label } from '@/components/ui/label'
 import {
   Select,
   SelectContent,
@@ -59,6 +61,7 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
     base_url: '',
     api_key: 'default-key-please-update-in-settings',
     agent_type: 'react',
+    memory_enabled: 'false',
   })
   const [editAccount, setEditAccount] = useState<AIAccountCreate>({
     name: '',
@@ -66,6 +69,7 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
     base_url: '',
     api_key: 'default-key-please-update-in-settings',
     agent_type: 'react',
+    memory_enabled: 'false',
   })
 
   const loadAccounts = async () => {
@@ -234,6 +238,7 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
       base_url: account.base_url || '',
       api_key: account.api_key || '',
       agent_type: account.agent_type || 'react',
+      memory_enabled: account.memory_enabled || 'false',
     })
   }
 
@@ -318,6 +323,14 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
                           value={editAccount.api_key || ''}
                           onChange={(e) => setEditAccount({ ...editAccount, api_key: e.target.value })}
                         />
+                        <div className="flex items-center space-x-2">
+                          <Switch
+                            id="memory-enabled-edit"
+                            checked={editAccount.memory_enabled === 'true'}
+                            onCheckedChange={(checked) => setEditAccount({ ...editAccount, memory_enabled: checked ? 'true' : 'false' })}
+                          />
+                          <Label htmlFor="memory-enabled-edit">Enable Memory System</Label>
+                        </div>
                         {testResult && (
                           <div className={`text-xs p-2 rounded ${
                             testResult.includes('❌') 
@@ -342,6 +355,7 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
                           <div className="font-medium">{account.name}</div>
                           <div className="text-xs text-muted-foreground">
                             {account.model ? `Model: ${account.model}` : 'No model configured'} • {account.agent_type === 'multi_agent' ? 'Multi-Agent' : 'ReAct'}
+                            {account.memory_enabled === 'true' && ' • 🧠 Memory'}
                           </div>
                           {account.base_url && (
                             <div className="text-xs text-muted-foreground truncate">
@@ -414,6 +428,14 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
                   value={newAccount.api_key || ''}
                   onChange={(e) => setNewAccount({ ...newAccount, api_key: e.target.value })}
                 />
+                <div className="flex items-center space-x-2">
+                  <Switch
+                    id="memory-enabled-new"
+                    checked={newAccount.memory_enabled === 'true'}
+                    onCheckedChange={(checked) => setNewAccount({ ...newAccount, memory_enabled: checked ? 'true' : 'false' })}
+                  />
+                  <Label htmlFor="memory-enabled-new">Enable Memory System</Label>
+                </div>
                 <div className="flex gap-2">
                   <Button onClick={handleCreateAccount} disabled={loading}>
                     Test and Create

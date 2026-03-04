@@ -41,6 +41,7 @@ class Account(Base):
     name = Column(String(100), nullable=False)  # Display name (e.g., "GPT Trader", "Claude Analyst")
     account_type = Column(String(20), nullable=False, default="AI")  # "AI" or "MANUAL"
     agent_type = Column(String(20), nullable=False, default="react") # "react" or "multi_agent"
+    memory_enabled = Column(String(10), nullable=False, default="false")  # "true" or "false"
     is_active = Column(String(10), nullable=False, default="true")
     
     # AI Model Configuration (for AI accounts)
