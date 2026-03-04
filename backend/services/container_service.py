@@ -65,9 +65,79 @@ class ContainerService:
                 logger.error(f"Dockerfile path not found: {dockerfile_path}")
 
     def _pool_capacity(self) -> int:
-        base = max(1, int(getattr(AgentConfig, "DOCKER_POOL_SIZE", 1)))
+        base = self._desired_base_pool_size()
         overflow = max(0, int(getattr(AgentConfig, "DOCKER_POOL_MAX_OVERFLOW", 0)))
         return base + overflow
+
+    def _count_active_ai_accounts(self) -> int:
+        """
+        Count active AI accounts from DB.
+        Fallback to configured baseline when DB is unavailable.
+        """
+        try:
+            from database.connection import SessionLocal
+            from database.models import Account
+
+            active_values = ["true", "True", "1", "TRUE"]
+            db = SessionLocal()
+            try:
+                count = (
+                    db.query(Account)
+                    .filter(
+                        Account.account_type == "AI",
+                        Account.is_active.in_(active_values),
+                    )
+                    .count()
+                )
+                return int(count)
+            finally:
+                db.close()
+        except Exception as e:
+            logger.warning(f"Failed to count active AI accounts for dynamic pool sizing: {e}")
+            return max(1, int(getattr(AgentConfig, "DOCKER_POOL_SIZE", 1)))
+
+    def _desired_base_pool_size(self) -> int:
+        baseline = max(1, int(getattr(AgentConfig, "DOCKER_POOL_SIZE", 1)))
+        dynamic_enabled = bool(
+            getattr(AgentConfig, "DOCKER_POOL_DYNAMIC_BY_ACTIVE_ACCOUNTS", False)
+        )
+        if not dynamic_enabled:
+            return baseline
+
+        active_accounts = max(1, self._count_active_ai_accounts())
+        desired = max(baseline, active_accounts)
+
+        max_size = int(getattr(AgentConfig, "DOCKER_POOL_MAX_SIZE", 0) or 0)
+        if max_size > 0:
+            desired = min(desired, max_size)
+        return desired
+
+    def _sync_pool_size(self):
+        """
+        Dynamically grow/shrink idle pool to match desired base size.
+        Never force-stop active leased containers.
+        """
+        if not self.client:
+            return
+
+        desired_total = self._desired_base_pool_size()
+        tracked_count = len(self._tracked_container_ids())
+
+        # Grow pool if too small
+        while tracked_count < desired_total:
+            try:
+                c = self._create_container()
+                self.idle_containers.append(c)
+                tracked_count += 1
+            except Exception as e:
+                logger.error(f"Failed to grow container pool: {e}")
+                break
+
+        # Shrink only idle containers when too large
+        while tracked_count > desired_total and self.idle_containers:
+            c = self.idle_containers.pop()
+            self._remove_container_quietly(c)
+            tracked_count -= 1
 
     def _is_container_healthy(self, container) -> bool:
         try:
@@ -137,8 +207,8 @@ class ContainerService:
         except Exception as e:
             logger.warning(f"Failed to cleanup exited sandbox containers: {e}")
 
-        # Pre-warm base pool for lower latency and reliable parallel leasing
-        base_size = max(1, int(getattr(AgentConfig, "DOCKER_POOL_SIZE", 1)))
+        # Pre-warm dynamic base pool for lower latency and reliable parallel leasing
+        base_size = self._desired_base_pool_size()
         for _ in range(base_size):
             try:
                 c = self._create_container()
@@ -161,6 +231,7 @@ class ContainerService:
 
         with self._condition:
             self._initialize_pool_if_needed()
+            self._sync_pool_size()
 
             existing = self.active_containers.get(account_id)
             if existing and self._is_container_healthy(existing):
@@ -226,6 +297,7 @@ class ContainerService:
                 logger.warning(
                     f"Removed unhealthy container for account {account_id} during release"
                 )
+            self._sync_pool_size()
             self._condition.notify_all()
 
     def _get_or_recover_container(self, account_id: int):

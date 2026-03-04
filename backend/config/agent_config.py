@@ -11,7 +11,12 @@ class AgentConfig:
 
     # Docker Configuration
     DOCKER_IMAGE_NAME = "agent-sandbox:latest"
+    # Minimum baseline pool size
     DOCKER_POOL_SIZE = 3
+    # Dynamic pool sizing based on active AI accounts
+    DOCKER_POOL_DYNAMIC_BY_ACTIVE_ACCOUNTS = os.getenv("DOCKER_POOL_DYNAMIC_BY_ACTIVE_ACCOUNTS", "true").strip().lower() in {"1", "true", "yes", "on"}
+    # Optional hard cap for dynamic base pool (0 means no cap)
+    DOCKER_POOL_MAX_SIZE = int(os.getenv("DOCKER_POOL_MAX_SIZE", "0"))
     DOCKER_POOL_MAX_OVERFLOW = 3
     DOCKER_POOL_LEASE_TIMEOUT_SECONDS = 30
     MAX_READ_CHARS = 1000  # Config for file read limit
