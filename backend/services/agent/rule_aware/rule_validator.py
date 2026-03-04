@@ -464,11 +464,16 @@ class RuleValidator:
                         ).first()
                         
                         if asset_meta and asset_meta.sector:
-                            sector_lower = asset_meta.sector.lower()
-                            # Check against both sector and crypto theme preferences
-                            if any(s.lower() in sector_lower or sector_lower in s.lower() 
-                                   for s in (preferred_sectors + preferred_crypto_themes)):
-                                preferred_value += position_value
+                            sector_normalized = asset_meta.sector.strip().lower()
+                            # Use exact matching or word boundary matching
+                            for pref in (preferred_sectors + preferred_crypto_themes):
+                                pref_normalized = pref.strip().lower()
+                                # Exact match or sector contains the preference as a whole word
+                                if (sector_normalized == pref_normalized or 
+                                    pref_normalized in sector_normalized.split() or
+                                    sector_normalized in pref_normalized.split()):
+                                    preferred_value += position_value
+                                    break  # Don't double-count
                     
                     if total_value > 0:
                         preferred_ratio = preferred_value / total_value

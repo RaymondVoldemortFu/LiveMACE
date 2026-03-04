@@ -328,11 +328,19 @@ class RuleEvaluator:
             # Calculate allocation in preferred sectors/themes
             preferred_allocation = 0
             for sector, allocation in sector_allocation.items():
-                sector_lower = sector.lower() if sector else ""
-                # Check if sector matches any preferred sector or crypto theme
-                if any(s.lower() in sector_lower or sector_lower in s.lower() 
-                       for s in (preferred_sectors + preferred_crypto_themes)):
-                    preferred_allocation += allocation
+                if not sector:
+                    continue
+                sector_normalized = sector.strip().lower()
+                # Use exact matching or word boundary matching to avoid false positives
+                # e.g., "ai" should match "AI" but not "available"
+                for pref in (preferred_sectors + preferred_crypto_themes):
+                    pref_normalized = pref.strip().lower()
+                    # Exact match or sector contains the preference as a whole word
+                    if (sector_normalized == pref_normalized or 
+                        pref_normalized in sector_normalized.split() or
+                        sector_normalized in pref_normalized.split()):
+                        preferred_allocation += allocation
+                        break  # Don't double-count if multiple matches
             
             if preferred_allocation < target_min:
                 # Below minimum - proportional penalty
