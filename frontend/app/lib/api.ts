@@ -164,6 +164,7 @@ export interface TradingAccountCreate {
   base_url?: string
   api_key?: string
   agent_type?: string
+  memory_enabled?: string
   initial_capital?: number
   account_type?: string
 }
@@ -174,6 +175,7 @@ export interface TradingAccountUpdate {
   base_url?: string
   api_key?: string
   agent_type?: string
+  memory_enabled?: string
 }
 
 
@@ -254,7 +256,8 @@ export async function updateAccount(accountId: number, account: TradingAccountUp
       model: account.model,
       base_url: account.base_url,
       api_key: account.api_key,
-      agent_type: account.agent_type
+      agent_type: account.agent_type,
+      memory_enabled: account.memory_enabled
     })
   })
   return response.json()
