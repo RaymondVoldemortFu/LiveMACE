@@ -328,3 +328,19 @@ export async function getTraceHistory(accountId: number): Promise<TraceSummary[]
   const response = await apiRequest(`/agent/history/${accountId}`)
   return response.json()
 }
+
+// Memory API
+export async function getMemories(accountId: number) {
+  const response = await apiRequest(`/memory/${accountId}/list`)
+  return response.json()
+}
+
+export async function getMemoryMetrics(accountId: number) {
+  const response = await apiRequest(`/memory/${accountId}/metrics`)
+  return response.json()
+}
+
+export async function getMemoryGrowthTimeline(accountId: number) {
+  const response = await apiRequest(`/memory/${accountId}/growth-timeline`)
+  return response.json()
+}
