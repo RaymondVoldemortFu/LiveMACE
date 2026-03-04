@@ -193,7 +193,7 @@ def register_default_tools(registry, db: Session, account_id: int):
     registry.register(
         Tool(
             name="run_python_script",
-            description="在虚拟环境中运行Python脚本。会自动保存为临时文件并执行。\n重要提示：脚本必须使用 print() 函数输出结果，否则将看不到任何输出。脚本不会像REPL那样自动打印最后一行表达式的值。",
+            description="在虚拟环境中运行Python脚本。会自动保存为临时文件并执行。\n脚本必须使用 print() 函数输出结果，否则将看不到任何输出。脚本不会像REPL那样自动打印最后一行表达式的值。调用时参数必须是严格 JSON：{\"script_content\": \"<python code>\"}。只能使用双引号，不能使用单引号。",
             parameters={
                 "type": "object",
                 "properties": {

@@ -1,6 +1,7 @@
 import re
 import json
 import logging
+import inspect
 from datetime import timezone, timedelta
 from typing import Dict, Any, List, Callable, Optional
 from .llm_client import LLMClient
@@ -24,6 +25,25 @@ class ReActAgent(BaseAgent):
         self.max_steps = max_steps
         self.user_id = user_id
         self.memory = get_memory_service()
+
+    def _missing_required_args(self, func: Callable, args: Dict[str, Any]) -> List[str]:
+        """Return missing required callable parameters."""
+        try:
+            sig = inspect.signature(func)
+        except Exception:
+            return []
+
+        missing: List[str] = []
+        for name, param in sig.parameters.items():
+            if param.kind not in (
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                inspect.Parameter.KEYWORD_ONLY,
+            ):
+                continue
+            if param.default is inspect._empty and name not in args:
+                missing.append(name)
+        return missing
 
     def run(self, portfolio: Dict[str, Any], prices: Dict[str, float], on_step: Optional[Callable[[Dict], None]] = None, trace_id: Optional[str] = None) -> Dict[str, Any]:
         """
@@ -146,11 +166,12 @@ class ReActAgent(BaseAgent):
                     for tc in tool_calls:
                         name = tc.function.name
                         args_str = tc.function.arguments or "{}"
+                        parse_error = None
                         try:
                             args = json.loads(args_str)
                         except json.JSONDecodeError as e:
-                            logger.warning(f"Invalid tool arguments for {name}: {e}; raw={args_str!r}")
-                            args = {}
+                            parse_error = str(e)
+                            args = None
                         
                         # Console output (Simple)
                         logger.info(f"Executing tool: {name}")
@@ -158,13 +179,32 @@ class ReActAgent(BaseAgent):
                         # File output (Detailed)
                         agent_logger.info(f"Executing tool '{name}' with args: {args_str}")
 
-                        try:
-                            tool = self.tools.get(name)
-                            result = tool(**args)
-                        except Exception as tool_err:
-                            # Never abort the whole run because one tool call fails.
-                            logger.error(f"Tool execution failed for {name}: {tool_err}")
-                            result = {"error": f"Tool execution failed: {str(tool_err)}"}
+                        if parse_error:
+                            logger.warning(f"Invalid tool arguments for {name}: {parse_error}; raw={args_str!r}")
+                            result = {
+                                "error": f"Invalid tool arguments JSON for '{name}': {parse_error}. Please retry with valid JSON arguments."
+                            }
+                        elif not isinstance(args, dict):
+                            result = {
+                                "error": f"Invalid tool arguments for '{name}': expected object, got {type(args).__name__}."
+                            }
+                        else:
+                            try:
+                                tool = self.tools.get(name)
+                                missing = self._missing_required_args(tool, args)
+                                if missing:
+                                    result = {
+                                        "error": (
+                                            f"Missing required arguments for '{name}': {', '.join(missing)}. "
+                                            "Please retry with all required fields."
+                                        )
+                                    }
+                                else:
+                                    result = tool(**args)
+                            except Exception as tool_err:
+                                # Never abort the whole run because one tool call fails.
+                                logger.error(f"Tool execution failed for {name}: {tool_err}")
+                                result = {"error": f"Tool execution failed: {str(tool_err)}"}
                         
                         # Log tool result
                         agent_logger.info(f"Tool '{name}' result: {json.dumps(result, ensure_ascii=False)}")
