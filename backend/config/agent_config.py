@@ -11,10 +11,25 @@ class AgentConfig:
 
     # Docker Configuration
     DOCKER_IMAGE_NAME = "agent-sandbox:latest"
+    # Minimum baseline pool size
     DOCKER_POOL_SIZE = 3
+    # Dynamic pool sizing based on active AI accounts
+    DOCKER_POOL_DYNAMIC_BY_ACTIVE_ACCOUNTS = os.getenv("DOCKER_POOL_DYNAMIC_BY_ACTIVE_ACCOUNTS", "true").strip().lower() in {"1", "true", "yes", "on"}
+    # Optional hard cap for dynamic base pool (0 means no cap)
+    DOCKER_POOL_MAX_SIZE = int(os.getenv("DOCKER_POOL_MAX_SIZE", "0"))
+    DOCKER_POOL_MAX_OVERFLOW = 3
+    DOCKER_POOL_LEASE_TIMEOUT_SECONDS = 30
     MAX_READ_CHARS = 1000  # Config for file read limit
     DOCKER_SOCKET_PATH = "unix:///var/run/docker.sock"
     DOCKERFILE_PATH = os.path.join(os.path.dirname(__file__), "../services/agent/docker")
+
+    # Agent execution concurrency
+    AGENT_MAX_CONCURRENCY = 4
+
+    # US stock data source behavior (Alpaca)
+    # True: force feed=IEX
+    # False: do not pass feed argument (Alpaca default routing)
+    ALPACA_USE_IEX_FEED = os.getenv("ALPACA_USE_IEX_FEED", "true").strip().lower() in {"1", "true", "yes", "on"}
 
     # Memory Configuration
     MEMORY_ENABLED = False

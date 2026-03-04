@@ -15,9 +15,11 @@ from typing import Dict, List, Any, Optional
 import dotenv
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockLatestTradeRequest, StockBarsRequest
+from alpaca.data.enums import DataFeed
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 from alpaca.trading.client import TradingClient
 
+from config.agent_config import AgentConfig
 from services.time_source import now_utc, delta_t_minutes
 
 dotenv.load_dotenv()
@@ -99,6 +101,16 @@ class AlpacaClient:
         logger.debug("Alpaca rate limiter: max_rpm=%s", self._max_rpm)
         self._limiter.wait_for_slot()
 
+    def _request_feed_kwargs(self) -> Dict[str, Any]:
+        """
+        Controlled by config:
+        - True: use IEX feed explicitly
+        - False: do not pass feed parameter
+        """
+        if AgentConfig.ALPACA_USE_IEX_FEED:
+            return {"feed": DataFeed.IEX}
+        return {}
+
     def get_last_price(self, symbol: str) -> Optional[float]:
         try:
             symbol_norm = _ensure_supported_symbol(symbol)
@@ -107,12 +119,14 @@ class AlpacaClient:
             if delta_t_minutes() > 0:
                 end_dt = now_utc()
                 start_dt = end_dt - timedelta(minutes=10)
+                req_kwargs = self._request_feed_kwargs()
                 req = StockBarsRequest(
                     symbol_or_symbols=[symbol_norm],
                     timeframe=TimeFrame(1, TimeFrameUnit.Minute),
                     start=start_dt,
                     end=end_dt,
                     limit=10,
+                    **req_kwargs,
                 )
                 bars = self._data_client.get_stock_bars(req)
                 if hasattr(bars, "data"):
@@ -131,7 +145,11 @@ class AlpacaClient:
                     return float(price) if price is not None else None
                 logger.warning("Alpaca delayed price empty, fallback to latest trade: %s", symbol_norm)
 
-            req = StockLatestTradeRequest(symbol_or_symbols=[symbol_norm])
+            req_kwargs = self._request_feed_kwargs()
+            req = StockLatestTradeRequest(
+                symbol_or_symbols=[symbol_norm],
+                **req_kwargs,
+            )
             resp = self._data_client.get_stock_latest_trade(req)
             trade = resp.get(symbol_norm)
             if not trade:
@@ -175,12 +193,14 @@ class AlpacaClient:
                 count,
             )
             self._wait()
+            req_kwargs = self._request_feed_kwargs()
             req = StockBarsRequest(
                 symbol_or_symbols=[symbol_norm],
                 timeframe=timeframe,
                 start=start_dt,
                 end=end_dt,
                 limit=count,
+                **req_kwargs,
             )
             bars = self._data_client.get_stock_bars(req)
             if hasattr(bars, "data"):

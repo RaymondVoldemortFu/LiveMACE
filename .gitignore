@@ -311,3 +311,4 @@ backend/tests/
 backend/.DS_Store
 
 toolenv
+data.db-journal

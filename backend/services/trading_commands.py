@@ -3,8 +3,10 @@ Trading Commands Service - Handles order execution and trading logic
 """
 import logging
 import random
+import threading
 from decimal import Decimal
 from typing import Dict, Optional, Tuple, List
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from sqlalchemy.orm import Session
 
@@ -28,6 +30,7 @@ from services.alpaca_market_data import SUPPORTED_STOCKS as US_TRADING_SYMBOLS
 
 logger = logging.getLogger(__name__)
 trade_logger = logging.getLogger("trade_execution")
+_ai_trade_run_lock = threading.Lock()
 
 AI_TRADING_SYMBOLS: List[str] = ["BTC", "ETH", "SOL", "BNB", "XRP", "DOGE"]
 US_TRADING_SYMBOLS = list(US_TRADING_SYMBOLS)
@@ -109,10 +112,53 @@ def _select_side(db: Session, account: Account, symbol: str, max_value: float) -
     return side, quantity
 
 
-def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
-    """Place crypto order based on AI model decision for all active accounts"""
+def _collect_account_decision(account_id: int, prices: Dict[str, float]) -> Optional[Dict]:
+    """
+    Collect agent decision for one account in an isolated DB session.
+    This is safe to run in worker threads.
+    """
     db = SessionLocal()
     try:
+        account = db.query(Account).filter(Account.id == account_id).first()
+        if not account:
+            logger.warning(f"Account {account_id} not found while collecting decision")
+            return None
+
+        portfolio = _get_portfolio_data(db, account)
+        if portfolio["total_assets"] <= 0:
+            logger.debug(f"Account {account.name} has non-positive total assets, skip decision")
+            return None
+
+        if AgentConfig.USE_AGENT:
+            decision = call_agent_for_decision(account, portfolio, prices, db)
+        else:
+            decision = call_ai_for_decision(account, portfolio, prices)
+
+        if not decision or not isinstance(decision, dict):
+            return None
+
+        return {
+            "account_id": account.id,
+            "account_name": account.name,
+            "portfolio": portfolio,
+            "decision": decision,
+        }
+    except Exception as e:
+        logger.error(f"Decision collection failed for account {account_id}: {e}", exc_info=True)
+        return None
+    finally:
+        db.close()
+
+
+def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
+    """Place crypto order based on AI model decision for all active accounts"""
+    if not _ai_trade_run_lock.acquire(blocking=False):
+        logger.warning("AI trading loop is already running; skip this trigger to avoid overlap")
+        return
+
+    db = None
+    try:
+        db = SessionLocal()
         accounts = get_active_ai_accounts(db)
         if not accounts:
             logger.debug("No available accounts, skipping AI trading")
@@ -126,26 +172,41 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
             logger.warning("Failed to fetch market prices, skipping AI trading")
             return
 
-        # Iterate through all active accounts
-        for account in accounts:
+        # Collect account decisions concurrently (agent calls in parallel)
+        decision_payloads: List[Dict] = []
+        concurrency = min(
+            len(accounts),
+            max(1, int(getattr(AgentConfig, "AGENT_MAX_CONCURRENCY", 1))),
+        )
+
+        with ThreadPoolExecutor(max_workers=concurrency) as executor:
+            future_map = {
+                executor.submit(_collect_account_decision, account.id, prices): account.id
+                for account in accounts
+            }
+            for fut in as_completed(future_map):
+                account_id = future_map[fut]
+                try:
+                    result = fut.result()
+                    if result:
+                        decision_payloads.append(result)
+                except Exception as worker_err:
+                    logger.error(
+                        f"Decision worker crashed for account_id={account_id}: {worker_err}",
+                        exc_info=True,
+                    )
+
+        # Execute/save decisions sequentially to keep order lifecycle consistent
+        for payload in decision_payloads:
+            account = db.query(Account).filter(Account.id == payload["account_id"]).first()
+            if not account:
+                logger.warning(f"Account {payload['account_id']} disappeared before execution")
+                continue
+
+            portfolio = payload["portfolio"]
+            decision = payload["decision"]
             try:
                 logger.info(f"Processing AI trading for account: {account.name}")
-                
-                # Get portfolio data for this account
-                portfolio = _get_portfolio_data(db, account)
-                
-                if portfolio['total_assets'] <= 0:
-                    logger.debug(f"Account {account.name} has non-positive total assets, skipping")
-                    continue
-
-                # Call AI for trading decision
-                if AgentConfig.USE_AGENT:
-                    decision = call_agent_for_decision(account, portfolio, prices, db)
-                else:
-                    decision = call_ai_for_decision(account, portfolio, prices)
-                if not decision or not isinstance(decision, dict):
-                    logger.warning(f"Failed to get AI decision for {account.name}, skipping")
-                    continue
 
                 operation = decision.get("operation", "").lower() if decision.get("operation") else ""
                 symbol = decision.get("symbol", "").upper() if decision.get("symbol") else ""
@@ -372,9 +433,12 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
 
     except Exception as err:
         logger.error(f"AI-driven order placement failed: {err}", exc_info=True)
-        db.rollback()
+        if db is not None:
+            db.rollback()
     finally:
-        db.close()
+        if db is not None:
+            db.close()
+        _ai_trade_run_lock.release()
 
 
 def place_random_crypto_order(max_ratio: float = 0.2) -> None:

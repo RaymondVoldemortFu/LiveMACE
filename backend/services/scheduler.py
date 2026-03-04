@@ -145,7 +145,9 @@ class TaskScheduler:
             args=args,
             kwargs=kwargs,
             id=task_id,
-            replace_existing=True
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
         )
         
         logger.info(f"Added interval task {task_id}: Execute every {interval_seconds} seconds")

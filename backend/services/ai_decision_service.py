@@ -410,7 +410,17 @@ def call_agent_for_decision(
 
     # Lease a container for the agent session
     container_service = ContainerService()
-    container_service.lease_container(account_id)
+    leased_container_id = container_service.lease_container(account_id)
+    if not leased_container_id:
+        logger.error(f"Failed to lease sandbox container for account {account_name} (ID: {account_id})")
+        return {
+            "operation": "hold",
+            "symbol": "",
+            "direction": "long",
+            "target_portion_of_balance": 0.0,
+            "leverage": 1,
+            "reason": "Container unavailable, fallback hold",
+        }
 
     trace_id = str(uuid.uuid4())
     step_counter = 0
@@ -421,6 +431,16 @@ def call_agent_for_decision(
         try:
             role = message.get("role", "unknown")
             content = message.get("content")
+            if content in (None, ""):
+                # Some OpenAI-compatible providers return reasoning text in
+                # reasoning_content while keeping content=null when tool_calls exist.
+                reasoning_content = message.get("reasoning_content")
+                if reasoning_content not in (None, ""):
+                    content = reasoning_content
+                else:
+                    reasoning = message.get("reasoning")
+                    if reasoning not in (None, ""):
+                        content = reasoning
             
             # Handle tool calls serialization
             tool_calls_data = message.get("tool_calls")
@@ -428,10 +448,12 @@ def call_agent_for_decision(
             if tool_calls_data:
                 tool_calls_list = []
                 for t in tool_calls_data:
-                    if hasattr(t, "model_dump"):
+                    if isinstance(t, dict):
+                        tool_calls_list.append(t)
+                    elif hasattr(t, "model_dump"):
                         tool_calls_list.append(t.model_dump())
                     elif hasattr(t, "dict"):
-                         tool_calls_list.append(t.dict())
+                        tool_calls_list.append(t.dict())
                     else:
                         tool_calls_list.append(str(t))
                 tool_calls_str = json.dumps(tool_calls_list, ensure_ascii=False)
@@ -454,6 +476,10 @@ def call_agent_for_decision(
             db.commit()
         except Exception as e:
             logger.error(f"Failed to save agent trace: {e}")
+            try:
+                db.rollback()
+            except Exception:
+                pass
 
     try:
         llm = LLMClient(
@@ -493,4 +519,5 @@ def call_agent_for_decision(
         return None
     finally:
         # Always release the container
-        container_service.release_container(account_id)
+        if leased_container_id:
+            container_service.release_container(account_id)

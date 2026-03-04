@@ -4,6 +4,7 @@ import logging
 import threading
 import os
 import dotenv
+import anyio
 
 from services.auto_trader import (
     place_ai_driven_crypto_order,
@@ -151,12 +152,12 @@ def shutdown_services():
 
 async def startup_event():
     """FastAPI application startup event"""
-    initialize_services()
+    await anyio.to_thread.run_sync(initialize_services)
 
 
 async def shutdown_event():
     """FastAPI application shutdown event"""
-    await shutdown_services()
+    await anyio.to_thread.run_sync(shutdown_services)
 
 
 def schedule_auto_trading(interval_seconds: int = 300, max_ratio: float = 0.2, use_ai: bool = True) -> None:
