@@ -234,6 +234,11 @@ class ContainerService:
             if container and self._is_container_healthy(container):
                 return container
 
+            # Remove unhealthy container before re-leasing to avoid leaked
+            # exited/dead containers occupying Docker resources.
+            if container:
+                self._remove_container_quietly(container)
+
             # Try to recover by leasing a fresh one transparently
             self.active_containers.pop(account_id, None)
         leased_id = self.lease_container(account_id)
