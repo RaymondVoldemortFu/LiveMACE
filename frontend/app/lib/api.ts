@@ -242,6 +242,7 @@ export async function createAccount(account: TradingAccountCreate): Promise<Trad
       api_key: account.api_key,
       account_type: account.account_type || 'AI',
       agent_type: account.agent_type || 'react',
+      memory_enabled: account.memory_enabled || 'false',
       initial_capital: account.initial_capital || 10000
     })
   })
