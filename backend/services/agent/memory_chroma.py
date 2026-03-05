@@ -144,15 +144,20 @@ class ChromaMemory(MemoryInterface):
 
             # Also save to SQLite for backup and evaluation
             if db:
-                mem_entry = AgentMemory(
-                    memory_id=memory_id,
-                    account_id=int(account_id) if account_id.isdigit() else 0,
-                    trace_id=trace_id,
-                    content=content,
-                    metadata_json=metadata,
-                    embedding=embedding
-                )
-                db.add(mem_entry)
+                try:
+                    mem_entry = AgentMemory(
+                        memory_id=memory_id,
+                        account_id=int(account_id) if account_id.isdigit() else 0,
+                        trace_id=trace_id,
+                        content=content,
+                        metadata_json=metadata,
+                        embedding=embedding
+                    )
+                    db.add(mem_entry)
+                    db.commit()
+                except Exception as db_error:
+                    logger.error(f"Failed to save memory to SQLite: {db_error}")
+                    db.rollback()
 
             logger.info(f"Memory added to Chroma for account {account_id}: {content[:100]}...")
 
@@ -205,15 +210,20 @@ class ChromaMemory(MemoryInterface):
             if formatted_results and db:
                 high_quality_ids = [r["id"] for r in formatted_results if r.get("similarity", 0) > AgentConfig.MEMORY_RETRIEVAL_THRESHOLD]
                 if high_quality_ids:
-                    db.query(AgentMemory).filter(
-                        AgentMemory.memory_id.in_(high_quality_ids)
-                    ).update(
-                        {
-                            AgentMemory.retrieval_count: AgentMemory.retrieval_count + 1,
-                            AgentMemory.last_retrieved_at: datetime.now()
-                        },
-                        synchronize_session=False
-                    )
+                    try:
+                        db.query(AgentMemory).filter(
+                            AgentMemory.memory_id.in_(high_quality_ids)
+                        ).update(
+                            {
+                                AgentMemory.retrieval_count: AgentMemory.retrieval_count + 1,
+                                AgentMemory.last_retrieved_at: datetime.now()
+                            },
+                            synchronize_session=False
+                        )
+                        db.commit()
+                    except Exception as db_error:
+                        logger.error(f"Failed to update retrieval count: {db_error}")
+                        db.rollback()
 
             logger.info(f"Found {len(formatted_results)} relevant memories for account {account_id}")
             return formatted_results
@@ -254,30 +264,52 @@ class ChromaMemory(MemoryInterface):
             logger.error(f"Error getting all memories from Chroma: {e}")
             return []
 
-    def delete(self, memory_id: str):
-        """Delete a specific memory"""
+    def delete(self, memory_id: str, db: Session = None):
+        """Delete a specific memory from both Chroma and SQLite"""
         if not self.collection:
             logger.warning("Chroma memory not initialized. Cannot delete memory.")
             return
 
         try:
+            # Delete from Chroma
             self.collection.delete(ids=[memory_id])
+            
+            # Also delete from SQLite
+            if db:
+                try:
+                    db.query(AgentMemory).filter(AgentMemory.memory_id == memory_id).delete()
+                    db.commit()
+                except Exception as db_error:
+                    logger.error(f"Failed to delete memory from SQLite: {db_error}")
+                    db.rollback()
+            
             logger.info(f"Memory {memory_id} deleted from Chroma")
         except Exception as e:
             logger.error(f"Error deleting memory from Chroma: {e}")
 
-    def reset(self):
-        """Reset/clear all memories (useful for testing)"""
+    def reset(self, db: Session = None):
+        """Reset/clear all memories from both Chroma and SQLite (useful for testing)"""
         if not self.client:
             logger.warning("Chroma client not initialized.")
             return
 
         try:
+            # Reset Chroma collection
             self.client.delete_collection("agent_memories")
             self.collection = self.client.create_collection(
                 name="agent_memories",
                 metadata={"hnsw:space": "cosine"}
             )
+            
+            # Also clear SQLite
+            if db:
+                try:
+                    db.query(AgentMemory).delete()
+                    db.commit()
+                except Exception as db_error:
+                    logger.error(f"Failed to reset memories in SQLite: {db_error}")
+                    db.rollback()
+            
             logger.info("Chroma memory collection reset successfully")
         except Exception as e:
             logger.error(f"Error resetting Chroma collection: {e}")

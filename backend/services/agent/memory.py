@@ -35,7 +35,7 @@ class MemoryInterface(ABC):
         pass
 
     @abstractmethod
-    def search(self, query: str, account_id: str, limit: int = 5, db: Session = None) -> List[Dict]:
+    def search(self, query: str, account_id: str, limit: int = 2, db: Session = None) -> List[Dict]:
         """Search for memories."""
         pass
 
@@ -119,10 +119,12 @@ class LocalMemory(MemoryInterface):
                 embedding=embedding  # Store as JSON array
             )
             db.add(mem_entry)
+            db.commit()
             logger.info(f"Memory saved to DB for account {account_id}: {content[:100]}...")
 
         except Exception as e:
             logger.error(f"Error adding memory: {e}")
+            db.rollback()
 
     @staticmethod
     def _cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
@@ -180,15 +182,20 @@ class LocalMemory(MemoryInterface):
             if top_results:
                 high_quality_ids = [r["id"] for r in top_results if r.get("similarity", 0) > AgentConfig.MEMORY_RETRIEVAL_THRESHOLD]
                 if high_quality_ids:
-                    db.query(AgentMemory).filter(
-                        AgentMemory.memory_id.in_(high_quality_ids)
-                    ).update(
-                        {
-                            AgentMemory.retrieval_count: AgentMemory.retrieval_count + 1,
-                            AgentMemory.last_retrieved_at: datetime.now()
-                        },
-                        synchronize_session=False
-                    )
+                    try:
+                        db.query(AgentMemory).filter(
+                            AgentMemory.memory_id.in_(high_quality_ids)
+                        ).update(
+                            {
+                                AgentMemory.retrieval_count: AgentMemory.retrieval_count + 1,
+                                AgentMemory.last_retrieved_at: datetime.now()
+                            },
+                            synchronize_session=False
+                        )
+                        db.commit()
+                    except Exception as db_error:
+                        logger.error(f"Failed to update retrieval count: {db_error}")
+                        db.rollback()
 
             logger.info(f"Found {len(top_results)} relevant memories for account {account_id}")
             return top_results
