@@ -63,6 +63,7 @@ export function MemoryView({ account, accounts }: MemoryViewProps) {
       return
     }
 
+    let cancelled = false
     setLoading(true)
     setError(null)
 
@@ -72,15 +73,23 @@ export function MemoryView({ account, accounts }: MemoryViewProps) {
       getMemoryGrowthTimeline(selectedAccountId)
     ])
       .then(([memData, metricData, timelineData]) => {
-        setMemories(memData.memories || [])
-        setMetrics(metricData)
-        setTimeline(timelineData.timeline || [])
-        setLoading(false)
+        if (!cancelled) {
+          setMemories(memData.memories || [])
+          setMetrics(metricData)
+          setTimeline(timelineData.timeline || [])
+          setLoading(false)
+        }
       })
       .catch((err) => {
-        setError(err.message)
-        setLoading(false)
+        if (!cancelled) {
+          setError(err.message)
+          setLoading(false)
+        }
       })
+
+    return () => {
+      cancelled = true
+    }
   }, [selectedAccountId])
 
   const selectedAccount = accounts.find(a => a.id === selectedAccountId)
