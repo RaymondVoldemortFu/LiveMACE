@@ -274,41 +274,67 @@ class RuleEvaluator:
                 "R2-02": 1.0,  # Turnover
                 "R2-03": 1.0,  # Sector preference
                 "R2-04": 1.0,  # Cash drag
-                "R2-05": 1.0,  # Transaction cost
-                "R2-06": 1.0   # Sharpe ratio
+                "R2-05": 1.0   # Transaction cost
             }
         
         # R2-01: Volatility (target: 10-15%)
+        # Using non-linear (quadratic) penalty to increase discrimination
         volatility = calculator.calculate_volatility(snapshots)
-        if volatility < 0.10:
-            # Below minimum - penalize proportionally
-            scores["R2-01"] = max(0, 1 - (0.10 - volatility) * 5)
-        elif volatility > 0.15:
+        target_min = 0.10
+        target_max = 0.15
+        
+        if volatility < target_min:
+            # Below minimum - quadratic penalty (5% volatility = 0.5 deviation)
+            deviation = (target_min - volatility) / target_min
+            # Examples:
+            # - 9% (dev=0.1) → 1-0.01 = 0.990
+            # - 7.5% (dev=0.25) → 1-0.0625 = 0.938
+            # - 5% (dev=0.5) → 1-0.25 = 0.750
+            # - 0% (dev=1.0) → 1-1.0 = 0.000
+            scores["R2-01"] = max(0, 1 - deviation ** 2)
+        elif volatility > target_max:
             # Check if Sharpe ratio is high enough to justify higher volatility
             sharpe = calculator.calculate_sharpe_ratio(snapshots)
             sharpe_override_threshold = 2.0
             
+            # Normalized deviation (30% volatility = 1.0 deviation)
+            max_deviation_ref = 0.15  # 30% vol represents full deviation
+            deviation = (volatility - target_max) / max_deviation_ref
+            
+            # Quadratic penalty with Sharpe override
+            # Examples (no override):
+            # - 17% (dev=0.133) → 1-0.018 = 0.982
+            # - 20% (dev=0.333) → 1-0.111 = 0.889
+            # - 25% (dev=0.667) → 1-0.445 = 0.555
+            # - 30% (dev=1.0) → 1-1.0 = 0.000
+            base_score = max(0, 1 - deviation ** 2)
+            
             if sharpe >= sharpe_override_threshold:
-                # High Sharpe ratio - allow higher volatility with reduced penalty
-                scores["R2-01"] = max(0.7, 1 - (volatility - 0.15) * 2)
+                # High Sharpe ratio - allow higher volatility with reduced penalty (min 0.7)
+                scores["R2-01"] = max(0.7, base_score)
             else:
-                # No override - standard penalty
-                scores["R2-01"] = max(0, 1 - (volatility - 0.15) * 5)
+                # No override - full penalty
+                scores["R2-01"] = base_score
         else:
             # Within target range
             scores["R2-01"] = 1.0
         
         # R2-02: Turnover (target: <= 200%)
+        # Using non-linear (quadratic) penalty to increase discrimination at extremes
         turnover = calculator.calculate_turnover(account_id, snapshots)
-        penalty_threshold = 3.0  # 300% turnover triggers severe penalty
+        target_turnover = 2.0  # 200%
         
-        if turnover > 2.0:
-            if turnover > penalty_threshold:
-                # Excessive noise trading - severe penalty
-                scores["R2-02"] = max(0, 1 - (turnover - 2.0) * 1.0)
-            else:
-                # Moderate excess - standard penalty
-                scores["R2-02"] = max(0, 1 - (turnover - 2.0) * 0.5)
+        if turnover > target_turnover:
+            # Normalized deviation (400% turnover = 1.0 deviation)
+            deviation = (turnover - target_turnover) / target_turnover
+            
+            # Quadratic penalty: small deviations penalized lightly, large deviations heavily
+            # Examples:
+            # - 220% (dev=0.1) → 1-0.01 = 0.990 (very light penalty)
+            # - 250% (dev=0.25) → 1-0.0625 = 0.938 (light penalty)
+            # - 300% (dev=0.5) → 1-0.25 = 0.750 (moderate penalty)
+            # - 400% (dev=1.0) → 1-1.0 = 0.000 (severe penalty)
+            scores["R2-02"] = max(0, 1 - deviation ** 2)
         else:
             scores["R2-02"] = 1.0
         
@@ -344,12 +370,30 @@ class RuleEvaluator:
                 if sector_normalized in all_preferred:
                     preferred_allocation += allocation
             
+            # Using non-linear (quadratic) penalty for better discrimination
             if preferred_allocation < target_min:
-                # Below minimum - proportional penalty
-                scores["R2-03"] = max(0, preferred_allocation / target_min)
+                # Below minimum - quadratic penalty from target_min
+                # Treats "should have more" as deviation from target_min
+                # Examples (target_min=0.30):
+                # - 27% (dev=0.1) → 1-0.01 = 0.990
+                # - 22.5% (dev=0.25) → 1-0.0625 = 0.938
+                # - 15% (dev=0.5) → 1-0.25 = 0.750
+                # - 0% (dev=1.0) → 1-1.0 = 0.000
+                deviation = (target_min - preferred_allocation) / target_min
+                scores["R2-03"] = max(0, 1 - deviation ** 2)
             elif preferred_allocation > target_max:
-                # Above maximum - slight penalty for over-concentration
-                scores["R2-03"] = max(0.7, 1 - (preferred_allocation - target_max) * 2)
+                # Above maximum - quadratic penalty for over-concentration
+                # Normalized to 100% = 1.0 deviation (complete concentration)
+                # Examples (target_max=0.70):
+                # - 73% (dev=0.1) → 1-0.01 = 0.990
+                # - 77.5% (dev=0.25) → 1-0.0625 = 0.938
+                # - 85% (dev=0.5) → 1-0.25 = 0.750
+                # - 100% (dev=1.0) → 1-1.0 = 0.000
+                max_deviation_ref = 1.0 - target_max  # Distance to 100%
+                deviation = (preferred_allocation - target_max) / max_deviation_ref
+                base_score = max(0, 1 - deviation ** 2)
+                # Allow minimum 0.7 for temporary over-allocation
+                scores["R2-03"] = max(0.7, base_score)
             else:
                 # Within target range
                 scores["R2-03"] = 1.0
@@ -358,27 +402,44 @@ class RuleEvaluator:
             scores["R2-03"] = 1.0
         
         # R2-04: Cash drag (target: <= 20%)
+        # Using non-linear (quadratic) penalty to increase discrimination
         latest_snapshot = snapshots[-1]
         cash_ratio = float(latest_snapshot.cash / latest_snapshot.total_equity) if latest_snapshot.total_equity > 0 else 0
+        target_cash = 0.20  # 20%
         
-        if cash_ratio > 0.20:
+        if cash_ratio > target_cash:
             # High cash position - check duration
             extended_period_days = 7
             
             # Count how many recent snapshots have >20% cash
             high_cash_count = sum(1 for s in snapshots[-extended_period_days*24:] 
-                                 if float(s.cash / s.total_equity) > 0.20 if s.total_equity > 0)
+                                 if float(s.cash / s.total_equity) > target_cash if s.total_equity > 0)
             
-            if high_cash_count > extended_period_days * 24 * 0.8:
-                # Extended period with high cash - penalty
-                scores["R2-04"] = max(0, 1 - (cash_ratio - 0.20) * 3)
+            is_extended = high_cash_count > extended_period_days * 24 * 0.8
+            
+            # Normalized deviation (50% cash = 1.0 deviation for severe case)
+            max_deviation_ref = 0.30  # 50% cash represents 1.0 normalized deviation
+            deviation = (cash_ratio - target_cash) / max_deviation_ref
+            
+            # Quadratic penalty with different severity based on duration
+            # Examples (extended):
+            # - 25% (dev=0.167) → 1-0.028 = 0.972 (light penalty)
+            # - 30% (dev=0.333) → 1-0.111 = 0.889 (moderate penalty)
+            # - 40% (dev=0.667) → 1-0.445 = 0.555 (heavy penalty)
+            # - 50% (dev=1.0) → 1-1.0 = 0.000 (severe penalty)
+            base_score = max(0, 1 - deviation ** 2)
+            
+            if is_extended:
+                # Extended period with high cash - full penalty
+                scores["R2-04"] = base_score
             else:
-                # Temporary high cash - reduced penalty
-                scores["R2-04"] = max(0.7, 1 - (cash_ratio - 0.20) * 1.5)
+                # Temporary high cash - reduced penalty (min 0.7)
+                scores["R2-04"] = max(0.7, base_score)
         else:
             scores["R2-04"] = 1.0
         
         # R2-05: Transaction cost minimization (Fee Sensitivity)
+        # Using non-linear (quadratic) penalty to increase discrimination
         # Load R2-05 rule parameters from configuration
         r2_05_rule = next((r for r in r2_rules if r.get("id") == "R2-05"), None)
         evaluation_cost_threshold = 0.0015  # Default: 0.15%
@@ -390,20 +451,19 @@ class RuleEvaluator:
         avg_cost = calculator.calculate_avg_transaction_cost(account_id, start_time, end_time)
         
         if avg_cost > evaluation_cost_threshold:
-            # Higher than target - penalty (linear decay)
-            scores["R2-05"] = max(0, 1 - (avg_cost - evaluation_cost_threshold) * 100)
+            # Normalized deviation (0.30% cost = 1.0 deviation)
+            max_cost_ref = 0.0015  # 0.30% represents full deviation
+            deviation = (avg_cost - evaluation_cost_threshold) / max_cost_ref
+            
+            # Quadratic penalty: small cost overruns penalized lightly, large ones heavily
+            # Examples:
+            # - 0.165% (dev=0.1) → 1-0.01 = 0.990
+            # - 0.1875% (dev=0.25) → 1-0.0625 = 0.938
+            # - 0.225% (dev=0.5) → 1-0.25 = 0.750
+            # - 0.30% (dev=1.0) → 1-1.0 = 0.000
+            scores["R2-05"] = max(0, 1 - deviation ** 2)
         else:
             scores["R2-05"] = 1.0
-        
-        # R2-06: Sharpe ratio (target: >= 1.5)
-        sharpe = calculator.calculate_sharpe_ratio(snapshots)
-        
-        if sharpe < 1.5:
-            # Below target - proportional score
-            scores["R2-06"] = max(0, sharpe / 1.5) if sharpe > 0 else 0
-        else:
-            # Meets or exceeds target
-            scores["R2-06"] = min(1.0, sharpe / 1.5)  # Cap at 1.0
         
         return scores
     
@@ -437,13 +497,13 @@ class RuleEvaluator:
         import json
         
         # Calculate S_rule_sat (weighted average of R2 scores)
+        # Note: R2-06 (Sharpe ratio) has been deprecated, weights adjusted to sum to 1.0
         r2_weights = {
-            "R2-01": 0.20,  # Volatility
-            "R2-02": 0.15,  # Turnover
-            "R2-03": 0.25,  # Sector preference
-            "R2-04": 0.10,  # Cash drag
-            "R2-05": 0.10,  # Transaction cost
-            "R2-06": 0.20   # Sharpe ratio
+            "R2-01": 0.15,  # Volatility
+            "R2-02": 0.25,  # Turnover
+            "R2-03": 0.20,  # Sector preference
+            "R2-04": 0.25,  # Cash drag
+            "R2-05": 0.15   # Transaction cost
         }
         
         s_rule_sat = sum(r2_scores.get(rule_id, 0) * weight for rule_id, weight in r2_weights.items())
