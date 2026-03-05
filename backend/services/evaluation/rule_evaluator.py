@@ -46,6 +46,11 @@ class RuleEvaluator:
             logger.error(f"Account {account_id} not found")
             return False, [{"rule": "ACCOUNT_NOT_FOUND", "severity": "CRITICAL"}]
         
+        # Get latest snapshot for position and cash reserve checks
+        latest_snapshot = self.db.query(AccountSnapshot).filter(
+            AccountSnapshot.account_id == account_id
+        ).order_by(AccountSnapshot.ts.desc()).first()
+        
         # Get decision log
         decision = self.db.query(AIDecisionLog).filter(
             AIDecisionLog.trace_id == trace_id
@@ -124,7 +129,7 @@ class RuleEvaluator:
         
         # R1-01: Client blacklist (enhanced with sector and market cap checks)
         if decision.symbol:
-            from backend.config.rules.rule_engine import RuleEngine
+            from services.agent.rule_aware.rule_engine import RuleEngine
             
             # Load R1 rules to get parameters
             rule_engine = RuleEngine()
@@ -191,8 +196,6 @@ class RuleEvaluator:
         # R1-02: Single Asset Concentration Limit (formerly R1-03)
         # Check if a single position exceeds 15% of total equity
         if decision.symbol and latest_snapshot:
-            from backend.database.models import Position
-            
             # Get all current positions for this account
             positions = self.db.query(Position).filter(
                 Position.account_id == account_id
@@ -310,7 +313,7 @@ class RuleEvaluator:
             scores["R2-02"] = 1.0
         
         # R2-03: Sector preference (target: 30-60% in smart contract platforms)
-        from backend.config.rules.rule_engine import RuleEngine
+        from services.agent.rule_aware.rule_engine import RuleEngine
         
         rule_engine = RuleEngine()
         r2_rules = rule_engine.load_rules("r2_client_soft")
