@@ -444,8 +444,8 @@ class RuleValidator:
             
             preferred_sectors = params.get("preferred_sectors", [])
             preferred_crypto_themes = params.get("preferred_crypto_themes", [])
-            target_min = params.get("target_allocation_min", 0.40)
-            target_max = params.get("target_allocation_max", 0.60)
+            target_min = params.get("target_allocation_min", 0.30)
+            target_max = params.get("target_allocation_max", 0.70)
             
             # logger.info(f"R2-03 [rule_validator]: preferred_sectors={preferred_sectors}, preferred_crypto_themes={preferred_crypto_themes}")
             # logger.info(f"R2-03 [rule_validator]: target range={target_min:.0%}-{target_max:.0%}")
@@ -496,7 +496,7 @@ class RuleValidator:
                         target_mid = (target_min + target_max) / 2.0
                         deviation = abs(preferred_ratio - target_mid)
                         # Max acceptable deviation based on target range width
-                        # For 40-60% target, mid=50%, max_deviation=40% allows [10%-90%] positive scores
+                        # For 30-70% target, mid=50%, max_deviation=40% allows [10%-90%] positive scores
                         max_deviation = 0.40
                         score = max(0.0, 1.0 - deviation / max_deviation)
                         
