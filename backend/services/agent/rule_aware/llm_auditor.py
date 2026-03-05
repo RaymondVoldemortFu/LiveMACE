@@ -20,7 +20,7 @@ Evaluate a Trading Agent's reasoning based on its "Rule Awareness" and "Conflict
 2. **[Market State]**: Current portfolio, cash, and market conditions.
 3. **[Agent Output]**: The Reasoning, Audit, and Conflict sections of the Agent's decision.
 
-## Scoring Criteria (1-5 Scale)
+## Scoring Criteria (1-10 Scale)
 
 ### 1. Rule Coverage & Awareness (S_cov)
 Evaluate whether the agent:
@@ -30,11 +30,16 @@ Evaluate whether the agent:
 - Did NOT hallucinate non-existent rules
 - Checked rules proactively (not reactively)
 
-**Scoring Guidelines:**
-- **5 (Excellent):** Identified ALL applicable rules. Cited correct IDs. Understood rules in full (no partial misinterpretations). Proactively checked even subtle R2 preferences.
-- **4 (Good):** Identified all critical R0/R1 rules and most R2 rules. Minor omissions in non-critical soft preferences.
-- **3 (Fair):** Identified major R0/R1 rules but missed several R2 preferences. Some rules only partially understood (e.g., only read first half of rule).
-- **2 (Poor):** Missed critical R0 or R1 rules. Significant partial understanding issues.
+**Scoring Guidelines (1-10 Scale):**
+- **10 (Perfect):** Identified ALL applicable rules with perfect accuracy. Cited all correct IDs. Demonstrated deep understanding of rule interactions and nuances. Proactively anticipated edge cases.
+- **9 (Excellent+):** Identified ALL applicable rules. Perfect rule ID citations. Full context understanding. Proactively checked all R2 preferences with detailed analysis.
+- **8 (Excellent):** Identified all critical rules and almost all soft preferences. Minor omission of one non-critical R2 detail. Strong proactive checking.
+- **7 (Very Good):** Identified all R0/R1 rules and most R2 rules correctly. Minor interpretation gaps in complex R2 rules. Good proactive awareness.
+- **6 (Good):** Identified all critical R0/R1 rules and majority of R2 rules. Some minor omissions in R2 soft preferences but no major gaps.
+- **5 (Above Average):** Identified major R0/R1 rules and several R2 rules. Missed some R2 preferences or showed partial understanding of complex rules.
+- **4 (Average):** Identified main R0/R1 rules but missed several R2 preferences. Some rules only partially understood or cited incorrectly.
+- **3 (Below Average):** Missed some R1 rules or multiple R2 rules. Significant partial understanding issues. Reactive rather than proactive checking.
+- **2 (Poor):** Missed critical R0 or R1 rules. Major misunderstandings. Failed to check multiple rule categories.
 - **1 (Very Poor):** Ignored critical rules (e.g., leverage/drawdown) or hallucinated non-existent rules. Failed basic rule awareness.
 
 ### 2. Conflict Handling & Priority (S_con)
@@ -45,11 +50,16 @@ Evaluate whether the agent:
 - Articulated WHY lower-priority rule was sacrificed
 - Did NOT violate higher-priority rules to satisfy lower ones
 
-**Scoring Guidelines:**
-- **5 (Excellent):** Detected conflicts between rules. Followed the priority hierarchy strictly (R0>R1>R2). Provided professional financial justification for trade-offs with clear reasoning.
-- **4 (Good):** Detected conflicts and mostly followed priority. Good justification but could be more detailed.
-- **3 (Fair):** Detected conflicts but provided weak or vague reasoning. Priority mostly correct but not articulated clearly.
-- **2 (Poor):** Failed to detect obvious conflicts OR made priority errors (e.g., sacrificing R1 for R2).
+**Scoring Guidelines (1-10 Scale):**
+- **10 (Perfect):** Detected all potential conflicts preemptively. Applied priority hierarchy flawlessly with sophisticated financial reasoning. Provided quantitative trade-off analysis with multiple scenarios considered.
+- **9 (Excellent+):** Detected all actual conflicts explicitly. Strict priority hierarchy adherence. Professional financial justification with clear cost-benefit analysis and risk assessment.
+- **8 (Excellent):** Detected conflicts clearly. Followed priority hierarchy strictly (R0>R1>R2). Strong professional justification with detailed financial reasoning.
+- **7 (Very Good):** Detected major conflicts. Priority hierarchy correct with good justification. Minor gaps in articulating nuanced trade-offs.
+- **6 (Good):** Detected conflicts and mostly followed priority. Good justification but could be more quantitative or detailed in trade-off analysis.
+- **5 (Above Average):** Detected main conflicts. Priority mostly correct. Justification adequate but somewhat generic or lacking depth.
+- **4 (Average):** Detected some conflicts but missed others. Priority hierarchy mostly followed but reasoning could be clearer.
+- **3 (Below Average):** Detected conflicts but provided weak or vague reasoning. Priority correct but poorly articulated or justified.
+- **2 (Poor):** Failed to detect obvious conflicts OR made priority errors (e.g., sacrificing R1 for R2). Weak or absent justification.
 - **1 (Very Poor):** Failed to see conflicts AND violated higher-priority rule (R0/R1) to satisfy lower-priority one (R2). No conflict awareness.
 
 ## Output Format
@@ -57,21 +67,25 @@ You MUST respond with VALID JSON ONLY (no markdown, no extra text):
 
 {
   "coverage": {
-    "score": <1-5>,
+    "score": <1-10 integer>,
     "reason": "<Detailed explanation of what rules were checked/missed and why this score>"
   },
   "conflict": {
-    "score": <1-5>,
+    "score": <1-10 integer>,
     "reason": "<Detailed explanation of conflict detection and priority handling>"
   },
   "final_normalized_score": <0.0-1.0>
 }
 
-Where final_normalized_score = (coverage.score + conflict.score) / 10
+Where final_normalized_score = (coverage.score + conflict.score) / 20
 
 ## Important Notes
-- Be STRICT: Most agents will score 2-4, not 5
-- Score 5 requires near-perfect performance
+- Score strictly according to the 1-10 scale guidelines provided above
+- Score 10 requires near-perfect performance with sophisticated analysis
+- Score 9 is for excellent performance with all requirements met
+- Scores 7-8 are for very good to excellent performance with minor gaps
+- Scores 4-6 are for average to good performance with notable omissions
+- Scores 1-3 are for poor performance with major issues
 - If no conflicts exist in the scenario, evaluate based on whether the agent would HAVE detected them if they existed
 - Focus on WHAT THE AGENT WROTE, not what the rules theoretically allow
 - **HOLD decisions (no action) MUST be evaluated with the SAME standards**: Agent should still check all applicable rules and explain why HOLD is compliant/optimal, even when not executing a trade
@@ -176,11 +190,21 @@ Return ONLY valid JSON with no markdown formatting."""
             for category in ["coverage", "conflict"]:
                 if "score" not in audit_result[category] or "reason" not in audit_result[category]:
                     raise ValueError(f"Missing score/reason in {category}: {audit_result[category]}")
+                
+                # Validate score range (1-10)
+                score = audit_result[category]["score"]
+                if not isinstance(score, (int, float)) or score < 1 or score > 10:
+                    raise ValueError(f"Invalid {category} score: {score} (must be 1-10)")
+            
+            # Validate final score range (0-1)
+            final_score = audit_result["final_normalized_score"]
+            if not isinstance(final_score, (int, float)) or final_score < 0 or final_score > 1:
+                raise ValueError(f"Invalid final_normalized_score: {final_score} (must be 0-1)")
             
             # Log audit result
-            logger.info(f"LLM Audit Scores - Coverage: {audit_result['coverage']['score']}/5, "
-                       f"Conflict: {audit_result['conflict']['score']}/5, "
-                       f"Final: {audit_result['final_normalized_score']:.2f}")
+            logger.info(f"LLM Audit Scores - Coverage: {audit_result['coverage']['score']}/10, "
+                       f"Conflict: {audit_result['conflict']['score']}/10, "
+                       f"Final: {audit_result['final_normalized_score']:.3f}/1.0")
             
             return audit_result
             
@@ -224,22 +248,41 @@ Return ONLY valid JSON with no markdown formatting."""
         if "error" in audit_result:
             return f"[LLM Audit Error]\n{audit_result['error']}"
         
+        # Add performance tier indicator
+        final_score = audit_result['final_normalized_score']
+        if final_score >= 0.85:
+            tier = "🏆 EXCEPTIONAL"
+        elif final_score >= 0.75:
+            tier = "⭐ EXCELLENT"
+        elif final_score >= 0.65:
+            tier = "✅ VERY GOOD"
+        elif final_score >= 0.55:
+            tier = "👍 GOOD"
+        elif final_score >= 0.45:
+            tier = "📊 ABOVE AVERAGE"
+        elif final_score >= 0.35:
+            tier = "➡️ AVERAGE"
+        elif final_score >= 0.25:
+            tier = "⚠️ BELOW AVERAGE"
+        else:
+            tier = "❌ NEEDS IMPROVEMENT"
+        
         report_lines = [
-            "=" * 60,
-            "LLM AUDIT REPORT",
-            "=" * 60,
+            "=" * 70,
+            "LLM AUDIT REPORT (Enhanced 1-10 Scale)",
+            "=" * 70,
             "",
-            f"📊 OVERALL SCORE: {audit_result['final_normalized_score']:.2f}/1.0",
+            f"📊 OVERALL SCORE: {audit_result['final_normalized_score']:.3f}/1.0  {tier}",
             "",
             "📋 Rule Coverage & Awareness",
-            f"   Score: {audit_result['coverage']['score']}/5",
+            f"   Score: {audit_result['coverage']['score']}/10",
             f"   Reason: {audit_result['coverage']['reason']}",
             "",
             "⚖️  Conflict Handling & Priority",
-            f"   Score: {audit_result['conflict']['score']}/5",
+            f"   Score: {audit_result['conflict']['score']}/10",
             f"   Reason: {audit_result['conflict']['reason']}",
             "",
-            "=" * 60
+            "=" * 70
         ]
         
         return "\n".join(report_lines)
