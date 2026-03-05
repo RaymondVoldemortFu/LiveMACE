@@ -550,7 +550,7 @@ class RuleValidator:
         
         # R2-05: Fee Sensitivity
         elif rule_id == "R2-05":
-            min_profit_to_fee_ratio = params.get("min_profit_to_fee_ratio", 3.0)
+            min_trade_size_ratio = params.get("min_trade_size_ratio", 0.02)  # Default 2%
             estimated_fee_rate = params.get("estimated_fee_rate", 0.001)
             estimated_slippage_rate = params.get("estimated_slippage_rate", 0.0005)
             
@@ -570,19 +570,18 @@ class RuleValidator:
             
             # For fee sensitivity, we use a heuristic:
             # Small trades are penalized. Score based on trade size as proxy for fee efficiency
-            # Minimum viable trade: 1% of equity (assumed to be ~3x fees for typical holding period)
-            min_viable_portion = 0.01
+            # Minimum viable trade: configurable (default 2% of equity)
             
-            if target_portion > 0 and target_portion < min_viable_portion:
-                # Score: linear scale from 0 to min_viable_portion
-                # 1%=1.0, 0.5%=0.5, 0%=0.0
-                score = min(1.0, target_portion / min_viable_portion)
+            if target_portion > 0 and target_portion < min_trade_size_ratio:
+                # Score: linear scale from 0 to min_trade_size_ratio
+                # 2%=1.0, 1%=0.5, 0%=0.0
+                score = min(1.0, target_portion / min_trade_size_ratio)
                 
                 return RuleViolation(
                     rule, severity,
-                    f"Trade size {target_portion:.2%} may be too small relative to fees (estimated fees: ${estimated_fees:.2f})",
+                    f"Trade size {target_portion:.2%} may be too small relative to fees (min recommended: {min_trade_size_ratio:.2%}, estimated fees: ${estimated_fees:.2f})",
                     actual_value=target_portion,
-                    expected_value=f">= {min_viable_portion:.2%}",
+                    expected_value=f">= {min_trade_size_ratio:.2%}",
                     score=score
                 )
         

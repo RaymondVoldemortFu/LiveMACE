@@ -375,13 +375,20 @@ class RuleEvaluator:
         else:
             scores["R2-04"] = 1.0
         
-        # R2-05: Transaction cost minimization
-        avg_cost = calculator.calculate_avg_transaction_cost(account_id, start_time, end_time)
-        target_max_slippage = 0.001  # 0.1% target
+        # R2-05: Transaction cost minimization (Fee Sensitivity)
+        # Load R2-05 rule parameters from configuration
+        r2_05_rule = next((r for r in r2_rules if r.get("id") == "R2-05"), None)
+        evaluation_cost_threshold = 0.0015  # Default: 0.15%
         
-        if avg_cost > target_max_slippage:
-            # Higher than target - penalty
-            scores["R2-05"] = max(0, 1 - (avg_cost - target_max_slippage) * 100)
+        if r2_05_rule:
+            params = r2_05_rule.get("parameters", {})
+            evaluation_cost_threshold = params.get("evaluation_cost_threshold", 0.0015)
+        
+        avg_cost = calculator.calculate_avg_transaction_cost(account_id, start_time, end_time)
+        
+        if avg_cost > evaluation_cost_threshold:
+            # Higher than target - penalty (linear decay)
+            scores["R2-05"] = max(0, 1 - (avg_cost - evaluation_cost_threshold) * 100)
         else:
             scores["R2-05"] = 1.0
         
