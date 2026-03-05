@@ -309,7 +309,7 @@ class RuleEvaluator:
         else:
             scores["R2-02"] = 1.0
         
-        # R2-03: Sector preference (target: 30-50% in preferred sectors)
+        # R2-03: Sector preference (target: 40-60% in preferred sectors)
         from backend.config.rules.rule_engine import RuleEngine
         
         rule_engine = RuleEngine()
@@ -320,8 +320,8 @@ class RuleEvaluator:
             params = r2_03_rule.get("parameters", {})
             preferred_sectors = params.get("preferred_sectors", [])
             preferred_crypto_themes = params.get("preferred_crypto_themes", [])
-            target_min = params.get("target_allocation_min", 0.30)
-            target_max = params.get("target_allocation_max", 0.50)
+            target_min = params.get("target_allocation_min", 0.40)
+            target_max = params.get("target_allocation_max", 0.60)
             
             sector_allocation = calculator.calculate_sector_allocation(account_id)
             

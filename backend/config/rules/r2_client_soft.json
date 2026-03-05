@@ -29,13 +29,13 @@
     {
       "id": "R2-03",
       "name": "Thematic Sector Affinity",
-      "description": "The client has a preference for core blockchain infrastructure and DeFi ecosystem. For crypto assets, favor Layer1 blockchains (BTC, ETH, SOL, etc.), Layer2 scaling solutions (ARB, OP, MATIC), and DeFi protocols (UNI, AAVE). For stocks, prefer New Energy, Artificial Intelligence, and Biotechnology sectors. Ideally, these preferred themes should constitute 30-50% of total equity.",
-      "enforcement": "The Agent may deviate to other sectors (e.g., Meme coins, Exchange tokens, Oracle networks) if technical indicators show significantly higher expected alpha, provided it explains the Opportunity Cost of not holding preferred sectors.",
+      "description": "The client has a strategic preference for emerging crypto sectors with high growth potential: DeFi protocols (UNI, AAVE) and Layer2 scaling solutions (ARB, OP, MATIC). For stocks, prefer New Energy, Artificial Intelligence, and Biotechnology sectors. These preferred themes should constitute 40-60% of total equity to balance focused exposure with risk diversification.",
+      "enforcement": "The Agent may deviate to Layer1 infrastructure or other sectors if technical indicators show significantly higher risk-adjusted returns, but MUST provide explicit justification for opportunity cost and explain why the deviation enhances portfolio alpha.",
       "parameters": {
         "preferred_sectors": ["new_energy", "artificial_intelligence", "biotechnology", "clean_tech"],
-        "preferred_crypto_themes": ["Layer1", "Layer2", "DeFi"],
-        "target_allocation_min": 0.30,
-        "target_allocation_max": 0.50,
+        "preferred_crypto_themes": ["DeFi", "Layer2"],
+        "target_allocation_min": 0.40,
+        "target_allocation_max": 0.60,
         "deviation_requires_justification": true
       }
     },

@@ -428,7 +428,7 @@ class RuleValidator:
                         score=score
                     )
         
-        # R2-03: Thematic Sector Affinity (30-50% in preferred sectors)
+        # R2-03: Thematic Sector Affinity (40-60% in preferred sectors)
         elif rule_id == "R2-03":
             # Check if database models are available
             if not get_db or not AssetMetadata or not Position:
@@ -437,8 +437,8 @@ class RuleValidator:
             
             preferred_sectors = params.get("preferred_sectors", [])
             preferred_crypto_themes = params.get("preferred_crypto_themes", [])
-            target_min = params.get("target_allocation_min", 0.30)
-            target_max = params.get("target_allocation_max", 0.50)
+            target_min = params.get("target_allocation_min", 0.40)
+            target_max = params.get("target_allocation_max", 0.60)
             
             # Get current positions to calculate sector allocation
             account_id = portfolio.get("account_id")
@@ -480,10 +480,11 @@ class RuleValidator:
                         
                         if preferred_ratio < target_min or preferred_ratio > target_max:
                             # Calculate continuous score
-                            target_mid = (target_min + target_max) / 2.0  # 0.40
+                            target_mid = (target_min + target_max) / 2.0
                             deviation = abs(preferred_ratio - target_mid)
-                            # Max acceptable deviation: 0.40 (allows 0%-80% range)
-                            max_deviation = 0.40
+                            # Max acceptable deviation based on target range width
+                            # For 40-60% target, mid=50%, max_deviation=30% allows [20%-80%] positive scores
+                            max_deviation = 0.30
                             score = max(0.0, 1.0 - deviation / max_deviation)
                             
                             return RuleViolation(
