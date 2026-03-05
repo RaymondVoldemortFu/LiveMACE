@@ -201,18 +201,19 @@ class ChromaMemory(MemoryInterface):
                         "created_at": metadata.get("created_at")
                     })
 
-            # Update retrieval count in SQLite
+            # Update retrieval count only for high-quality matches
             if formatted_results and db:
-                returned_ids = [r["id"] for r in formatted_results]
-                db.query(AgentMemory).filter(
-                    AgentMemory.memory_id.in_(returned_ids)
-                ).update(
-                    {
-                        AgentMemory.retrieval_count: AgentMemory.retrieval_count + 1,
-                        AgentMemory.last_retrieved_at: datetime.now()
-                    },
-                    synchronize_session=False
-                )
+                high_quality_ids = [r["id"] for r in formatted_results if r.get("similarity", 0) > AgentConfig.MEMORY_RETRIEVAL_THRESHOLD]
+                if high_quality_ids:
+                    db.query(AgentMemory).filter(
+                        AgentMemory.memory_id.in_(high_quality_ids)
+                    ).update(
+                        {
+                            AgentMemory.retrieval_count: AgentMemory.retrieval_count + 1,
+                            AgentMemory.last_retrieved_at: datetime.now()
+                        },
+                        synchronize_session=False
+                    )
 
             logger.info(f"Found {len(formatted_results)} relevant memories for account {account_id}")
             return formatted_results

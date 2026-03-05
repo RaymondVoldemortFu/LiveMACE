@@ -176,9 +176,9 @@ class LocalMemory(MemoryInterface):
             results.sort(key=lambda x: x["similarity"], reverse=True)
             top_results = results[:limit]
 
-            # Update retrieval count only for high-quality matches (similarity > 0.6)
+            # Update retrieval count only for high-quality matches
             if top_results:
-                high_quality_ids = [r["id"] for r in top_results if r.get("similarity", 0) > 0.6]
+                high_quality_ids = [r["id"] for r in top_results if r.get("similarity", 0) > AgentConfig.MEMORY_RETRIEVAL_THRESHOLD]
                 if high_quality_ids:
                     db.query(AgentMemory).filter(
                         AgentMemory.memory_id.in_(high_quality_ids)

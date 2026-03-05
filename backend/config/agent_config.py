@@ -23,6 +23,8 @@ class AgentConfig:
     # Memory backend: "local" (SQLite) or "chroma" (vector database)
     MEMORY_BACKEND = "chroma"  # Options: "local", "chroma"
     CHROMA_PERSIST_DIR = "./chroma_db"  # Directory for Chroma persistence
+    # Similarity threshold for counting as effective retrieval (0.0-1.0)
+    MEMORY_RETRIEVAL_THRESHOLD = 0.6
 
 
 class LLMConfig:
