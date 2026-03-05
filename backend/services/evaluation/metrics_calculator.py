@@ -12,6 +12,13 @@ from sqlalchemy.orm import Session
 
 from database.models import AccountSnapshot, Position, AssetMetadata, Trade
 
+# Import centralized crypto sector classification
+try:
+    from config.asset_config import CRYPTO_SECTOR_MAP
+except ImportError:
+    # Fallback for absolute import
+    from backend.config.asset_config import CRYPTO_SECTOR_MAP
+
 logger = logging.getLogger(__name__)
 
 
@@ -128,12 +135,8 @@ class MetricsCalculator:
                 position_value = float(pos.quantity) * current_price
                 total_value += position_value
                 
-                # Get asset sector
-                asset_meta = self.db.query(AssetMetadata).filter(
-                    AssetMetadata.symbol == pos.symbol
-                ).first()
-                
-                sector = asset_meta.sector if asset_meta else "Unknown"
+                # Use built-in sector mapping instead of asset_metadata table
+                sector = CRYPTO_SECTOR_MAP.get(pos.symbol, "Unknown")
                 sector_values[sector] = sector_values.get(sector, 0) + position_value
                 
             except Exception as e:

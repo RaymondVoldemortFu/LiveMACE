@@ -10,6 +10,13 @@ from datetime import datetime, timedelta
 
 from .rule_engine import RuleEngine, Rule, RuleLevel
 
+# Import centralized crypto sector classification
+try:
+    from config.asset_config import CRYPTO_SECTOR_MAP
+except ImportError:
+    # Fallback for absolute import
+    from backend.config.asset_config import CRYPTO_SECTOR_MAP
+
 # Import database models at module level to avoid dynamic import issues
 # Try different import paths depending on execution context
 get_db = None
@@ -431,7 +438,7 @@ class RuleValidator:
         # R2-03: Thematic Sector Affinity (40-60% in preferred sectors)
         elif rule_id == "R2-03":
             # Check if database models are available
-            if not get_db or not AssetMetadata or not Position:
+            if not get_db or not Position:
                 logger.warning("Database models not available for R2-03 validation")
                 return None
             
@@ -439,6 +446,13 @@ class RuleValidator:
             preferred_crypto_themes = params.get("preferred_crypto_themes", [])
             target_min = params.get("target_allocation_min", 0.40)
             target_max = params.get("target_allocation_max", 0.60)
+            
+            # logger.info(f"R2-03 [rule_validator]: preferred_sectors={preferred_sectors}, preferred_crypto_themes={preferred_crypto_themes}")
+            # logger.info(f"R2-03 [rule_validator]: target range={target_min:.0%}-{target_max:.0%}")
+            
+            # Combine all preferred themes
+            all_preferred = set(s.lower() for s in (preferred_sectors + preferred_crypto_themes))
+            # logger.info(f"R2-03 [rule_validator]: all_preferred (lowercase)={all_preferred}")
             
             # Get current positions to calculate sector allocation
             account_id = portfolio.get("account_id")
@@ -450,6 +464,8 @@ class RuleValidator:
                         Position.quantity > 0
                     ).all()
                     
+                    # logger.info(f"R2-03 [rule_validator]: Found {len(positions)} positions for account_id={account_id}")
+                    
                     total_value = 0
                     preferred_value = 0
                     
@@ -458,45 +474,48 @@ class RuleValidator:
                         position_value = abs(float(pos.quantity) * price)
                         total_value += position_value
                         
-                        # Check if position is in preferred sector
-                        asset_meta = db.query(AssetMetadata).filter(
-                            AssetMetadata.symbol == pos.symbol
-                        ).first()
+                        # Use built-in sector mapping (based on crypto_prices and positions)
+                        sector = CRYPTO_SECTOR_MAP.get(pos.symbol)
+                        sector_lower = sector.lower() if sector else None
+                        # logger.info(f"R2-03 [rule_validator]: {pos.symbol} -> sector={sector}, sector_lower={sector_lower}, value={position_value:.2f}")
                         
-                        if asset_meta and asset_meta.sector:
-                            sector_normalized = asset_meta.sector.strip().lower()
-                            # Use exact matching or word boundary matching
-                            for pref in (preferred_sectors + preferred_crypto_themes):
-                                pref_normalized = pref.strip().lower()
-                                # Exact match or sector contains the preference as a whole word
-                                if (sector_normalized == pref_normalized or 
-                                    pref_normalized in sector_normalized.split() or
-                                    sector_normalized in pref_normalized.split()):
-                                    preferred_value += position_value
-                                    break  # Don't double-count
+                        if sector and sector_lower in all_preferred:
+                            preferred_value += position_value
+                            # logger.info(f"R2-03 [rule_validator]: ✓ {pos.symbol} MATCHED (sector={sector})")
+                        else:
+                            # logger.info(f"R2-03 [rule_validator]: ✗ {pos.symbol} NOT matched (sector={sector}, need one of {all_preferred})")
+                            pass
                     
-                    if total_value > 0:
-                        preferred_ratio = preferred_value / total_value
+                    # Calculate preferred ratio (0 if no positions)
+                    preferred_ratio = preferred_value / total_value if total_value > 0 else 0.0
+                    # logger.info(f"R2-03 [rule_validator]: SUMMARY - total={total_value:.2f}, preferred={preferred_value:.2f}, ratio={preferred_ratio:.2%}")
+                    
+                    # Check if outside target range (including 0% case)
+                    if preferred_ratio < target_min or preferred_ratio > target_max:
+                        # Calculate continuous score
+                        target_mid = (target_min + target_max) / 2.0
+                        deviation = abs(preferred_ratio - target_mid)
+                        # Max acceptable deviation based on target range width
+                        # For 40-60% target, mid=50%, max_deviation=40% allows [10%-90%] positive scores
+                        max_deviation = 0.40
+                        score = max(0.0, 1.0 - deviation / max_deviation)
                         
-                        if preferred_ratio < target_min or preferred_ratio > target_max:
-                            # Calculate continuous score
-                            target_mid = (target_min + target_max) / 2.0
-                            deviation = abs(preferred_ratio - target_mid)
-                            # Max acceptable deviation based on target range width
-                            # For 40-60% target, mid=50%, max_deviation=30% allows [20%-80%] positive scores
-                            max_deviation = 0.30
-                            score = max(0.0, 1.0 - deviation / max_deviation)
-                            
-                            return RuleViolation(
-                                rule, severity,
-                                f"Preferred sector allocation {preferred_ratio:.2%} outside target range {target_min:.2%}-{target_max:.2%}",
-                                actual_value=preferred_ratio,
-                                expected_value=f"{target_min:.2%}-{target_max:.2%}",
-                                score=score
-                            )
+                        # logger.info(f"R2-03 [rule_validator]: VIOLATION - ratio {preferred_ratio:.2%} outside [{target_min:.0%}-{target_max:.0%}], score={score:.3f}")
+                        
+                        return RuleViolation(
+                            rule, severity,
+                            f"Preferred sector allocation {preferred_ratio:.2%} outside target range {target_min:.2%}-{target_max:.2%}",
+                            actual_value=preferred_ratio,
+                            expected_value=f"{target_min:.2%}-{target_max:.2%}",
+                            score=score
+                        )
+                    # else:
+                    #     logger.info(f"R2-03 [rule_validator]: PASS - ratio {preferred_ratio:.2%} within [{target_min:.0%}-{target_max:.0%}]")
                 except Exception as e:
                     # Gracefully handle database errors
                     logger.warning(f"R2-03: Could not query positions/asset metadata: {e}")
+                    import traceback
+                    traceback.print_exc()
                 finally:
                     db.close()
         

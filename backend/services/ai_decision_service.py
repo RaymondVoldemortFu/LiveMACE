@@ -69,6 +69,7 @@ def _get_portfolio_data(db: Session, account: Account) -> Dict:
             }
 
     return {
+        "account_id": account.id,  # Added for rule validation
         "cash": float(account.current_cash),
         "frozen_cash": float(account.frozen_cash),
         "positions": portfolio,

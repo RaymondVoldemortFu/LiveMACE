@@ -309,7 +309,7 @@ class RuleEvaluator:
         else:
             scores["R2-02"] = 1.0
         
-        # R2-03: Sector preference (target: 40-60% in preferred sectors)
+        # R2-03: Sector preference (target: 30-60% in smart contract platforms)
         from backend.config.rules.rule_engine import RuleEngine
         
         rule_engine = RuleEngine()
@@ -320,27 +320,26 @@ class RuleEvaluator:
             params = r2_03_rule.get("parameters", {})
             preferred_sectors = params.get("preferred_sectors", [])
             preferred_crypto_themes = params.get("preferred_crypto_themes", [])
-            target_min = params.get("target_allocation_min", 0.40)
+            target_min = params.get("target_allocation_min", 0.30)
             target_max = params.get("target_allocation_max", 0.60)
+            
+            # Combine all preferred themes
+            all_preferred = set(s.lower() for s in (preferred_sectors + preferred_crypto_themes))
             
             sector_allocation = calculator.calculate_sector_allocation(account_id)
             
-            # Calculate allocation in preferred sectors/themes
+            # Calculate allocation in preferred sectors/themes using built-in mapping
             preferred_allocation = 0
             for sector, allocation in sector_allocation.items():
                 if not sector:
                     continue
+                # Use built-in CRYPTO_SECTOR_MAP to get actual sector
+                # sector here is the symbol, we need to map it
+                # Actually sector_allocation returns {sector_name: allocation}
+                # We need to check if the sector matches preferred themes
                 sector_normalized = sector.strip().lower()
-                # Use exact matching or word boundary matching to avoid false positives
-                # e.g., "ai" should match "AI" but not "available"
-                for pref in (preferred_sectors + preferred_crypto_themes):
-                    pref_normalized = pref.strip().lower()
-                    # Exact match or sector contains the preference as a whole word
-                    if (sector_normalized == pref_normalized or 
-                        pref_normalized in sector_normalized.split() or
-                        sector_normalized in pref_normalized.split()):
-                        preferred_allocation += allocation
-                        break  # Don't double-count if multiple matches
+                if sector_normalized in all_preferred:
+                    preferred_allocation += allocation
             
             if preferred_allocation < target_min:
                 # Below minimum - proportional penalty
