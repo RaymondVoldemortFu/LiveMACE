@@ -282,32 +282,32 @@ export function MemoryView({ account, accounts }: MemoryViewProps) {
             </Card>
           )}
 
-          {/* Retrieval Relevance */}
-          {metrics?.retrieval_relevance && (
+          {/* Memory Usage */}
+          {metrics?.memory_usage && (
             <Card>
               <CardHeader>
-                <CardTitle>Retrieval Relevance</CardTitle>
+                <CardTitle>Memory Usage</CardTitle>
                 <CardDescription>Memory usage statistics</CardDescription>
               </CardHeader>
               <CardContent>
                 <div className="space-y-4">
                   <div className="flex justify-between">
                     <span className="text-sm font-medium">Total Searches:</span>
-                    <span className="text-sm">{metrics.retrieval_relevance.search_count}</span>
+                    <span className="text-sm">{metrics.memory_usage.search_count}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-sm font-medium">Ever Retrieved:</span>
                     <span className="text-sm">
-                      {metrics.retrieval_relevance.ever_retrieved} ({(metrics.retrieval_relevance.retrieval_rate * 100).toFixed(1)}%)
+                      {metrics.memory_usage.ever_retrieved} ({(metrics.memory_usage.retrieval_rate * 100).toFixed(1)}%)
                     </span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-sm font-medium">Recently Retrieved (24h):</span>
-                    <span className="text-sm">{metrics.retrieval_relevance.recently_retrieved_24h}</span>
+                    <span className="text-sm">{metrics.memory_usage.recently_retrieved_24h}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-sm font-medium">Avg Searches per Memory:</span>
-                    <span className="text-sm">{metrics.retrieval_relevance.avg_searches_per_memory.toFixed(2)}</span>
+                    <span className="text-sm">{metrics.memory_usage.avg_searches_per_memory.toFixed(2)}</span>
                   </div>
                 </div>
               </CardContent>

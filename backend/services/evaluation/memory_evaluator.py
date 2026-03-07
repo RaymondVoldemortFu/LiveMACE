@@ -3,7 +3,7 @@ Memory Evaluator V2
 
 Focused on 4 core metrics:
 1. Retrieval Distribution - How memories are being retrieved
-2. Memory Diversity - How diverse the memory content is
+2. Memory Usage - Memory usage patterns
 3. Retrieval Relevance - Quality of search results
 4. Memory Growth Pattern - How memory system evolves over time
 """
@@ -61,7 +61,7 @@ class MemoryEvaluator(BaseEvaluator):
             "evaluation_time": datetime.now().isoformat(),
             "retrieval_distribution": self._evaluate_retrieval_distribution(memories),
             "memory_diversity": self._evaluate_diversity(memories),
-            "retrieval_relevance": self._evaluate_relevance(memories, tool_usage),
+            "memory_usage": self._evaluate_usage(memories, tool_usage),
             "growth_pattern": self._evaluate_growth(memories, tool_usage, decisions)
         }
 
@@ -135,10 +135,10 @@ class MemoryEvaluator(BaseEvaluator):
             "interpretation": "High diversity" if diversity_score > 0.5 else "Low diversity"
         }
 
-    def _evaluate_relevance(self, memories: List, tool_usage: Dict) -> Dict[str, Any]:
+    def _evaluate_usage(self, memories: List, tool_usage: Dict) -> Dict[str, Any]:
         """
-        Metric 3: Retrieval Relevance
-        Analyzes quality of memory search results based on last_retrieved_at timestamps.
+        Metric 3: Memory Usage
+        Analyzes memory usage patterns: search frequency, coverage, and recent activity.
         """
         if not memories:
             return {"total_memories": 0, "recently_retrieved": 0, "retrieval_rate": 0}
