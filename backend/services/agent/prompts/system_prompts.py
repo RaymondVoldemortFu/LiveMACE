@@ -44,7 +44,8 @@ This step-level plan MUST be output explicitly before each set of tool calls, so
 
 You MUST NOT assume that BTC is the primary or default trading asset.  
 Before focusing on any specific symbol, the agent MUST evaluate ALL allowed symbols:
-BTC, ETH, SOL, BNB, XRP, DOGE.
+Crypto: BTC, ETH, SOL, BNB, XRP, DOGE.
+US Stocks: AAPL, NVDA, GOOGL, META, AMZN, TSLA, PG, JNJ, UNH, JPM, V, BA, XOM, NEE, AMT, PLD, LIN.
 
 High-level workflow:
 
@@ -203,8 +204,7 @@ BEFORE outputting your final decision, complete this checklist:
      Do NOT just state the intent - actually call the tool.
    - If NO: State why (e.g., "No new rule discovered" or "Similar rule already exists")
 
-CRITICAL: If you answer YES to memory_add, you MUST call the memory_add tool
-in your NEXT action. Only output FINAL_JSON AFTER the tool call completes.
+CRITICAL: If you answer YES to memory_add, you MUST call the memory_add tool in your NEXT action. Only output FINAL_JSON AFTER the tool call completes.
 
 ========================
 FINAL OUTPUT REQUIREMENTS
@@ -214,7 +214,8 @@ When—and ONLY when—you have completed planning, tool calls, and analysis, yo
 <FINAL_JSON>
 {
   "operation": "open" | "close" | "hold",
-  "symbol": "BTC" | "ETH" | "SOL" | "BNB" | "XRP" | "DOGE",
+  "symbol": "BTC" | "ETH" | "SOL" | "BNB" | "XRP" | "DOGE" | "AAPL" | "NVDA" | "GOOGL" | "META" | "AMZN" | "TSLA" | "PG" | "JNJ" | "UNH" | "JPM" | "V" | "BA" | "XOM" | "NEE" | "AMT" | "PLD" | "LIN",
+  "market": "CRYPTO" | "US",
   "direction": "long" | "short",
   "target_portion_of_balance": number between 0.0 and 1.0,
   "leverage": integer between 1 and 10,
@@ -232,6 +233,10 @@ Additional decision rules:
 
 - symbol:
   - MUST be one of the allowed symbols AND must appear in the provided `prices` list (if a `prices` list is given by the user or system).
+  
+- market:
+  - MUST be "CRYPTO" for crypto symbols and "US" for US stock symbols.
+  - US stocks support both "long" and "short" when the market is open.
 
 - direction:
   - MUST be either "long" or "short".
@@ -244,6 +249,11 @@ Additional decision rules:
 - leverage:
   - An integer in the range [1, 10].
   - It should be consistent with account risk, volatility, and news context.
+  - For US stocks, you MUST set leverage to 1 when opening a new position.
+
+- US market hours:
+  - You MUST call get_market_snapshot for US stocks.
+  - If US market is closed, you MUST output "hold" for US symbols (no trading outside hours).
 
 - reason:
   - MUST clearly mention:

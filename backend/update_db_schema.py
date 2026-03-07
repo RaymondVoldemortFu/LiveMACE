@@ -5,7 +5,7 @@ import os
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from database.connection import engine, Base
-from database.models import AgentTrace, AIDecisionLog, Account, AgentMemory
+from database import models
 from sqlalchemy import text
 
 def update_schema():
@@ -13,7 +13,14 @@ def update_schema():
     
     # 1. Create all tables (AgentTrace, AgentMemory, etc.) if they don't exist
     print("Creating tables if not exist...")
-    Base.metadata.create_all(bind=engine)
+    required_tables = [
+        models.AgentTrace.__table__,
+        models.AgentMemory.__table__,
+        models.AIDecisionLog.__table__,
+        models.Account.__table__,
+        models.AgentPeriodCheckpoint.__table__,
+    ]
+    Base.metadata.create_all(bind=engine, tables=required_tables)
     
     with engine.connect() as conn:
         try:
@@ -40,6 +47,18 @@ def update_schema():
                 print("Column agent_type added.")
             else:
                 print("Column agent_type already exists.")
+
+            # 4. Add volatility column to AgentPeriodCheckpoint if it doesn't exist
+            print("Checking for volatility column in agent_period_checkpoints...")
+            result = conn.execute(text("PRAGMA table_info(agent_period_checkpoints)"))
+            columns = [row[1] for row in result]
+
+            if "volatility" not in columns:
+                print("Adding volatility column to agent_period_checkpoints...")
+                conn.execute(text("ALTER TABLE agent_period_checkpoints ADD COLUMN volatility FLOAT DEFAULT 0.0 NOT NULL"))
+                print("Column volatility added.")
+            else:
+                print("Column volatility already exists.")
                 
         except Exception as e:
             print(f"Error updating schema: {e}")

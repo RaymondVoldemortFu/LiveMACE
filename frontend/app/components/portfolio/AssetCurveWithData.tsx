@@ -45,6 +45,11 @@ interface AssetCurveProps {
   wsRef?: React.MutableRefObject<WebSocket | null>
 }
 
+type TooltipLabelContext = {
+  dataset: { label?: string }
+  parsed: { y: unknown }
+}
+
 type Timeframe = '5m' | '1h' | '1d'
 
 export default function AssetCurve({ data: initialData, wsRef }: AssetCurveProps) {
@@ -53,6 +58,23 @@ export default function AssetCurve({ data: initialData, wsRef }: AssetCurveProps
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [isInitialized, setIsInitialized] = useState(false)
+
+  const locale = typeof navigator !== 'undefined' ? navigator.language : undefined
+  const number2Formatter = new Intl.NumberFormat(locale, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })
+  const currency2Formatter = new Intl.NumberFormat(locale, {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })
+  const currency0Formatter = new Intl.NumberFormat(locale, {
+    style: 'currency',
+    currency: 'USD',
+    maximumFractionDigits: 0,
+  })
 
   // Listen for WebSocket asset curve updates
   useEffect(() => {
@@ -65,6 +87,11 @@ export default function AssetCurve({ data: initialData, wsRef }: AssetCurveProps
           setData(msg.data || [])
           setLoading(false)
           setError(null)
+          setIsInitialized(true)
+        } else if (msg.type === 'asset_curve_error' && msg.timeframe === timeframe) {
+          setData([])
+          setLoading(false)
+          setError(msg.message || 'Failed to load asset curve')
           setIsInitialized(true)
         } else if (msg.type === 'asset_curve_update' && msg.timeframe === timeframe) {
           // Real-time update for current timeframe
@@ -86,6 +113,9 @@ export default function AssetCurve({ data: initialData, wsRef }: AssetCurveProps
   // Request data when timeframe changes
   useEffect(() => {
     if (wsRef?.current && wsRef.current.readyState === WebSocket.OPEN) {
+      // Clear previous timeframe data to avoid showing stale curves
+      // (e.g. 1h snapshot) under a different timeframe tab.
+      setData([])
       setLoading(true)
       setError(null)
       wsRef.current.send(JSON.stringify({
@@ -135,6 +165,17 @@ export default function AssetCurve({ data: initialData, wsRef }: AssetCurveProps
 
   // Group data by timestamp/date and create datasets for each user
   // Use explicit profit calculation: profit = total_assets - initial_capital (fallback if profit not provided)
+  const parseKeyToDate = (key: string): Date => {
+    const trimmed = (key || '').trim()
+    if (/^\d+$/.test(trimmed)) {
+      const num = Number(trimmed)
+      // Heuristic: 10 digits ~ seconds; 13 digits ~ ms
+      if (trimmed.length <= 10) return new Date(num * 1000)
+      return new Date(num)
+    }
+    return new Date(trimmed)
+  }
+
   const groupedData = data.reduce((acc, item) => {
     const key = item.datetime_str || item.date || item.timestamp?.toString() || ''
     if (!acc[key]) {
@@ -147,7 +188,9 @@ export default function AssetCurve({ data: initialData, wsRef }: AssetCurveProps
     return acc
   }, {} as Record<string, Record<string, number>>)
 
-  const timestamps = Object.keys(groupedData).sort()
+  const timestamps = Object.keys(groupedData)
+    .filter(Boolean)
+    .sort((a, b) => parseKeyToDate(a).getTime() - parseKeyToDate(b).getTime())
   const users = Array.from(new Set(data.map(item => item.username))).sort()
 
   // Generate colors for each user
@@ -164,22 +207,24 @@ export default function AssetCurve({ data: initialData, wsRef }: AssetCurveProps
 
   // Format labels based on timeframe
   const formatLabel = (timestamp: string) => {
-    const d = new Date(timestamp)
+    const d = parseKeyToDate(timestamp)
     if (timeframe === '5m') {
-      return d.toLocaleTimeString('en-US', {
+      return d.toLocaleTimeString(locale, {
         hour: '2-digit',
-        minute: '2-digit'
+        minute: '2-digit',
+        hour12: false,
       })
     } else if (timeframe === '1h') {
-      return d.toLocaleString('en-US', {
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit'
+      return d.toLocaleString(locale, {
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        hour12: false,
       })
     } else {
-      return d.toLocaleDateString('en-US', {
-        month: 'short',
-        day: 'numeric'
+      return d.toLocaleDateString(locale, {
+        month: '2-digit',
+        day: '2-digit',
       })
     }
   }
@@ -211,13 +256,13 @@ export default function AssetCurve({ data: initialData, wsRef }: AssetCurveProps
         mode: 'index',
         intersect: false,
         callbacks: {
-          label: (context) => {
+          label: (context: TooltipLabelContext) => {
             const label = context.dataset.label || ''
-            const value = context.parsed.y
-            return `${label}: $${value?.toLocaleString('en-US', {
-              minimumFractionDigits: 2,
-              maximumFractionDigits: 2
-            })}`
+            const value = Number(context.parsed.y)
+            const formatted = !Number.isNaN(value)
+              ? currency2Formatter.format(value)
+              : ''
+            return `${label}: ${formatted}`
           },
         },
       },
@@ -237,10 +282,11 @@ export default function AssetCurve({ data: initialData, wsRef }: AssetCurveProps
           text: 'Profit (USD)',
         },
         ticks: {
-          callback: function(value) {
+          callback: (value: string | number) => {
             const num = Number(value)
-            const sign = num >= 0 ? '+' : ''
-            return sign + '$' + num.toLocaleString('en-US')
+            if (Number.isNaN(num)) return ''
+            const sign = num >= 0 ? '+' : '-'
+            return sign + currency0Formatter.format(Math.abs(num))
           },
         },
       },
@@ -299,10 +345,16 @@ export default function AssetCurve({ data: initialData, wsRef }: AssetCurveProps
                     ? latestData.profit_percentage
                     : (initial > 0 ? (profit / initial) * 100 : 0))
                 : 0
+
+              const formattedProfit = (profit >= 0 ? '+' : '') + currency2Formatter.format(profit)
+              const formattedProfitPercentage =
+                (profitPercentage >= 0 ? '+' : '') + number2Formatter.format(profitPercentage) + '%'
               return {
                 username,
                 profit,
                 profitPercentage,
+                formattedProfit,
+                formattedProfitPercentage,
               }
             })
             .sort((a, b) => b.profit - a.profit)
@@ -317,10 +369,7 @@ export default function AssetCurve({ data: initialData, wsRef }: AssetCurveProps
                     {account.username.replace('default_', '').toUpperCase()}
                   </div>
                   <div className={`text-lg font-bold ${account.profit >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                    {account.profit >= 0 ? '+' : ''}${account.profit.toLocaleString('en-US', {
-                      minimumFractionDigits: 2,
-                      maximumFractionDigits: 2,
-                    })} ({account.profit >= 0 ? '+' : ''}{account.profitPercentage.toFixed(2)}%)
+                    {account.formattedProfit} ({account.formattedProfitPercentage})
                   </div>
                 </div>
               </div>

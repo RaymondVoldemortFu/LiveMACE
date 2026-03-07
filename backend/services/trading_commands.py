@@ -3,15 +3,17 @@ Trading Commands Service - Handles order execution and trading logic
 """
 import logging
 import random
+import threading
 from decimal import Decimal
 from typing import Dict, Optional, Tuple, List
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from sqlalchemy.orm import Session
 
 from database.connection import SessionLocal
 from database.models import Position, Account
 from services.asset_calculator import calc_positions_value
-from services.market_data import get_last_price
+from services.market_data import get_last_price, get_market_status
 from services.order_matching import create_order, check_and_execute_order
 from services.order_executor_leverage import place_and_execute_crypto
 from services.ai_decision_service import (
@@ -23,12 +25,23 @@ from services.ai_decision_service import (
     call_agent_for_decision
 )
 from config.agent_config import AgentConfig
+from services.alpaca_market_data import SUPPORTED_STOCKS as US_TRADING_SYMBOLS
 
 
 logger = logging.getLogger(__name__)
 trade_logger = logging.getLogger("trade_execution")
+_ai_trade_run_lock = threading.Lock()
 
 AI_TRADING_SYMBOLS: List[str] = ["BTC", "ETH", "SOL", "BNB", "XRP", "DOGE"]
+US_TRADING_SYMBOLS = list(US_TRADING_SYMBOLS)
+
+
+def _infer_market(symbol: str, decision_market: Optional[str]) -> str:
+    if decision_market:
+        return decision_market.upper()
+    if symbol.upper() in US_TRADING_SYMBOLS:
+        return "US"
+    return "CRYPTO"
 
 
 def _log_trade_execution(operation: str, symbol: str, target_portion: float, price: float, leverage: int, executed: bool, reason: str = ""):
@@ -47,12 +60,12 @@ def _log_trade_execution(operation: str, symbol: str, target_portion: float, pri
     trade_logger.info(msg)
 
 
-def _get_market_prices(symbols: List[str]) -> Dict[str, float]:
+def _get_market_prices(symbols: List[str], market: str) -> Dict[str, float]:
     """Get latest prices for given symbols"""
     prices = {}
     for symbol in symbols:
         try:
-            price = float(get_last_price(symbol, "CRYPTO"))
+            price = float(get_last_price(symbol, market))
             if price > 0:
                 prices[symbol] = price
         except Exception as err:
@@ -99,49 +112,110 @@ def _select_side(db: Session, account: Account, symbol: str, max_value: float) -
     return side, quantity
 
 
-def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
-    """Place crypto order based on AI model decision for all active accounts"""
+def _collect_account_decision(account_id: int, prices: Dict[str, float]) -> Optional[Dict]:
+    """
+    Collect agent decision for one account in an isolated DB session.
+    This is safe to run in worker threads.
+    """
     db = SessionLocal()
     try:
+        account = db.query(Account).filter(Account.id == account_id).first()
+        if not account:
+            logger.warning(f"Account {account_id} not found while collecting decision")
+            return None
+
+        portfolio = _get_portfolio_data(db, account)
+        if portfolio["total_assets"] <= 0:
+            logger.debug(f"Account {account.name} has non-positive total assets, skip decision")
+            return None
+
+        if AgentConfig.USE_AGENT:
+            decision = call_agent_for_decision(account, portfolio, prices, db)
+        else:
+            decision = call_ai_for_decision(account, portfolio, prices)
+
+        if not decision or not isinstance(decision, dict):
+            return None
+
+        return {
+            "account_id": account.id,
+            "account_name": account.name,
+            "portfolio": portfolio,
+            "decision": decision,
+        }
+    except Exception as e:
+        logger.error(f"Decision collection failed for account {account_id}: {e}", exc_info=True)
+        return None
+    finally:
+        db.close()
+
+
+def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
+    """Place crypto order based on AI model decision for all active accounts"""
+    if not _ai_trade_run_lock.acquire(blocking=False):
+        logger.warning("AI trading loop is already running; skip this trigger to avoid overlap")
+        return
+
+    db = None
+    try:
+        db = SessionLocal()
         accounts = get_active_ai_accounts(db)
         if not accounts:
             logger.debug("No available accounts, skipping AI trading")
             return
 
         # Get latest market prices once for all accounts
-        prices = _get_market_prices(AI_TRADING_SYMBOLS)
+        prices = {}
+        prices.update(_get_market_prices(AI_TRADING_SYMBOLS, "CRYPTO"))
+        prices.update(_get_market_prices(US_TRADING_SYMBOLS, "US"))
         if not prices:
             logger.warning("Failed to fetch market prices, skipping AI trading")
             return
 
-        # Iterate through all active accounts
-        for account in accounts:
+        # Collect account decisions concurrently (agent calls in parallel)
+        decision_payloads: List[Dict] = []
+        concurrency = min(
+            len(accounts),
+            max(1, int(getattr(AgentConfig, "AGENT_MAX_CONCURRENCY", 1))),
+        )
+
+        with ThreadPoolExecutor(max_workers=concurrency) as executor:
+            future_map = {
+                executor.submit(_collect_account_decision, account.id, prices): account.id
+                for account in accounts
+            }
+            for fut in as_completed(future_map):
+                account_id = future_map[fut]
+                try:
+                    result = fut.result()
+                    if result:
+                        decision_payloads.append(result)
+                except Exception as worker_err:
+                    logger.error(
+                        f"Decision worker crashed for account_id={account_id}: {worker_err}",
+                        exc_info=True,
+                    )
+
+        # Execute/save decisions sequentially to keep order lifecycle consistent
+        for payload in decision_payloads:
+            account = db.query(Account).filter(Account.id == payload["account_id"]).first()
+            if not account:
+                logger.warning(f"Account {payload['account_id']} disappeared before execution")
+                continue
+
+            portfolio = payload["portfolio"]
+            decision = payload["decision"]
             try:
                 logger.info(f"Processing AI trading for account: {account.name}")
 
-                # Get portfolio data for this account
-                portfolio = _get_portfolio_data(db, account)
-
-                if portfolio['total_assets'] <= 0:
-                    logger.debug(f"Account {account.name} has non-positive total assets, skipping")
-                    continue
-
-                # Call AI for trading decision
-                if AgentConfig.USE_AGENT:
-                    decision = call_agent_for_decision(account, portfolio, prices, db)
-                else:
-                    decision = call_ai_for_decision(account, portfolio, prices)
-                if not decision or not isinstance(decision, dict):
-                    logger.warning(f"Failed to get AI decision for {account.name}, skipping")
-                    continue
-
                 operation = decision.get("operation", "").lower() if decision.get("operation") else ""
                 symbol = decision.get("symbol", "").upper() if decision.get("symbol") else ""
+                market = _infer_market(symbol, decision.get("market"))
                 direction = decision.get("direction", "long").lower() if decision.get("direction") else "long"
                 target_portion = float(decision.get("target_portion_of_balance", 0)) if decision.get("target_portion_of_balance") is not None else 0
                 reason = decision.get("reason", "No reason provided")
 
-                logger.info(f"AI decision for {account.name}: {operation} {symbol} {direction} (portion: {target_portion:.2%}) - {reason}")
+                logger.info(f"AI decision for {account.name}: {operation} {symbol} {direction} market={market} (portion: {target_portion:.2%}) - {reason}")
 
                 # Get current price early for logging
                 price = prices.get(symbol, 0.0)
@@ -161,11 +235,24 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
                     save_ai_decision(db, account, decision, portfolio, executed=True)
                     continue
 
-                if symbol not in SUPPORTED_SYMBOLS:
+                if market == "US":
+                    if symbol not in US_TRADING_SYMBOLS:
+                        logger.warning(f"Invalid US symbol '{symbol}' from AI for {account.name}, skipping")
+                        _log_trade_execution(operation, symbol, target_portion, price, leverage, False, f"Invalid US symbol: {symbol}")
+                        save_ai_decision(db, account, decision, portfolio, executed=False)
+                        continue
+                elif symbol not in SUPPORTED_SYMBOLS:
                     logger.warning(f"Invalid symbol '{symbol}' from AI for {account.name}, skipping")
                     _log_trade_execution(operation, symbol, target_portion, price, leverage, False, f"Invalid symbol: {symbol}")
                     save_ai_decision(db, account, decision, portfolio, executed=False)
                     continue
+                if market == "US":
+                    status = get_market_status(symbol, "US")
+                    if not status.get("is_trading", False):
+                        logger.info(f"US market closed, skipping trade for {symbol}")
+                        _log_trade_execution(operation, symbol, target_portion, price, leverage, False, "US market closed")
+                        save_ai_decision(db, account, decision, portfolio, executed=False)
+                        continue
 
                 if direction not in ["long", "short"]:
                     logger.warning(f"Invalid direction '{direction}' from AI for {account.name}, skipping")
@@ -191,7 +278,7 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
                     # Check if there's already a position on this coin (ONE position per coin rule)
                     existing_position = (
                         db.query(Position)
-                        .filter(Position.account_id == account.id, Position.symbol == symbol, Position.market == "CRYPTO")
+                        .filter(Position.account_id == account.id, Position.symbol == symbol, Position.market == market)
                         .first()
                     )
 
@@ -204,12 +291,14 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
                     # Open a new position - calculate quantity based on available cash and target portion
                     available_cash = float(account.current_cash)
                     order_value = available_cash * target_portion
-                    # For crypto, support fractional quantities - use float instead of int
-                    quantity = float(Decimal(str(order_value)) / Decimal(str(price)))
-
-                    # Round to reasonable precision (6 decimal places for crypto)
-                    quantity = round(quantity, 6)
-
+                    if market == "US":
+                        quantity = int(Decimal(str(order_value)) / Decimal(str(price)))
+                    else:
+                        # For crypto, support fractional quantities - use float instead of int
+                        quantity = float(Decimal(str(order_value)) / Decimal(str(price)))
+                        # Round to reasonable precision (6 decimal places for crypto)
+                        quantity = round(quantity, 6)
+                    
                     if quantity <= 0:
                         logger.info(f"Calculated {direction.upper()} quantity <= 0 for {symbol} for {account.name}, skipping")
                         _log_trade_execution(operation, symbol, target_portion, price, leverage, False, "Calculated quantity <= 0")
@@ -217,13 +306,16 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
                         continue
 
                     # Set side based on direction
-                    side = "LONG" if direction == "long" else "SHORT"
+                    if market == "US":
+                        side = "BUY" if direction == "long" else "SELL"
+                    else:
+                        side = "LONG" if direction == "long" else "SHORT"
 
                 elif operation == "close":
                     # Close a position - calculate quantity based on position and target portion
                     position = (
                         db.query(Position)
-                        .filter(Position.account_id == account.id, Position.symbol == symbol, Position.market == "CRYPTO")
+                        .filter(Position.account_id == account.id, Position.symbol == symbol, Position.market == market)
                         .first()
                     )
 
@@ -258,8 +350,11 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
                         quantity = position_quantity * target_portion
 
                     # Round to reasonable precision (6 decimal places for crypto)
-                    quantity = round(quantity, 6)
-
+                    if market == "US":
+                        quantity = int(quantity)
+                    else:
+                        quantity = round(quantity, 6)
+                    
                     if quantity > position_quantity:
                         quantity = position_quantity
 
@@ -270,32 +365,54 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
                         continue
 
                     # Set side to close the position: SELL closes LONG, BUY closes SHORT
-                    side = "SELL" if direction == "long" else "BUY"
-
+                    if market == "US":
+                        side = "SELL" if direction == "long" else "BUY"
+                    else:
+                        side = "SELL" if direction == "long" else "BUY"
+                
                 else:
                     continue
 
                 # Create and execute order using leverage-aware function
-                name = SUPPORTED_SYMBOLS[symbol]
-
+                name = SUPPORTED_SYMBOLS.get(symbol, symbol)
+                
                 order = None
                 executed = False
                 fail_reason = ""
                 try:
-                    order = place_and_execute_crypto(
-                        db=db,
-                        account=account,
-                        symbol=symbol,
-                        name=name,
-                        side=side,
-                        order_type="MARKET",
-                        price=None,
-                        quantity=quantity,
-                        leverage=leverage
-                    )
-
+                    if market == "US":
+                        order = create_order(
+                            db=db,
+                            account=account,
+                            symbol=symbol,
+                            name=name,
+                            side=side,
+                            order_type="MARKET",
+                            price=None,
+                            quantity=quantity,
+                            leverage=1,
+                            market="US",
+                        )
+                        db.commit()
+                        db.refresh(order)
+                        executed = check_and_execute_order(db, order)
+                        if not executed:
+                            raise ValueError("US stock order was not executed")
+                    else:
+                        order = place_and_execute_crypto(
+                            db=db,
+                            account=account,
+                            symbol=symbol,
+                            name=name,
+                            side=side,
+                            order_type="MARKET",
+                            price=None,
+                            quantity=quantity,
+                            leverage=leverage
+                        )
+                    
                     logger.info(
-                        f"AI order executed: account={account.name} {operation.upper()} {direction.upper()} {side} {symbol} {order.order_no} quantity={quantity} leverage={leverage}x reason='{reason}'"
+                        f"AI order executed: account={account.name} {operation.upper()} {direction.upper()} {side} {symbol} {order.order_no} quantity={quantity} leverage={leverage}x market={market} reason='{reason}'"
                     )
                     executed = True
                     _log_trade_execution(operation, symbol, target_portion, price, leverage, True, reason)
@@ -318,9 +435,12 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
 
     except Exception as err:
         logger.error(f"AI-driven order placement failed: {err}", exc_info=True)
-        db.rollback()
+        if db is not None:
+            db.rollback()
     finally:
-        db.close()
+        if db is not None:
+            db.close()
+        _ai_trade_run_lock.release()
 
 
 def place_random_crypto_order(max_ratio: float = 0.2) -> None:

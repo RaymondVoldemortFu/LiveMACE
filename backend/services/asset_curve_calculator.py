@@ -5,12 +5,70 @@ Gets latest 20 close prices for all symbols, then fills curve with cash + sum(sy
 """
 
 from sqlalchemy.orm import Session
-from typing import Dict, List, Tuple, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime, timezone
 import logging
 
-from database.models import Trade, Account, CryptoKline
+from database.models import Trade, Account, AgentPeriodCheckpoint
 from services.market_data import get_kline_data
+from services.time_source import now_utc
+
+
+def _to_epoch_seconds(value: Any) -> Optional[int]:
+    """Best-effort normalize various timestamp formats to epoch seconds (int).
+
+    Supports: int/float, numeric strings, epoch milliseconds, and ISO strings.
+    Returns None if it cannot be parsed.
+    """
+    if value is None:
+        return None
+    try:
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, (int, float)):
+            ts = int(value)
+        elif isinstance(value, str):
+            s = value.strip()
+            if not s:
+                return None
+            # numeric string
+            try:
+                ts = int(float(s))
+            except Exception:
+                # ISO string
+                iso = s.replace("Z", "+00:00")
+                dt = datetime.fromisoformat(iso)
+                if not dt.tzinfo:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                ts = int(dt.timestamp())
+        else:
+            ts = int(value)
+
+        # heuristic: epoch milliseconds
+        if ts > 2_000_000_000_000:
+            ts = ts // 1000
+        return ts
+    except Exception:
+        return None
+
+
+def _align_curve_timestamp(timeframe: str, ts_sec: int) -> int:
+    # Most exchanges timestamp candles at the start of the interval.
+    # Our checkpoints are labeled by period_end, so for 1h we align to hour-end.
+    if timeframe == "1h":
+        return ts_sec + 3600
+    return ts_sec
+
+
+def _list_active_accounts(db: Session) -> List[Account]:
+    # Account.is_active is stored as a string in this project; keep this tolerant
+    # so we don't accidentally return no accounts due to casing/data drift.
+    active_values = ["true", "True", "TRUE", "1", "yes", "YES", "y", "Y"]
+    accounts = db.query(Account).filter(Account.is_active.in_(active_values)).all()
+    if accounts:
+        return accounts
+    # Fallback: return all accounts if none match active_values
+    return db.query(Account).all()
 
 
 def get_all_asset_curves_data_new(db: Session, timeframe: str = "1h") -> List[Dict]:
@@ -25,10 +83,82 @@ def get_all_asset_curves_data_new(db: Session, timeframe: str = "1h") -> List[Di
         List of asset curve data points with timestamp, account info, and asset values
     """
     try:
-        # Step 1: Get all active accounts
-        accounts = db.query(Account).filter(Account.is_active == "true").all()
+        # Step 1: Get accounts (tolerant active flag)
+        accounts = _list_active_accounts(db)
         if not accounts:
             return []
+
+        # For 1h timeframe, use checkpoints as the source of truth.
+        # This guarantees the curve deltas match the right-side hourly PnL.
+        if timeframe == "1h":
+            interval_seconds = 3600
+            # IMPORTANT: multiple accounts share the same period_end; without DISTINCT
+            # a small LIMIT will be consumed by duplicates and hide earlier hours.
+            period_end_rows = (
+                db.query(AgentPeriodCheckpoint.period_end)
+                .filter(AgentPeriodCheckpoint.interval_seconds == interval_seconds)
+                .distinct()
+                .order_by(AgentPeriodCheckpoint.period_end.desc())
+                .limit(200)
+                .all()
+            )
+            period_ends = [r[0] for r in period_end_rows if r and r[0] is not None]
+            period_ends = list(reversed(period_ends))
+
+            if not period_ends:
+                # No checkpoints yet; fall back to old behavior
+                pass
+            else:
+                account_ids = [a.id for a in accounts]
+                rows = (
+                    db.query(AgentPeriodCheckpoint)
+                    .filter(
+                        AgentPeriodCheckpoint.interval_seconds == interval_seconds,
+                        AgentPeriodCheckpoint.account_id.in_(account_ids),
+                        AgentPeriodCheckpoint.period_end.in_(period_ends),
+                    )
+                    .order_by(AgentPeriodCheckpoint.period_end.asc())
+                    .all()
+                )
+
+                by_account: Dict[int, Dict[datetime, float]] = {}
+                for row in rows:
+                    by_account.setdefault(row.account_id, {})[row.period_end] = float(row.equity_end)
+
+                result: List[Dict] = []
+                for account in accounts:
+                    initial = float(account.initial_capital)
+                    last_equity = initial
+                    equity_map = by_account.get(account.id, {})
+                    for pe in period_ends:
+                        if pe in equity_map:
+                            last_equity = equity_map[pe]
+
+                        dt = pe
+                        if dt.tzinfo is None:
+                            dt = dt.replace(tzinfo=timezone.utc)
+                        else:
+                            dt = dt.astimezone(timezone.utc)
+                        ts = int(dt.timestamp())
+                        profit = last_equity - initial
+                        profit_percentage = (profit / initial) * 100 if initial > 0 else 0.0
+
+                        result.append({
+                            "timestamp": ts,
+                            "datetime_str": dt.isoformat(),
+                            "account_id": account.id,
+                            "user_id": account.user_id,
+                            "username": account.name,
+                            "total_assets": last_equity,
+                            "initial_capital": initial,
+                            "profit": profit,
+                            "profit_percentage": profit_percentage,
+                            "cash": 0.0,
+                            "positions_value": 0.0,
+                        })
+
+                result.sort(key=lambda x: (x["timestamp"], x["account_id"]))
+                return result
         
         logging.info(f"Found {len(accounts)} active accounts")
         
@@ -40,7 +170,7 @@ def get_all_asset_curves_data_new(db: Session, timeframe: str = "1h") -> List[Di
         
         if not unique_symbols:
             # No trades yet, return initial capital for all accounts at current time
-            now = datetime.now()
+            now = now_utc()
             return [{
                 "timestamp": int(now.timestamp()),
                 "datetime_str": now.isoformat(),
@@ -70,7 +200,7 @@ def get_all_asset_curves_data_new(db: Session, timeframe: str = "1h") -> List[Di
         
         if not symbol_klines:
             # Fallback to current time if no market data available
-            now = datetime.now()
+            now = now_utc()
             return [{
                 "timestamp": int(now.timestamp()),
                 "datetime_str": now.isoformat(),
@@ -85,9 +215,44 @@ def get_all_asset_curves_data_new(db: Session, timeframe: str = "1h") -> List[Di
                 "positions_value": 0.0,
             } for account in accounts]
         
-        # Step 4: Get common timestamps from market data
-        first_klines = next(iter(symbol_klines.values()))
-        timestamps = [k['timestamp'] for k in first_klines]
+        # Step 4: Choose a reference kline series for timestamps.
+        # Dict insertion order depends on set iteration above, so we pick the series
+        # with the most recent last timestamp to avoid showing stale x-axes.
+        ref_klines = max(
+            symbol_klines.values(),
+            key=lambda ks: ((_to_epoch_seconds(ks[-1].get('timestamp')) or 0) if ks else 0),
+        )
+
+        timestamps: List[int] = []
+        ts_to_datetime_str: Dict[int, str] = {}
+        for k in ref_klines:
+            ts_sec = _to_epoch_seconds(k.get("timestamp"))
+            if ts_sec is None:
+                continue
+            aligned_ts = _align_curve_timestamp(timeframe, ts_sec)
+            timestamps.append(aligned_ts)
+            ts_to_datetime_str[aligned_ts] = datetime.fromtimestamp(aligned_ts, tz=timezone.utc).isoformat()
+
+        if not timestamps:
+            # Fallback if kline timestamps are missing/unparseable
+            now = now_utc()
+            timestamps = [int(now.timestamp())]
+            ts_to_datetime_str[timestamps[0]] = now.isoformat()
+
+        close_maps: Dict[Tuple[str, str], Dict[int, float]] = {}
+        for key, klines in symbol_klines.items():
+            m: Dict[int, float] = {}
+            for kk in klines:
+                ts = _to_epoch_seconds(kk.get('timestamp'))
+                close = kk.get('close')
+                if ts is None or close is None:
+                    continue
+                try:
+                    aligned_ts = _align_curve_timestamp(timeframe, ts)
+                    m[aligned_ts] = float(close)
+                except Exception:
+                    continue
+            close_maps[key] = m
         
         logging.info(f"Processing {len(timestamps)} timestamps")
         
@@ -99,7 +264,7 @@ def get_all_asset_curves_data_new(db: Session, timeframe: str = "1h") -> List[Di
             logging.info(f"Processing account {account_id}: {account.name}")
             
             # Create all-time list for this account: time, cash, positions
-            account_timeline = _create_account_timeline(db, account, timestamps, symbol_klines)
+            account_timeline = _create_account_timeline(db, account, timestamps, close_maps, ts_to_datetime_str)
             result.extend(account_timeline)
         
         # Sort result by timestamp and account_id for consistent ordering
@@ -108,8 +273,8 @@ def get_all_asset_curves_data_new(db: Session, timeframe: str = "1h") -> List[Di
         logging.info(f"Generated {len(result)} data points for asset curves")
         return result
         
-    except Exception as e:
-        logging.error(f"Failed to calculate asset curves: {e}")
+    except Exception:
+        logging.exception("Failed to calculate asset curves")
         return []
 
 
@@ -117,7 +282,8 @@ def _create_account_timeline(
     db: Session, 
     account: Account, 
     timestamps: List[int], 
-    symbol_klines: Dict[Tuple[str, str], List[Dict]]
+    close_maps: Dict[Tuple[str, str], Dict[int, float]],
+    ts_to_datetime_str: Dict[int, str],
 ) -> List[Dict]:
     """
     Create all-time list for an account: time, cash, positions.
@@ -133,18 +299,20 @@ def _create_account_timeline(
         List of timeline data points for the account
     """
     account_id = account.id
-    
+
     # Get all trades for this account, ordered by time
-    trades = db.query(Trade).filter(
-        Trade.account_id == account_id
-    ).order_by(Trade.trade_time.asc()).all()
-    
+    trades = (
+        db.query(Trade)
+        .filter(Trade.account_id == account_id)
+        .order_by(Trade.trade_time.asc())
+        .all()
+    )
+
     if not trades:
         # No trades, return initial capital at all timestamps
-        first_klines = next(iter(symbol_klines.values()))
         return [{
             "timestamp": ts,
-            "datetime_str": first_klines[i]['datetime_str'],
+            "datetime_str": ts_to_datetime_str.get(ts) or datetime.fromtimestamp(ts, tz=timezone.utc).isoformat(),
             "account_id": account.id,
             "user_id": account.user_id,
             "username": account.name,
@@ -158,42 +326,38 @@ def _create_account_timeline(
     
     # Calculate holdings and cash at each timestamp
     timeline = []
-    first_klines = next(iter(symbol_klines.values()))
     
     # Check if we should use actual account.current_cash for the last timestamp
     # This handles cases where cash was adjusted outside of trade history
     use_actual_cash_for_last = len(timestamps) > 0
-    
+
     for i, ts in enumerate(timestamps):
         ts_datetime = datetime.fromtimestamp(ts, tz=timezone.utc)
         is_last_timestamp = (i == len(timestamps) - 1)
-        
-        # Calculate cash and positions up to this timestamp
+
+        # Calculate cash and positions up to this timestamp (stable legacy logic)
         cash_change = 0.0
-        position_quantities = {}
-        
+        position_quantities: Dict[Tuple[str, str], float] = {}
+
         for trade in trades:
             trade_time = trade.trade_time
-            if not trade_time.tzinfo:
+            if not getattr(trade_time, "tzinfo", None):
                 trade_time = trade_time.replace(tzinfo=timezone.utc)
-            
+            else:
+                trade_time = trade_time.astimezone(timezone.utc)
+
             if trade_time <= ts_datetime:
-                # Update cash based on trade (include commission and interest)
-                trade_amount = float(trade.price) * float(trade.quantity) + float(trade.commission) + float(trade.interest_charged)
-                if trade.side == "BUY" or trade.side == "LONG":
-                    cash_change -= trade_amount
-                else:  # SELL or SHORT
-                    cash_change += trade_amount
-                
-                # Update position quantity
+                trade_amount = (
+                    float(trade.price) * float(trade.quantity)
+                    + float(trade.commission)
+                    + float(trade.interest_charged)
+                )
+                is_buy = trade.side in ("BUY", "LONG")
+                cash_change += (-trade_amount if is_buy else trade_amount)
+
                 key = (trade.symbol, trade.market)
-                if key not in position_quantities:
-                    position_quantities[key] = 0.0
-                
-                if trade.side == "BUY" or trade.side == "LONG":
-                    position_quantities[key] += float(trade.quantity)
-                else:  # SELL or SHORT
-                    position_quantities[key] -= float(trade.quantity)
+                signed_qty = float(trade.quantity) if is_buy else -float(trade.quantity)
+                position_quantities[key] = position_quantities.get(key, 0.0) + signed_qty
         
         # For the last timestamp, use actual current_cash to account for any realized P&L or adjustments
         # For historical points, reconstruct from initial capital + cash changes
@@ -242,14 +406,14 @@ def _create_account_timeline(
                     except Exception as e:
                         logging.warning(f"Could not get price for {pos.symbol}.{pos.market}: {e}")
         else:
-            # For historical points, reconstruct from trades
+            # For historical points, use timestamp-aligned close prices
             for (symbol, market), quantity in position_quantities.items():
-                if quantity > 0 and (symbol, market) in symbol_klines:
-                    klines = symbol_klines[(symbol, market)]
-                    if i < len(klines) and klines[i]['close']:
-                        price = float(klines[i]['close'])
-                        # Market value (equity) = price * quantity
-                        positions_value += price * quantity
+                if quantity <= 0:
+                    continue
+                close = close_maps.get((symbol, market), {}).get(ts)
+                if close is None:
+                    continue
+                positions_value += float(close) * float(quantity)
         
         total_assets = current_cash + positions_value
         # Calculate profit: total_assets - initial_capital
@@ -259,7 +423,7 @@ def _create_account_timeline(
         
         timeline.append({
             "timestamp": ts,
-            "datetime_str": first_klines[i]['datetime_str'],
+            "datetime_str": ts_to_datetime_str.get(ts) or datetime.fromtimestamp(ts, tz=timezone.utc).isoformat(),
             "account_id": account.id,
             "user_id": account.user_id,
             "username": account.name,
@@ -296,6 +460,49 @@ def get_account_asset_curve(db: Session, account_id: int, timeframe: str = "1h")
         if not account:
             return []
         
+        # For 1h timeframe, use checkpoints as the source of truth.
+        if timeframe == "1h":
+            interval_seconds = 3600
+            rows = (
+                db.query(AgentPeriodCheckpoint)
+                .filter(
+                    AgentPeriodCheckpoint.account_id == account_id,
+                    AgentPeriodCheckpoint.interval_seconds == interval_seconds,
+                )
+                .order_by(AgentPeriodCheckpoint.period_end.desc())
+                .limit(20)
+                .all()
+            )
+            if not rows:
+                return []
+            rows = list(reversed(rows))
+            initial = float(account.initial_capital)
+            result: List[Dict] = []
+            for row in rows:
+                dt = row.period_end
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                else:
+                    dt = dt.astimezone(timezone.utc)
+                ts = int(dt.timestamp())
+                equity = float(row.equity_end)
+                profit = equity - initial
+                profit_percentage = (profit / initial) * 100 if initial > 0 else 0.0
+                result.append({
+                    "timestamp": ts,
+                    "datetime_str": dt.isoformat(),
+                    "account_id": account.id,
+                    "user_id": account.user_id,
+                    "username": account.name,
+                    "total_assets": equity,
+                    "initial_capital": initial,
+                    "profit": profit,
+                    "profit_percentage": profit_percentage,
+                    "cash": 0.0,
+                    "positions_value": 0.0,
+                })
+            return result
+
         # Get all unique symbols from this account's trades
         symbols_query = db.query(Trade.symbol, Trade.market).filter(
             Trade.account_id == account_id
@@ -307,7 +514,7 @@ def get_account_asset_curve(db: Session, account_id: int, timeframe: str = "1h")
         
         if not unique_symbols:
             # No trades yet, return initial capital
-            now = datetime.now()
+            now = now_utc()
             return [{
                 "timestamp": int(now.timestamp()),
                 "datetime_str": now.isoformat(),
@@ -334,7 +541,7 @@ def get_account_asset_curve(db: Session, account_id: int, timeframe: str = "1h")
         
         if not symbol_klines:
             # Fallback to current time
-            now = datetime.now()
+            now = now_utc()
             return [{
                 "timestamp": int(now.timestamp()),
                 "datetime_str": now.isoformat(),
@@ -349,12 +556,44 @@ def get_account_asset_curve(db: Session, account_id: int, timeframe: str = "1h")
                 "positions_value": 0.0,
             }]
         
-        # Get timestamps
-        first_klines = next(iter(symbol_klines.values()))
-        timestamps = [k['timestamp'] for k in first_klines]
-        
+        # Choose a reference kline series for timestamps (most recent last timestamp)
+        ref_klines = max(
+            symbol_klines.values(),
+            key=lambda ks: ((_to_epoch_seconds(ks[-1].get('timestamp')) or 0) if ks else 0),
+        )
+
+        timestamps: List[int] = []
+        ts_to_datetime_str: Dict[int, str] = {}
+        for k in ref_klines:
+            ts_sec = _to_epoch_seconds(k.get("timestamp"))
+            if ts_sec is None:
+                continue
+            aligned_ts = _align_curve_timestamp(timeframe, ts_sec)
+            timestamps.append(aligned_ts)
+            ts_to_datetime_str[aligned_ts] = datetime.fromtimestamp(aligned_ts, tz=timezone.utc).isoformat()
+
+        if not timestamps:
+            now = now_utc()
+            timestamps = [int(now.timestamp())]
+            ts_to_datetime_str[timestamps[0]] = now.isoformat()
+
+        close_maps: Dict[Tuple[str, str], Dict[int, float]] = {}
+        for key, klines in symbol_klines.items():
+            m: Dict[int, float] = {}
+            for kk in klines:
+                ts = _to_epoch_seconds(kk.get('timestamp'))
+                close = kk.get('close')
+                if ts is None or close is None:
+                    continue
+                try:
+                    aligned_ts = _align_curve_timestamp(timeframe, ts)
+                    m[aligned_ts] = float(close)
+                except Exception:
+                    continue
+            close_maps[key] = m
+
         # Create timeline for this account
-        timeline = _create_account_timeline(db, account, timestamps, symbol_klines)
+        timeline = _create_account_timeline(db, account, timestamps, close_maps, ts_to_datetime_str)
         
         return timeline
         

@@ -1,8 +1,10 @@
-import React from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui/table'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { toast } from 'react-hot-toast'
 import AssetCurveWithData from './AssetCurveWithData'
 import AccountSelector from '@/components/layout/AccountSelector'
@@ -10,6 +12,7 @@ import TradingPanel from '@/components/trading/TradingPanel'
 import { Doughnut } from 'react-chartjs-2'
 import { Chart as ChartJS, ArcElement, Tooltip as ChartTooltip, Legend } from 'chart.js'
 import { AIDecision } from '@/lib/api'
+import { getEvalLeaderboard, getEvalAccountCheckpoints, EvalAccountCheckpointItem, EvalLeaderboardItem } from '@/lib/api'
 
 // Register Chart.js components for pie chart
 ChartJS.register(ArcElement, ChartTooltip, Legend)
@@ -98,6 +101,12 @@ interface AccountDataViewProps {
 
 const API_BASE = typeof window !== 'undefined' ? window.location.origin : 'http://127.0.0.1:5611'
 
+const EVAL_INTERVAL_OPTIONS: Array<{ label: string; seconds: number }> = [
+  { label: '15m', seconds: 15 * 60 },
+  { label: '1h', seconds: 60 * 60 },
+  { label: '1d', seconds: 24 * 60 * 60 },
+]
+
 export default function AccountDataView({
   overview,
   positions,
@@ -114,6 +123,78 @@ export default function AccountDataView({
   accounts,
   loadingAccounts
 }: AccountDataViewProps) {
+
+  const [evalIntervalSeconds, setEvalIntervalSeconds] = useState<number>(60 * 60)
+  const [evalLoading, setEvalLoading] = useState<boolean>(false)
+  const [evalPeriodEnd, setEvalPeriodEnd] = useState<string | null>(null)
+  const [leaderboardItems, setLeaderboardItems] = useState<EvalLeaderboardItem[]>([])
+
+  const [selectedEvalAccountId, setSelectedEvalAccountId] = useState<number | null>(null)
+  const [checkpointLoading, setCheckpointLoading] = useState<boolean>(false)
+  const [checkpointItems, setCheckpointItems] = useState<EvalAccountCheckpointItem[]>([])
+  const [checkpointLimit, setCheckpointLimit] = useState<number>(10)
+
+  useEffect(() => {
+    if (!selectedEvalAccountId && overview?.account?.id) {
+      setSelectedEvalAccountId(overview.account.id)
+    }
+  }, [overview?.account?.id, selectedEvalAccountId])
+
+  const evalIntervalLabel = useMemo(() => {
+    const hit = EVAL_INTERVAL_OPTIONS.find(x => x.seconds === evalIntervalSeconds)
+    return hit?.label ?? `${evalIntervalSeconds}s`
+  }, [evalIntervalSeconds])
+
+  useEffect(() => {
+    let cancelled = false
+
+    const load = async () => {
+      try {
+        setEvalLoading(true)
+        const res = await getEvalLeaderboard(evalIntervalSeconds, 'pnl')
+        if (cancelled) return
+        setEvalPeriodEnd(res.period_end)
+        setLeaderboardItems(res.items || [])
+      } catch (e: any) {
+        if (cancelled) return
+        setEvalPeriodEnd(null)
+        setLeaderboardItems([])
+        toast.error(e?.message || 'Failed to load evaluation leaderboard')
+      } finally {
+        if (!cancelled) setEvalLoading(false)
+      }
+    }
+
+    load()
+    return () => {
+      cancelled = true
+    }
+  }, [evalIntervalSeconds])
+
+  useEffect(() => {
+    if (!selectedEvalAccountId) return
+    let cancelled = false
+
+    const load = async () => {
+      try {
+        setCheckpointLoading(true)
+        const res = await getEvalAccountCheckpoints(selectedEvalAccountId, evalIntervalSeconds, checkpointLimit)
+        if (cancelled) return
+        setCheckpointItems(res.items || [])
+      } catch (e: any) {
+        if (cancelled) return
+        setCheckpointItems([])
+        toast.error(e?.message || 'Failed to load checkpoints')
+      } finally {
+        if (!cancelled) setCheckpointLoading(false)
+      }
+    }
+
+    load()
+    return () => {
+      cancelled = true
+    }
+  }, [selectedEvalAccountId, evalIntervalSeconds, checkpointLimit])
 
   const cancelOrder = async (orderId: number) => {
     try {
@@ -142,9 +223,9 @@ export default function AccountDataView({
   }
 
   return (
-    <div className="h-full flex flex-col space-y-6">
+    <div className="min-h-full flex flex-col space-y-6">
       {/* Main Content */}
-      <div className={`grid gap-6 overflow-hidden ${showAssetCurves ? 'grid-cols-5' : 'grid-cols-1'} h-full`}>
+      <div className={`grid gap-6 ${showAssetCurves ? 'grid-cols-5' : 'grid-cols-1'}`}>
         {/* Asset Curves */}
         {showAssetCurves && (
           <div className="col-span-3">
@@ -153,7 +234,7 @@ export default function AccountDataView({
         )}
 
         {/* Tabs and Trading Panel */}
-        <div className={`${showAssetCurves ? 'col-span-2' : 'col-span-1'} overflow-hidden flex flex-col`}>
+        <div className={`${showAssetCurves ? 'col-span-2' : 'col-span-1'} flex flex-col`}>
           {/* Account Selector */}
           <div className="flex justify-end mb-4">
             <AccountSelector
@@ -165,11 +246,171 @@ export default function AccountDataView({
             />
           </div>
 
+          {/* Evaluation leaderboard */}
+          <Card className="mb-4">
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between gap-2">
+                <CardTitle className="text-base">Agent 结算评分</CardTitle>
+                <div className="w-[96px]">
+                  <Select
+                    value={String(evalIntervalSeconds)}
+                    onValueChange={(v) => setEvalIntervalSeconds(parseInt(v, 10))}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="1h" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {EVAL_INTERVAL_OPTIONS.map((opt) => (
+                        <SelectItem key={opt.seconds} value={String(opt.seconds)}>
+                          {opt.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="text-xs text-muted-foreground">
+                {evalLoading ? '加载中…' : `最新周期(${evalIntervalLabel}) 截止：${evalPeriodEnd ? new Date(evalPeriodEnd).toLocaleString() : '-'}`}
+              </div>
+            </CardHeader>
+            <CardContent className="pt-0">
+              <div className="max-h-[220px] overflow-y-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-[44px]">#</TableHead>
+                      <TableHead>Agent</TableHead>
+                      <TableHead className="text-right">PnL</TableHead>
+                      <TableHead className="text-right">Return</TableHead>
+                      <TableHead className="text-right">Volatility</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {leaderboardItems.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={5} className="text-sm text-muted-foreground">
+                          暂无结算结果（等待产生 checkpoint）
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      leaderboardItems.map((it, idx) => {
+                        const pnl = typeof it.pnl === 'number' ? it.pnl : null
+                        const rr = typeof it.return_rate === 'number' ? it.return_rate : null
+                        const vol = typeof it.volatility === 'number' ? it.volatility : null
+                        return (
+                          <TableRow
+                            key={`${it.account_id}-${idx}`}
+                            className={"cursor-pointer"}
+                            onClick={() => setSelectedEvalAccountId(it.account_id)}
+                            title="点击查看该Agent的checkpoint"
+                          >
+                            <TableCell>{idx + 1}</TableCell>
+                            <TableCell>
+                              <div className="truncate">
+                                {it.agent_name || `#${it.account_id}`}
+                              </div>
+                              {it.agent_type ? (
+                                <div className="text-xs text-muted-foreground">{it.agent_type}</div>
+                              ) : null}
+                            </TableCell>
+                            <TableCell className="text-right">
+                              {pnl === null ? '-' : pnl.toFixed(2)}
+                            </TableCell>
+                            <TableCell className="text-right">
+                              {rr === null ? '-' : `${(rr * 100).toFixed(2)}%`}
+                            </TableCell>
+                            <TableCell className="text-right">
+                              {vol === null ? '-' : `${(vol * 100).toFixed(2)}%`}
+                            </TableCell>
+                          </TableRow>
+                        )
+                      })
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+
+              <div className="mt-4 flex items-center justify-between gap-2">
+                <div className="text-sm font-medium">Checkpoint（按周期）</div>
+                <div className="flex items-center gap-2">
+                  <div className="w-[92px]">
+                    <Select value={String(checkpointLimit)} onValueChange={(v) => setCheckpointLimit(parseInt(v, 10))}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="条数" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="5">5条</SelectItem>
+                        <SelectItem value="10">10条</SelectItem>
+                        <SelectItem value="20">20条</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="w-[180px]">
+                    <Select
+                      value={selectedEvalAccountId ? String(selectedEvalAccountId) : ''}
+                      onValueChange={(v) => setSelectedEvalAccountId(parseInt(v, 10))}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="选择Agent" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {(accounts && accounts.length > 0
+                          ? accounts
+                          : leaderboardItems.map(x => ({ id: x.account_id, name: x.agent_name || `#${x.account_id}` }))).map((a: any) => (
+                          <SelectItem key={a.id} value={String(a.id)}>
+                            {a.name || `#${a.id}`}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-2 max-h-[220px] overflow-y-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>周期截止</TableHead>
+                      <TableHead className="text-right">PnL</TableHead>
+                      <TableHead className="text-right">Return</TableHead>
+                      <TableHead className="text-right">Volatility</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {checkpointItems.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={4} className="text-sm text-muted-foreground">
+                          {checkpointLoading ? '加载中…' : '暂无 checkpoint'}
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      checkpointItems.map((it, idx) => {
+                        const pnl = typeof it.pnl === 'number' ? it.pnl : null
+                        const rr = typeof it.return_rate === 'number' ? it.return_rate : null
+                        const vol = typeof it.volatility === 'number' ? it.volatility : null
+                        return (
+                          <TableRow key={`${it.period_end}-${idx}`}>
+                            <TableCell>{new Date(it.period_end).toLocaleString()}</TableCell>
+                            <TableCell className="text-right">{pnl === null ? '-' : pnl.toFixed(2)}</TableCell>
+                            <TableCell className="text-right">{rr === null ? '-' : `${(rr * 100).toFixed(2)}%`}</TableCell>
+                            <TableCell className="text-right">{vol === null ? '-' : `${(vol * 100).toFixed(2)}%`}</TableCell>
+                          </TableRow>
+                        )
+                      })
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+            </CardContent>
+          </Card>
+
           {/* Content Area */}
-          <div className={`flex-1 overflow-hidden ${showTradingPanel ? 'grid grid-cols-4 gap-4' : ''}`}>
+          <div className={`${showTradingPanel ? 'grid grid-cols-4 gap-4' : ''}`}>
             {/* Tabs */}
-            <div className={`${showTradingPanel ? 'col-span-3' : 'col-span-1'} overflow-hidden`}>
-              <Tabs defaultValue="ai-decisions" className="h-full flex flex-col">
+            <div className={`${showTradingPanel ? 'col-span-3' : 'col-span-1'}`}>
+              <Tabs defaultValue="ai-decisions" className="flex flex-col">
                 <TabsList className="grid w-full grid-cols-4">
                   <TabsTrigger value="ai-decisions">AI Decisions</TabsTrigger>
                   <TabsTrigger value="positions">Positions</TabsTrigger>
@@ -177,23 +418,23 @@ export default function AccountDataView({
                   <TabsTrigger value="trades">Trades</TabsTrigger>
                 </TabsList>
 
-                <div className="flex-1 overflow-hidden">
-                  <TabsContent value="ai-decisions" className="h-full overflow-y-auto">
+                <div>
+                  <TabsContent value="ai-decisions" className="overflow-y-auto">
                     <AIDecisionLog aiDecisions={aiDecisions} />
                   </TabsContent>
 
-                  <TabsContent value="positions" className="h-full overflow-y-auto">
+                  <TabsContent value="positions" className="overflow-y-auto">
                     <div className="space-y-6">
                       <PortfolioPieChart overview={overview} positions={positions} />
                       <PositionList positions={positions} />
                     </div>
                   </TabsContent>
 
-                  <TabsContent value="orders" className="h-full overflow-y-auto">
+                  <TabsContent value="orders" className="overflow-y-auto">
                     <OrderBook orders={orders} onCancelOrder={cancelOrder} />
                   </TabsContent>
 
-                  <TabsContent value="trades" className="h-full overflow-y-auto">
+                  <TabsContent value="trades" className="overflow-y-auto">
                     <TradeHistory trades={trades} />
                   </TabsContent>
                 </div>
@@ -202,7 +443,7 @@ export default function AccountDataView({
 
             {/* Trading Panel */}
             {showTradingPanel && (
-              <div className="col-span-1 overflow-hidden">
+              <div className="col-span-1">
                 <TradingPanel
                   onPlace={(payload) => {
                     // Handle order placement via websocket

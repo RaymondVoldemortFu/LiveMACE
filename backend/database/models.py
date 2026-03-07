@@ -202,8 +202,8 @@ class CryptoPrice(Base):
     __table_args__ = (UniqueConstraint('symbol', 'market', 'price_date'),)
 
 
-class CryptoKline(Base):
-    __tablename__ = "crypto_klines"
+class MarketKline(Base):
+    __tablename__ = "market_klines"
 
     id = Column(Integer, primary_key=True, index=True)
     symbol = Column(String(20), nullable=False, index=True)
@@ -265,6 +265,38 @@ class AgentTrace(Base):
     created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
 
     account = relationship("Account")
+
+
+class AgentPeriodCheckpoint(Base):
+    """Periodic performance checkpoint for an agent/account.
+
+    Stores the account equity snapshot at the end of each fixed time slice so we can
+    compare agents fairly over time (like checkpoints).
+    """
+
+    __tablename__ = "agent_period_checkpoints"
+
+    id = Column(Integer, primary_key=True, index=True)
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False, index=True)
+
+    # The fixed slice size in seconds (e.g. 3600 for 1h)
+    interval_seconds = Column(Integer, nullable=False, index=True)
+    period_start = Column(DateTime, nullable=False, index=True)
+    period_end = Column(DateTime, nullable=False, index=True)
+
+    equity_start = Column(DECIMAL(18, 6), nullable=False)
+    equity_end = Column(DECIMAL(18, 6), nullable=False)
+    pnl = Column(DECIMAL(18, 6), nullable=False)
+    return_rate = Column(Float, nullable=False)  # pnl / equity_start
+    volatility = Column(Float, nullable=False, default=0.0)  # rolling stddev of return_rate
+
+    created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
+
+    account = relationship("Account")
+
+    __table_args__ = (
+        UniqueConstraint("account_id", "interval_seconds", "period_end"),
+    )
 
 
 class AgentMemory(Base):

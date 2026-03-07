@@ -53,8 +53,7 @@ def _is_default_api_key(api_key: str) -> bool:
 def _get_portfolio_data(db: Session, account: Account) -> Dict:
     """Get current portfolio positions and values"""
     positions = db.query(Position).filter(
-        Position.account_id == account.id,
-        Position.market == "CRYPTO"
+        Position.account_id == account.id
     ).all()
 
     portfolio = {}
@@ -65,7 +64,8 @@ def _get_portfolio_data(db: Session, account: Account) -> Dict:
                 "avg_cost": float(pos.avg_cost),
                 "current_value": float(pos.quantity) * float(pos.avg_cost),
                 "side": (pos.side or "LONG").upper(),  # Include position direction
-                "leverage": pos.leverage  # Include leverage
+                "leverage": pos.leverage,  # Include leverage
+                "market": pos.market,
             }
 
     return {
@@ -400,13 +400,30 @@ def call_agent_for_decision(
 ) -> Optional[Dict]:
     """基于 Agent（多轮+工具）的决策接口，保持与 call_ai_for_decision 兼容。"""
 
-    if _is_default_api_key(account.api_key):
-        logger.info(f"Skipping AI trading for account {account.name} - using default API key")
+    account_id = account.id
+    account_name = getattr(account, "name", f"account_{account_id}")
+    account_type = getattr(account, "agent_type", "react")
+    account_model = account.model
+    account_api_key = account.api_key
+    account_base_url = account.base_url
+
+    if _is_default_api_key(account_api_key):
+        logger.info(f"Skipping AI trading for account {account_name} - using default API key")
         return None
 
     # Lease a container for the agent session
     container_service = ContainerService()
-    container_service.lease_container(account.id)
+    leased_container_id = container_service.lease_container(account_id)
+    if not leased_container_id:
+        logger.error(f"Failed to lease sandbox container for account {account_name} (ID: {account_id})")
+        return {
+            "operation": "hold",
+            "symbol": "",
+            "direction": "long",
+            "target_portion_of_balance": 0.0,
+            "leverage": 1,
+            "reason": "Container unavailable, fallback hold",
+        }
 
     trace_id = str(uuid.uuid4())
     step_counter = 0
@@ -417,6 +434,16 @@ def call_agent_for_decision(
         try:
             role = message.get("role", "unknown")
             content = message.get("content")
+            if content in (None, ""):
+                # Some OpenAI-compatible providers return reasoning text in
+                # reasoning_content while keeping content=null when tool_calls exist.
+                reasoning_content = message.get("reasoning_content")
+                if reasoning_content not in (None, ""):
+                    content = reasoning_content
+                else:
+                    reasoning = message.get("reasoning")
+                    if reasoning not in (None, ""):
+                        content = reasoning
 
             # Handle tool calls serialization
             tool_calls_data = message.get("tool_calls")
@@ -424,10 +451,12 @@ def call_agent_for_decision(
             if tool_calls_data:
                 tool_calls_list = []
                 for t in tool_calls_data:
-                    if hasattr(t, "model_dump"):
+                    if isinstance(t, dict):
+                        tool_calls_list.append(t)
+                    elif hasattr(t, "model_dump"):
                         tool_calls_list.append(t.model_dump())
                     elif hasattr(t, "dict"):
-                         tool_calls_list.append(t.dict())
+                        tool_calls_list.append(t.dict())
                     else:
                         tool_calls_list.append(str(t))
                 tool_calls_str = json.dumps(tool_calls_list, ensure_ascii=False)
@@ -439,7 +468,7 @@ def call_agent_for_decision(
 
             trace = AgentTrace(
                 trace_id=trace_id,
-                account_id=account.id,
+                account_id=account_id,
                 step_number=step_counter,
                 role=role,
                 content=str(content) if content is not None else None,
@@ -450,30 +479,34 @@ def call_agent_for_decision(
             db.commit()
         except Exception as e:
             logger.error(f"Failed to save agent trace: {e}")
+            try:
+                db.rollback()
+            except Exception:
+                pass
 
     try:
         llm = LLMClient(
-            model=account.model,
-            api_key=account.api_key,
-            base_url=account.base_url,  # 注意要和 OpenAI SDK 预期的 base_url 对齐
+            model=account_model,
+            api_key=account_api_key,
+            base_url=account_base_url,  # 注意要和 OpenAI SDK 预期的 base_url 对齐
         )
 
         registry = ToolRegistry()
-        register_default_tools(registry, db, account.id)
-
+        register_default_tools(registry, db, account_id)
+        
         # Register the new history tool
-        registry.register(HistoryTool(db, account.id))
+        registry.register(HistoryTool(db, account_id))
 
-        logger.info(f"Initiating agent decision for account: {account.name} (ID: {account.id}) Type: {getattr(account, 'agent_type', 'react')}")
-
+        logger.info(f"Initiating agent decision for account: {account_name} (ID: {account_id}) Type: {account_type}")
+        
         # Use factory to create agent based on account config
-        agent_type = getattr(account, "agent_type", None)
+        agent_type = account_type
         agent = create_agent(
             agent_type=agent_type,
-            llm=llm,
-            tools=registry,
-            max_steps=AgentConfig.MAX_STEPS,
-            user_id=str(account.id)
+            llm=llm, 
+            tools=registry, 
+            max_steps=AgentConfig.MAX_STEPS, 
+            user_id=str(account_id)
         )
 
         decision = agent.run(portfolio=portfolio, prices=prices, on_step=on_step, trace_id=trace_id)
@@ -481,7 +514,7 @@ def call_agent_for_decision(
         if decision:
             decision["trace_id"] = trace_id
 
-        logger.info(f"Agent decision for {account.name}: {decision}")
+        logger.info(f"Agent decision for {account_name}: {decision}")
         return decision
 
     except Exception as e:
@@ -489,4 +522,5 @@ def call_agent_for_decision(
         return None
     finally:
         # Always release the container
-        container_service.release_container(account.id)
+        if leased_container_id:
+            container_service.release_container(account_id)

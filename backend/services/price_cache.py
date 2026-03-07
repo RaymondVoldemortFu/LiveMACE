@@ -2,11 +2,11 @@
 Price caching service to reduce API calls and improve performance
 """
 
-import time
 from typing import Dict, Optional, Tuple
 import logging
 from threading import Lock
 
+from services.time_source import now_timestamp
 logger = logging.getLogger(__name__)
 
 
@@ -21,7 +21,7 @@ class PriceCache:
     def get(self, symbol: str, market: str) -> Optional[float]:
         """Get cached price if still valid"""
         key = (symbol, market)
-        current_time = time.time()
+        current_time = now_timestamp()
         
         with self.lock:
             if key in self.cache:
@@ -39,7 +39,7 @@ class PriceCache:
     def set(self, symbol: str, market: str, price: float):
         """Cache a price with current timestamp"""
         key = (symbol, market)
-        current_time = time.time()
+        current_time = now_timestamp()
         
         with self.lock:
             self.cache[key] = (price, current_time)
@@ -47,7 +47,7 @@ class PriceCache:
     
     def clear_expired(self):
         """Remove all expired entries"""
-        current_time = time.time()
+        current_time = now_timestamp()
         expired_keys = []
         
         with self.lock:
@@ -63,7 +63,7 @@ class PriceCache:
     
     def get_cache_stats(self) -> Dict:
         """Get cache statistics"""
-        current_time = time.time()
+        current_time = now_timestamp()
         total_entries = 0
         valid_entries = 0
         

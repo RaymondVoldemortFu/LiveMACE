@@ -9,7 +9,7 @@ import requests
 from datetime import datetime, timedelta
 
 from database.connection import get_db
-from database.models import CryptoKline
+from database.models import MarketKline
 from factors import compute_all_factors, compute_selected_factors, list_factors
 
 router = APIRouter(prefix="/api/ranking", tags=["ranking"])
@@ -61,11 +61,11 @@ async def get_ranking_table(
     start_date = end_date - timedelta(days=days)
     
     # Query K-line data for the specified period
-    kline_query = db.query(CryptoKline).filter(
-        CryptoKline.period == "1d",
-        CryptoKline.datetime_str >= start_date.strftime("%Y-%m-%d"),
-        CryptoKline.datetime_str <= end_date.strftime("%Y-%m-%d")
-    ).order_by(CryptoKline.symbol, CryptoKline.timestamp)
+    kline_query = db.query(MarketKline).filter(
+        MarketKline.period == "1d",
+        MarketKline.datetime_str >= start_date.strftime("%Y-%m-%d"),
+        MarketKline.datetime_str <= end_date.strftime("%Y-%m-%d")
+    ).order_by(MarketKline.symbol, MarketKline.timestamp)
     
     kline_data = kline_query.all()
     
@@ -158,10 +158,10 @@ async def get_available_symbols(
     start_date = end_date - timedelta(days=days)
     
     # Query symbols with data in the specified period
-    symbols_query = db.query(CryptoKline.symbol).filter(
-        CryptoKline.period == "1d",
-        CryptoKline.datetime_str >= start_date.strftime("%Y-%m-%d"),
-        CryptoKline.datetime_str <= end_date.strftime("%Y-%m-%d")
+    symbols_query = db.query(MarketKline.symbol).filter(
+        MarketKline.period == "1d",
+        MarketKline.datetime_str >= start_date.strftime("%Y-%m-%d"),
+        MarketKline.datetime_str <= end_date.strftime("%Y-%m-%d")
     ).distinct()
     
     symbols = [row.symbol for row in symbols_query.all()]

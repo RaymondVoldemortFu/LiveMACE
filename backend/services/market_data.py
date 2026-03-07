@@ -7,55 +7,223 @@ from .hyperliquid_market_data import (
     get_all_symbols_from_hyperliquid,
     hyperliquid_client,
 )
+from .alpaca_market_data import (
+    get_last_price_from_alpaca,
+    get_kline_data_from_alpaca,
+    get_market_status_from_alpaca,
+    get_all_supported_symbols,
+)
+from database.connection import SessionLocal
+from database.models import MarketKline
+from services.time_source import now_timestamp
+from repositories.kline_repo import KlineRepository
 
 logger = logging.getLogger(__name__)
 
+KLINE_CACHE_PERIOD = "1m"
+KLINE_CACHE_MAX_STALE_SECONDS = 120
+
+
+def _period_to_seconds(period: str) -> int | None:
+    if not period:
+        return None
+    p = str(period).strip().lower()
+    try:
+        if p.endswith("m"):
+            return int(p[:-1]) * 60
+        if p.endswith("h"):
+            return int(p[:-1]) * 60 * 60
+        if p.endswith("d"):
+            return int(p[:-1]) * 24 * 60 * 60
+    except ValueError:
+        return None
+    return None
+
+
+def _normalize_market(market: str | None) -> str:
+    if not market:
+        return "CRYPTO"
+    market_upper = str(market).upper()
+    if market_upper in ("US", "STOCK", "STOCKS"):
+        return "US"
+    if market_upper in ("CRYPTO", "HYPERLIQUID"):
+        return "CRYPTO"
+    return market_upper
+
+
+def _looks_like_crypto_symbol(symbol: str) -> bool:
+    return "/" in symbol or ":" in symbol
+
+
+def _resolve_market(symbol: str, market: str | None) -> str:
+    market_norm = _normalize_market(market)
+    if market_norm == "US" and _looks_like_crypto_symbol(symbol):
+        return "CRYPTO"
+    return market_norm
+
+
+def _get_cached_latest_price(symbol: str, market: str) -> float | None:
+    if not symbol:
+        return None
+
+    db = SessionLocal()
+    try:
+        row = (
+            db.query(MarketKline)
+            .filter(
+                MarketKline.symbol == symbol,
+                MarketKline.market == market,
+                MarketKline.period == KLINE_CACHE_PERIOD,
+            )
+            .order_by(MarketKline.timestamp.desc())
+            .first()
+        )
+        if not row:
+            return None
+        if (now_timestamp() - row.timestamp) > KLINE_CACHE_MAX_STALE_SECONDS:
+            return None
+        return float(row.close_price) if row.close_price is not None else None
+    finally:
+        db.close()
+
+
+def _get_cached_klines(symbol: str, market: str, period: str, count: int) -> List[Dict[str, Any]]:
+    if not symbol:
+        return []
+
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(MarketKline)
+            .filter(
+                MarketKline.symbol == symbol,
+                MarketKline.market == market,
+                MarketKline.period == period,
+            )
+            .order_by(MarketKline.timestamp.desc())
+            .limit(count)
+            .all()
+        )
+        if not rows:
+            return []
+
+        rows_sorted = sorted(rows, key=lambda r: r.timestamp)
+        latest_ts = rows_sorted[-1].timestamp
+        period_seconds = _period_to_seconds(period)
+        # Period-aware stale threshold:
+        # - For small periods, require fairly fresh data
+        # - For large periods (e.g., 1d), allow data within a candle duration
+        stale_threshold = max(
+            KLINE_CACHE_MAX_STALE_SECONDS,
+            int(period_seconds) if period_seconds else KLINE_CACHE_MAX_STALE_SECONDS,
+        )
+        if (now_timestamp() - latest_ts) > stale_threshold:
+            return []
+
+        return [
+            {
+                "timestamp": r.timestamp,
+                "datetime_str": r.datetime_str,
+                "open": float(r.open_price) if r.open_price is not None else None,
+                "high": float(r.high_price) if r.high_price is not None else None,
+                "low": float(r.low_price) if r.low_price is not None else None,
+                "close": float(r.close_price) if r.close_price is not None else None,
+                "volume": float(r.volume) if r.volume is not None else None,
+                "amount": float(r.amount) if r.amount is not None else None,
+                "change": float(r.change) if r.change is not None else None,
+                "percent": float(r.percent) if r.percent is not None else None,
+            }
+            for r in rows_sorted
+        ]
+    finally:
+        db.close()
+
+
+def _save_klines(symbol: str, market: str, period: str, klines: List[Dict[str, Any]]) -> None:
+    if not klines:
+        return
+    db = SessionLocal()
+    try:
+        repo = KlineRepository(db)
+        repo.save_kline_data(symbol, market, period, klines)
+    finally:
+        db.close()
+
 
 def get_last_price(symbol: str, market: str = "CRYPTO") -> float:
-    key = f"{symbol}.{market}"
+    market_norm = _resolve_market(symbol, market)
+    key = f"{symbol}.{market_norm}"
     
     # Check cache first
     from .price_cache import get_cached_price, cache_price
-    cached_price = get_cached_price(symbol, market)
+    cached_price = get_cached_price(symbol, market_norm)
     if cached_price is not None:
         logger.debug(f"Using cached price for {key}: {cached_price}")
         return cached_price
+
+    cached_db_price = _get_cached_latest_price(symbol, market_norm)
+    if cached_db_price is not None:
+        cache_price(symbol, market_norm, cached_db_price)
+        return cached_db_price
     
     logger.info(f"Getting real-time price for {key} from API...")
 
     try:
-        price = get_last_price_from_hyperliquid(symbol)
+        if market_norm == "US":
+            source = "Alpaca"
+            price = get_last_price_from_alpaca(symbol)
+        else:
+            source = "Hyperliquid"
+            price = get_last_price_from_hyperliquid(symbol)
         if price and price > 0:
-            logger.info(f"Got real-time price for {key} from Hyperliquid: {price}")
+            logger.info(f"Got real-time price for {key} from {source}: {price}")
             # Cache the price
-            cache_price(symbol, market, price)
+            cache_price(symbol, market_norm, price)
             return price
-        raise Exception(f"Hyperliquid returned invalid price: {price}")
+        raise Exception(f"{source} returned invalid price: {price}")
     except Exception as hl_err:
-        logger.error(f"Failed to get price from Hyperliquid: {hl_err}")
+        logger.error(f"Failed to get price from {source}: {hl_err}")
         raise Exception(f"Unable to get real-time price for {key}: {hl_err}")
 
 
 def get_kline_data(symbol: str, market: str = "CRYPTO", period: str = "1d", count: int = 100, start_time: Any = None, end_time: Any = None) -> List[Dict[str, Any]]:
-    key = f"{symbol}.{market}"
+    market_norm = _resolve_market(symbol, market)
+    key = f"{symbol}.{market_norm}"
 
     try:
-        data = get_kline_data_from_hyperliquid(symbol, period, count, start_time, end_time)
+        if start_time is None and end_time is None:
+            cached = _get_cached_klines(symbol, market_norm, period, count)
+            if cached:
+                return cached
+
+        if market_norm == "US":
+            source = "Alpaca"
+            data = get_kline_data_from_alpaca(symbol, period, count, start_time, end_time)
+        else:
+            source = "Hyperliquid"
+            data = get_kline_data_from_hyperliquid(symbol, period, count, start_time, end_time)
         if data is not None:
-            logger.info(f"Got K-line data for {key} from Hyperliquid, total {len(data)} items")
+            logger.info(f"Got K-line data for {key} from {source}, total {len(data)} items")
+            _save_klines(symbol, market_norm, period, data)
             return data
-        raise Exception("Hyperliquid returned empty K-line data")
+        raise Exception(f"{source} returned empty K-line data")
     except Exception as hl_err:
-        logger.error(f"Failed to get K-line data from Hyperliquid: {hl_err}")
+        logger.error(f"Failed to get K-line data from {source}: {hl_err}")
         raise Exception(f"Unable to get K-line data for {key}: {hl_err}")
 
 
 def get_market_status(symbol: str, market: str = "CRYPTO") -> Dict[str, Any]:
-    key = f"{symbol}.{market}"
+    market_norm = _resolve_market(symbol, market)
+    key = f"{symbol}.{market_norm}"
 
     try:
-        status = get_market_status_from_hyperliquid(symbol)
-        logger.info(f"Retrieved market status for {key} from Hyperliquid: {status.get('market_status')}")
+        if market_norm == "US":
+            source = "Alpaca"
+            status = get_market_status_from_alpaca(symbol)
+        else:
+            source = "Hyperliquid"
+            status = get_market_status_from_hyperliquid(symbol)
+        logger.info(f"Retrieved market status for {key} from {source}: {status.get('market_status')}")
         return status
     except Exception as hl_err:
         logger.error(f"Failed to get market status: {hl_err}")
@@ -71,3 +239,10 @@ def get_all_symbols() -> List[str]:
     except Exception as hl_err:
         logger.error(f"Failed to get trading pairs list: {hl_err}")
         return ['BTC/USD', 'ETH/USD', 'SOL/USD']  # default trading pairs
+
+
+def get_all_symbols_by_market(market: str = "CRYPTO") -> List[str]:
+    market_norm = _normalize_market(market)
+    if market_norm == "US":
+        return get_all_supported_symbols()
+    return get_all_symbols()

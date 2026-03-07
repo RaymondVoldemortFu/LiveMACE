@@ -164,7 +164,13 @@ class SearchSubAgent:
                     agent_logger.info(f"Sub-Agent requested {len(msg.tool_calls)} tools")
                     for tc in msg.tool_calls:
                         func_name = tc.function.name
-                        args = json.loads(tc.function.arguments)
+                        try:
+                            args = json.loads(tc.function.arguments or "{}")
+                        except json.JSONDecodeError as e:
+                            logger.warning(
+                                f"Invalid sub-agent tool arguments for {func_name}: {e}; raw={tc.function.arguments!r}"
+                            )
+                            args = {}
                         agent_logger.info(f"Executing {func_name} with args: {tc.function.arguments}")
                         
                         result = None

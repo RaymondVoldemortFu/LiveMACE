@@ -1,6 +1,7 @@
 import json
 import logging
 import uuid
+import inspect
 from typing import Dict, Any, List, Optional, Callable
 from datetime import datetime, timezone, timedelta
 
@@ -30,6 +31,25 @@ class MultiAgent(BaseAgent):
 
         # Shared conversation history (context)
         self.context = []
+
+    def _missing_required_args(self, func: Callable, args: Dict[str, Any]) -> List[str]:
+        target = getattr(func, "func", func)
+        try:
+            sig = inspect.signature(target)
+        except Exception:
+            return []
+
+        missing: List[str] = []
+        for name, param in sig.parameters.items():
+            if param.kind not in (
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                inspect.Parameter.KEYWORD_ONLY,
+            ):
+                continue
+            if param.default is inspect._empty and name not in args:
+                missing.append(name)
+        return missing
 
     def _run_sub_agent(self, agent_name: str, instruction: str, portfolio: Dict, prices: Dict, on_step: Optional[Callable] = None) -> str:
         """Run a single turn for a sub-agent"""
@@ -118,11 +138,51 @@ class MultiAgent(BaseAgent):
             if tool_calls:
                 for tc in tool_calls:
                     name = tc.function.name
-                    args = json.loads(tc.function.arguments or "{}")
+                    args_str = tc.function.arguments or "{}"
+                    try:
+                        args = json.loads(args_str)
+                    except json.JSONDecodeError as e:
+                        result = {
+                            "error": f"Invalid tool arguments JSON for '{name}': {e}. Please retry with valid JSON arguments."
+                        }
+                        tool_msg = {
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "name": name,
+                            "content": json.dumps(result, ensure_ascii=False)
+                        }
+                        messages.append(tool_msg)
+                        if on_step:
+                            on_step({
+                                "role": "tool",
+                                "tool_call_id": tc.id,
+                                "name": name,
+                                "content": json.dumps(result, ensure_ascii=False),
+                                "metadata": {"agent": agent_name}
+                            })
+                        continue
                     
                     # Execute tool
-                    tool_func = self.tools.get(name)
-                    result = tool_func(**args)
+                    try:
+                        if not isinstance(args, dict):
+                            result = {
+                                "error": f"Invalid tool arguments for '{name}': expected object, got {type(args).__name__}."
+                            }
+                        else:
+                            tool_func = self.tools.get(name)
+                            missing = self._missing_required_args(tool_func, args)
+                            if missing:
+                                result = {
+                                    "error": (
+                                        f"Missing required arguments for '{name}': {', '.join(missing)}. "
+                                        "Please retry with all required fields."
+                                    )
+                                }
+                            else:
+                                result = tool_func(**args)
+                    except Exception as tool_err:
+                        logger.error(f"Sub-agent tool execution failed for {name}: {tool_err}")
+                        result = {"error": f"Tool execution failed: {str(tool_err)}"}
                     
                     # Add tool result to messages
                     tool_msg = {

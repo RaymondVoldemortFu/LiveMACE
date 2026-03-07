@@ -30,18 +30,20 @@ def register_default_tools(registry, db: Session, account_id: int):
     registry.register(
         Tool(
             name="get_market_snapshot",
-            description="获取某个币种的最新行情数据",
+            description="获取某个币种/股票的最新行情数据",
             parameters={
                 "type": "object",
                 "properties": {
-                    "symbol": {"type": "string"}
+                    "symbol": {"type": "string"},
+                    "market": {"type": "string", "description": "CRYPTO 或 US", "default": "CRYPTO"}
                 },
                 "required": ["symbol"]
             },
-            func=lambda symbol: {
+            func=lambda symbol, market="CRYPTO": {
                 "symbol": symbol,
-                "price": float(get_last_price(symbol)),
-                "market_status": get_market_status(symbol)
+                "market": market,
+                "price": float(get_last_price(symbol, market)),
+                "market_status": get_market_status(symbol, market)
             }
         )
     )
@@ -52,13 +54,18 @@ def register_default_tools(registry, db: Session, account_id: int):
     registry.register(
         Tool(
             name="get_kline_history",
-            description="获取指定加密货币在指定时间范围内的K线数据并保存到虚拟环境的文件中。返回文件路径和读取建议。",
+            description="获取指定币种/股票在指定时间范围内的K线数据并保存到虚拟环境的文件中。返回文件路径和读取建议。",
             parameters={
                 "type": "object",
                 "properties": {
                     "symbol": {
                         "type": "string",
                         "description": "交易对符号, e.g. BTC"
+                    },
+                    "market": {
+                        "type": "string",
+                        "description": "市场标识, CRYPTO 或 US",
+                        "default": "CRYPTO"
                     },
                     "interval": {
                         "type": "string",
@@ -76,8 +83,8 @@ def register_default_tools(registry, db: Session, account_id: int):
                 },
                 "required": ["symbol", "interval", "start_time"]
             },
-            func=lambda symbol, interval, start_time, end_time=None: _get_kline_and_save(
-                container_service, account_id, symbol, interval, start_time, end_time
+            func=lambda symbol, interval, start_time, end_time=None, market="CRYPTO": _get_kline_and_save(
+                container_service, account_id, symbol, interval, start_time, end_time, market
             )
         )
     )
@@ -188,7 +195,7 @@ def register_default_tools(registry, db: Session, account_id: int):
     registry.register(
         Tool(
             name="run_python_script",
-            description="在虚拟环境中运行Python脚本。会自动保存为临时文件并执行。\n重要提示：脚本必须使用 print() 函数输出结果，否则将看不到任何输出。脚本不会像REPL那样自动打印最后一行表达式的值。",
+            description="在虚拟环境中运行Python脚本。会自动保存为临时文件并执行。\n脚本必须使用 print() 函数输出结果，否则将看不到任何输出。脚本不会像REPL那样自动打印最后一行表达式的值。调用时参数必须是严格 JSON：{\"script_content\": \"<python code>\"}。只能使用双引号，不能使用单引号。",
             parameters={
                 "type": "object",
                 "properties": {
@@ -213,6 +220,10 @@ def _run_python_helper(service, account_id, content):
     timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
     filename = f"script_{timestamp}.py"
     filepath = f"/workspace/{filename}"
+
+    # Normalize escaped newlines from tool input
+    if "\\n" in content and "\n" not in content:
+        content = content.replace("\\n", "\n").replace("\\t", "\t")
     
     write_res = service.write_file(account_id, filepath, content)
     
@@ -267,8 +278,8 @@ def _run_python_helper(service, account_id, content):
     }
 
 
-def _get_kline_and_save(service, account_id, symbol, interval, start_time, end_time=None):
-    data = _get_kline_wrapper(symbol, interval, start_time, end_time)
+def _get_kline_and_save(service, account_id, symbol, interval, start_time, end_time=None, market="CRYPTO"):
+    data = _get_kline_wrapper(symbol, interval, start_time, end_time, market)
     
     if isinstance(data, dict) and "error" in data:
         return data
@@ -327,7 +338,7 @@ def _serialize_order(order):
     }
 
 
-def _get_kline_wrapper(symbol, interval, start_time, end_time=None):
+def _get_kline_wrapper(symbol, interval, start_time, end_time=None, market="CRYPTO"):
     start_ts = _parse_iso_time(start_time)
     end_ts = _parse_iso_time(end_time) if end_time else None
 
@@ -338,7 +349,7 @@ def _get_kline_wrapper(symbol, interval, start_time, end_time=None):
     # We can pass a larger count if needed, or let it use default.
     # If end_time is far away, we might need more than 100.
     # Let's pass a larger count (e.g. 1000) to cover more ground.
-    return get_kline_data(symbol, period=interval, count=1000, start_time=start_ts, end_time=end_ts)
+    return get_kline_data(symbol, market=market, period=interval, count=1000, start_time=start_ts, end_time=end_ts)
 
 
 def _parse_iso_time(time_str):

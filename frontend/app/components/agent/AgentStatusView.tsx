@@ -104,6 +104,29 @@ export default function AgentStatusView({ accounts }: AgentStatusViewProps) {
         }
     }
 
+    const normalizeToolCalls = (toolCalls: any): any[] => {
+        if (!toolCalls) return []
+        if (!Array.isArray(toolCalls)) return [toolCalls]
+
+        return toolCalls.map((item) => {
+            if (typeof item === 'string') {
+                // Backward compatibility for old traces where dicts were stringified.
+                const nameMatch = item.match(/'name':\s*'([^']+)'/)
+                const argsMatch = item.match(/'arguments':\s*'([^']*)'/)
+                if (nameMatch || argsMatch) {
+                    return {
+                        function: {
+                            name: nameMatch?.[1] || 'unknown',
+                            arguments: argsMatch?.[1] || '{}',
+                        },
+                    }
+                }
+                return item
+            }
+            return item
+        })
+    }
+
     const renderStep = (step: AgentStep) => {
         if (step.role === 'memory') {
             return (
@@ -137,6 +160,7 @@ export default function AgentStatusView({ accounts }: AgentStatusViewProps) {
                 displayContent = step.content.substring(match[0].length).trim()
             }
         }
+        const normalizedToolCalls = normalizeToolCalls(step.tool_calls)
 
         return (
             <div key={step.step_number} className={`flex flex-col mb-4 ${isUser ? 'items-end' : 'items-start'}`}>
@@ -176,10 +200,10 @@ export default function AgentStatusView({ accounts }: AgentStatusViewProps) {
                         </div>
                     )}
                     
-                    {step.tool_calls && (
+                    {normalizedToolCalls.length > 0 && (
                         <div className="mt-2 bg-black/5 p-2 rounded text-xs font-mono overflow-x-auto whitespace-pre-wrap break-all">
                             <div className="font-bold text-purple-600 mb-1">Tool Calls:</div>
-                            <pre className="whitespace-pre-wrap break-all">{JSON.stringify(step.tool_calls, null, 2)}</pre>
+                            <pre className="whitespace-pre-wrap break-all">{JSON.stringify(normalizedToolCalls, null, 2)}</pre>
                         </div>
                     )}
 

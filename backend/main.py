@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 import os
 
 from config.logging_config import setup_logging
@@ -40,6 +41,18 @@ if os.path.exists(static_dir):
 def on_startup():
     # Create tables
     Base.metadata.create_all(bind=engine)
+
+    # Lightweight schema migration for SQLite: add new columns if missing.
+    # create_all() does not ALTER existing tables.
+    with engine.begin() as conn:
+        cols = [row[1] for row in conn.execute(text("PRAGMA table_info(agent_period_checkpoints)"))]
+        if "volatility" not in cols:
+            conn.execute(
+                text(
+                    "ALTER TABLE agent_period_checkpoints "
+                    "ADD COLUMN volatility FLOAT DEFAULT 0.0 NOT NULL"
+                )
+            )
     # Seed trading configs if empty
     db: Session = SessionLocal()
     try:
@@ -136,6 +149,7 @@ from api.ranking_routes import router as ranking_router
 from api.crypto_routes import router as crypto_router
 from api.agent_routes import router as agent_router
 from api.memory_routes import router as memory_router
+from api.evaluation_routes import router as evaluation_router
 # Removed: AI account routes merged into account_routes (unified AI trader accounts)
 
 app.include_router(market_data_router)
@@ -146,6 +160,7 @@ app.include_router(ranking_router)
 app.include_router(crypto_router)
 app.include_router(agent_router)
 app.include_router(memory_router)
+app.include_router(evaluation_router)
 # app.include_router(ai_account_router, prefix="/api")  # Removed - merged into account_router
 
 # WebSocket endpoint
