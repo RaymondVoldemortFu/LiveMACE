@@ -15,6 +15,7 @@ llm_trace_logger = logging.getLogger("llm_trace")
 tool_selector_trace_logger = logging.getLogger("tool_selector_trace")
 
 META_TOOL_NAME = "select_tools"
+TOOL_SELECTOR_RESPONSE_FORMAT = {"type": "json_object"}
 
 REQUIRED_TOOL_NAMES = [
     "get_market_snapshot",
@@ -76,6 +77,112 @@ def _available_tool_names(tool_schemas: Iterable[Dict[str, Any]]) -> List[str]:
     return names
 
 
+def _stringify_message_content(content: Any) -> str:
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    try:
+        return json.dumps(content, ensure_ascii=False)
+    except Exception:
+        return str(content)
+
+
+def _truncate_text(text: str, max_chars: int = 2000) -> str:
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + "\n...[truncated]"
+
+
+def _format_context_for_prompt(messages: List[Dict[str, Any]], limit: int = 30) -> str:
+    compact = _compact_messages(messages, limit=limit)
+    formatted: List[str] = []
+
+    for idx, msg in enumerate(compact, start=1):
+        role = (msg.get("role") or "unknown").upper()
+        name = msg.get("name")
+        header = f"{idx}. {role}"
+        if name:
+            header += f" ({name})"
+        content = _truncate_text(_stringify_message_content(msg.get("content")).strip() or "[empty]")
+        formatted.append(f"{header}:\n{content}")
+
+    return "\n\n".join(formatted) if formatted else "[no recent context]"
+
+
+def _format_tool_candidates(tool_schemas: Iterable[Dict[str, Any]]) -> str:
+    lines: List[str] = []
+    for entry in tool_schemas:
+        func = (entry or {}).get("function") or {}
+        name = func.get("name")
+        if not name:
+            continue
+        description = (func.get("description") or "").strip()
+        description = _truncate_text(description, max_chars=240)
+        lines.append(f"- {name}: {description}" if description else f"- {name}")
+    return "\n".join(lines)
+
+
+def _build_selector_user_prompt(
+    source_messages: List[Dict[str, Any]],
+    tool_schemas: List[Dict[str, Any]],
+    min_k: int,
+) -> str:
+    context_block = _format_context_for_prompt(source_messages)
+    tool_block = _format_tool_candidates(tool_schemas)
+    return (
+        "Conversation context:\n"
+        f"{context_block}\n\n"
+        "Available tools (choose only from these exact names):\n"
+        f"{tool_block}\n\n"
+        f"Required tools already selected and always included: {REQUIRED_TOOLS_TEXT}\n"
+        f"Return at least {min_k} unique tool names in total.\n"
+        "Respond with JSON only."
+    )
+
+
+def _sanitize_trace_for_storage(trace: Optional[Dict[str, Any]], selected_tools: Optional[Iterable[str]] = None) -> Optional[Dict[str, Any]]:
+    if not trace:
+        return trace
+
+    sanitized = dict(trace)
+    selected_list = [str(name) for name in (selected_tools or [])]
+    request_messages = []
+
+    for message in trace.get("request") or []:
+        if not isinstance(message, dict):
+            request_messages.append(message)
+            continue
+
+        sanitized_message = dict(message)
+        content = sanitized_message.get("content")
+        payload = _extract_json(content) if isinstance(content, str) else None
+
+        if isinstance(payload, dict) and "tools" in payload:
+            payload = dict(payload)
+            payload.pop("tools", None)
+            if selected_list:
+                payload["selected_tools"] = selected_list
+            sanitized_message["content"] = json.dumps(payload, ensure_ascii=False)
+        elif isinstance(content, str) and "Available tools (choose only from these exact names):" in content:
+            sanitized_content = re.sub(
+                r"Available tools \(choose only from these exact names\):\n.*?\n\nRequired tools already selected and always included:",
+                "Available tools (choose only from these exact names): [omitted]\n\nRequired tools already selected and always included:",
+                content,
+                flags=re.DOTALL,
+            )
+            if selected_list:
+                sanitized_content += f"\nSelected tools: {', '.join(selected_list)}"
+            sanitized_message["content"] = sanitized_content
+
+        request_messages.append(sanitized_message)
+
+    sanitized["request"] = request_messages
+    if selected_list:
+        sanitized["selected_tools"] = selected_list
+    return sanitized
+
+
 def select_tools_with_llm(
     llm: LLMClient,
     messages: List[Dict[str, Any]],
@@ -86,21 +193,19 @@ def select_tools_with_llm(
     max_retries = getattr(AgentConfig, "TOOL_SELECTOR_MAX_RETRIES", 10)
     last_trace = None
     last_selected: List[str] = []
+    source_messages = list(messages)
 
     for attempt in range(max_retries):
-        prompt_payload = {
-            "context": _compact_messages(messages),
-            "required_tools": REQUIRED_TOOL_NAMES,
-            "min_k": min_k,
-            "tools": tool_schemas,
-        }
         system_prompt = TOOL_SELECTOR_PROMPT.format(min_k=min_k)
-        messages = [
+        selector_messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": json.dumps(prompt_payload, ensure_ascii=False)},
+            {
+                "role": "user",
+                "content": _build_selector_user_prompt(source_messages, tool_schemas, min_k),
+            },
         ]
         if attempt > 0:
-            messages.append(
+            selector_messages.append(
                 {
                     "role": "user",
                     "content": (
@@ -110,15 +215,24 @@ def select_tools_with_llm(
                 }
             )
 
-        response = llm.call(messages, tools=None)
+        response = llm.call(
+            selector_messages,
+            tools=None,
+            response_format=TOOL_SELECTOR_RESPONSE_FORMAT,
+        )
         content = response.content or ""
-        trace = {
+        raw_trace = {
             "type": "tool_selector",
             "agent": agent_name,
             "attempt": attempt + 1,
-            "request": messages,
+            "request": selector_messages,
             "response": content,
         }
+        last_trace = _sanitize_trace_for_storage(raw_trace)
+
+        parsed = _extract_json(content)
+        selected = parsed.get("selected_tools") if isinstance(parsed, dict) else None
+        trace = _sanitize_trace_for_storage(raw_trace, selected)
         last_trace = trace
         try:
             llm_trace_logger.info(json.dumps(trace, ensure_ascii=False))
@@ -128,8 +242,6 @@ def select_tools_with_llm(
             tool_selector_trace_logger.info(json.dumps(trace, ensure_ascii=False))
         except Exception:
             tool_selector_trace_logger.info("Tool selector trace logged")
-
-        parsed = _extract_json(content)
         if not parsed or "selected_tools" not in parsed:
             logger.warning("Tool selection LLM response parse failed, retrying.")
             continue
@@ -142,7 +254,7 @@ def select_tools_with_llm(
             logger.warning("Tool selection contains duplicates, retrying.")
             continue
         if len(last_selected) >= min_k:
-            return {"selected_tools": last_selected, "llm_trace": trace}
+            return {"selected_tools": last_selected, "llm_trace": _sanitize_trace_for_storage(raw_trace, last_selected)}
 
     return {"selected_tools": last_selected, "llm_trace": last_trace}
 
