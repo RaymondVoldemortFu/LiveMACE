@@ -209,6 +209,7 @@ export interface TradingAccount {
   base_url?: string  // API endpoint
   api_key?: string  // API key (masked in responses)
   agent_type?: string // "react" or "multi_agent"
+  memory_enabled?: string // "true" or "false"
   initial_capital: number
   current_cash: number
   frozen_cash: number

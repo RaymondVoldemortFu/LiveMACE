@@ -19,14 +19,13 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Plus, Pencil } from 'lucide-react'
-import { 
+import {
   getAccounts as getAccounts,
   createAccount as createAccount,
   updateAccount as updateAccount,
   testLLMConnection,
   type TradingAccount,
-  type TradingAccountCreate,
-  type TradingAccountUpdate
+  type TradingAccountCreate
 } from '@/lib/api'
 
 interface SettingsDialogProps {
