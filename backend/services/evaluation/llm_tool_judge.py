@@ -1,9 +1,17 @@
 import json
 from typing import Any, Dict, List, Optional
 
-import tiktoken
+try:
+    import tiktoken
+except Exception:  # pragma: no cover - optional dependency fallback
+    tiktoken = None
 
 from services.evaluation.base import BaseEvaluator
+from services.evaluation.judge_output_utils import (
+    extract_json_object,
+    is_likely_truncated_json,
+    normalize_judge_parsed,
+)
 from services.agent.llm_client import LLMClient
 
 
@@ -16,6 +24,43 @@ def _safe_json_loads(value: Any) -> Any:
         return json.loads(value)
     except Exception:
         return value
+
+
+def _build_judge_system_prompt(base_prompt: str) -> str:
+    return (
+        f"{base_prompt}\n\n"
+        "Output constraints:\n"
+        "- Respond with exactly one JSON object.\n"
+        '- Include these numeric keys: "Tool Relevance Score", "Tool Timing / Budgeting Score", '
+        '"Information Coverage Score", "Synthesis / Faithfulness Score".\n'
+        '- Add a top-level "reason" field (string, <= 60 words).\n'
+        "- Do not output markdown, code fences, comments, or any text before/after JSON."
+    )
+
+
+def _build_judge_messages(system_prompt: str, account_info: Dict[str, Any], steps: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+    payload_trace = []
+    for s in steps:
+        payload_trace.append(
+            {
+                "step_number": s.get("step_number"),
+                "role": s.get("role"),
+                "content": s.get("content"),
+                "tool_calls": s.get("tool_calls"),
+                "tool_output": _safe_json_loads(s.get("tool_output") or s.get("content")),
+            }
+        )
+
+    return [
+        {"role": "system", "content": system_prompt},
+        {
+            "role": "user",
+            "content": json.dumps(
+                {"account": account_info, "trace": payload_trace},
+                ensure_ascii=False,
+            ),
+        },
+    ]
 
 
 class LLMToolJudgeEvaluator(BaseEvaluator):
@@ -37,34 +82,51 @@ class LLMToolJudgeEvaluator(BaseEvaluator):
         steps = trace.get("steps", [])
         account_info = agent_data.get("account_info") or {}
 
-        messages = [
-            {"role": "system", "content": self.system_prompt},
-            {
-                "role": "user",
-                "content": json.dumps(
-                    {
-                        "account": account_info,
-                        "trace": [
-                            {
-                                "step_number": s.get("step_number"),
-                                "role": s.get("role"),
-                                "content": s.get("content"),
-                                "tool_calls": s.get("tool_calls"),
-                                "tool_output": _safe_json_loads(s.get("tool_output") or s.get("content")),
-                            }
-                            for s in steps
-                        ],
-                    },
-                    ensure_ascii=False,
-                ),
-            },
-        ]
-        response = self.llm.call(messages, tools=None)
-        content = response.content or ""
+        system_prompt = _build_judge_system_prompt(self.system_prompt)
+        messages = _build_judge_messages(system_prompt, account_info, steps)
+        content = ""
+        parsed: Dict[str, Any] = {}
+
         try:
-            parsed = json.loads(content)
+            content = self._call_judge_model(
+                messages=messages,
+                force_json_object=True,
+                temperature=0.1,
+            )
         except Exception:
-            parsed = {"raw_response": content}
+            content = self._call_judge_model(
+                messages=messages,
+                force_json_object=False,
+                temperature=0.1,
+            )
+
+        parsed_json = extract_json_object(content)
+        if parsed_json is None and (is_likely_truncated_json(content) or content.strip()):
+            repair_messages = messages + [
+                {"role": "assistant", "content": content},
+                {
+                    "role": "user",
+                    "content": (
+                        "Your previous response was invalid or truncated. "
+                        "Return exactly one complete JSON object now with the required keys. "
+                        "No markdown and no extra text."
+                    ),
+                },
+            ]
+            retry_content = self._call_judge_model(
+                messages=repair_messages,
+                force_json_object=True,
+                temperature=0.0,
+            )
+            if retry_content:
+                content = retry_content
+                parsed_json = extract_json_object(content)
+
+        if isinstance(parsed_json, dict):
+            parsed = normalize_judge_parsed(parsed_json, content)
+        else:
+            parsed = normalize_judge_parsed({}, content)
+            parsed["reason"] = "failed_to_parse_json"
         prompt_tokens = _count_message_tokens(messages, self.llm.model)
         completion_tokens = _count_text_tokens(content, self.llm.model)
         return {
@@ -79,8 +141,28 @@ class LLMToolJudgeEvaluator(BaseEvaluator):
             },
         }
 
+    def _call_judge_model(
+        self,
+        messages: List[Dict[str, str]],
+        force_json_object: bool,
+        temperature: float,
+    ) -> str:
+        kwargs: Dict[str, Any] = {
+            "model": self.llm.model,
+            "messages": messages,
+            "tools": None,
+            "temperature": temperature,
+        }
+        if force_json_object:
+            kwargs["response_format"] = {"type": "json_object"}
+
+        response = self.llm.client.chat.completions.create(**kwargs)
+        return response.choices[0].message.content or ""
+
 
 def _get_encoder(model: str):
+    if tiktoken is None:
+        return None
     try:
         return tiktoken.encoding_for_model(model)
     except Exception:
@@ -91,11 +173,20 @@ def _count_text_tokens(text: str, model: str) -> int:
     if not text:
         return 0
     enc = _get_encoder(model)
+    if enc is None:
+        # Fallback approximation: roughly 4 chars per token.
+        return max(1, len(text) // 4)
     return len(enc.encode(text))
 
 
 def _count_message_tokens(messages: List[Dict[str, Any]], model: str) -> int:
     enc = _get_encoder(model)
+    if enc is None:
+        joined = "".join(
+            f"{msg.get('role', '')}{msg.get('name', '')}{msg.get('content', '') or ''}"
+            for msg in messages
+        )
+        return max(1, len(joined) // 4) if joined else 0
     total = 0
     for msg in messages:
         role = msg.get("role", "")
