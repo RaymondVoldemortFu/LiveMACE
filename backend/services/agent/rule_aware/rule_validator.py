@@ -550,7 +550,7 @@ class RuleValidator:
         
         # R2-05: Fee Sensitivity
         elif rule_id == "R2-05":
-            min_trade_size_ratio = params.get("min_trade_size_ratio", 0.02)  # Default 2%
+            min_trade_size_ratio = params.get("min_trade_size_ratio", 0.10)  # Default 10%
             estimated_fee_rate = params.get("estimated_fee_rate", 0.001)
             estimated_slippage_rate = params.get("estimated_slippage_rate", 0.0005)
             
@@ -570,11 +570,11 @@ class RuleValidator:
             
             # For fee sensitivity, we use a heuristic:
             # Small trades are penalized. Score based on trade size as proxy for fee efficiency
-            # Minimum viable trade: configurable (default 2% of equity)
+            # Minimum viable trade: configurable (default 10% of equity)
             
             if target_portion > 0 and target_portion < min_trade_size_ratio:
                 # Score: linear scale from 0 to min_trade_size_ratio
-                # 2%=1.0, 1%=0.5, 0%=0.0
+                # 10%=1.0, 5%=0.5, 0%=0.0
                 score = min(1.0, target_portion / min_trade_size_ratio)
                 
                 return RuleViolation(
