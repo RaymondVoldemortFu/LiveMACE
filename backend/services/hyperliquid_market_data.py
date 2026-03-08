@@ -4,6 +4,7 @@ Hyperliquid market data service using CCXT
 import ccxt
 import logging
 import os
+import time
 from typing import Dict, List, Any, Optional
 from datetime import datetime, timezone
 from services.time_source import delta_t_minutes, now_timestamp_ms
