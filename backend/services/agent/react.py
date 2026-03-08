@@ -7,8 +7,8 @@ from typing import Dict, Any, List, Callable, Optional
 from .llm_client import LLMClient
 from .tools import ToolRegistry
 from .tool_selector import (
-    select_tools_for_task,
     ensure_tool_selector_tool,
+    REQUIRED_TOOL_NAMES,
     META_TOOL_NAME,
 )
 from config.agent_config import AgentConfig
@@ -23,7 +23,14 @@ agent_logger = logging.getLogger("agent_decision")
 tool_output_logger = logging.getLogger("tool_output")
 
 class ReActAgent(BaseAgent):
-    def __init__(self, llm: LLMClient, tools: ToolRegistry, max_steps: int = AgentConfig.MAX_STEPS, user_id: str = None, agent_name: Optional[str] = None):
+    def __init__(
+        self,
+        llm: LLMClient,
+        tools: ToolRegistry,
+        max_steps: int = AgentConfig.MAX_STEPS,
+        user_id: str = None,
+        agent_name: Optional[str] = None,
+    ):
         super().__init__(llm, tools, agent_name=agent_name)
         self.max_steps = max_steps
         self.user_id = user_id
@@ -61,12 +68,11 @@ class ReActAgent(BaseAgent):
         输出:
             与原先 call_ai_for_decision 返回值同结构的决策 dict
         """
-        agent_name = self.agent_name or self.__class__.__name__
         # Log start of decision process
         logger.info("Starting agent decision process (ReAct Architecture)")
-        agent_logger.info(f"[{agent_name}] === Starting New Decision Process (ReAct) ===")
-        agent_logger.info(f"[{agent_name}] Portfolio: {json.dumps(portfolio, ensure_ascii=False)}")
-        agent_logger.info(f"[{agent_name}] Prices: {json.dumps(prices, ensure_ascii=False)}")
+        agent_logger.info("=== Starting New Decision Process (ReAct) ===")
+        agent_logger.info(f"Portfolio: {json.dumps(portfolio, ensure_ascii=False)}")
+        agent_logger.info(f"Prices: {json.dumps(prices, ensure_ascii=False)}")
 
         # Check if memory tools are available
         has_memory = any(tool.name in ['memory_add', 'memory_search'] for tool in self.tools.tools.values())
@@ -95,8 +101,11 @@ class ReActAgent(BaseAgent):
                 "You must output final decision wrapped by <FINAL_JSON>...</FINAL_JSON>.\n"
             )
 
-        # Start with no tools; router will provide tools after first output
-        self.tools.set_active_tools([])
+        # Only expose required tools + tool selector at the start
+        initial_tools = list(REQUIRED_TOOL_NAMES)
+        if META_TOOL_NAME not in initial_tools:
+            initial_tools.append(META_TOOL_NAME)
+        self.tools.set_active_tools(initial_tools)
 
         messages: List[Dict[str, Any]] = [
             {"role": "system", "content": system_prompt_with_time},
@@ -303,7 +312,7 @@ class ReActAgent(BaseAgent):
                 if not text_content:
                     error_msg = "LLM returned empty content and no tool calls in tool mode"
                     logger.error(error_msg)
-                    agent_logger.error(f"[{agent_name}] {error_msg}")
+                    agent_logger.error(error_msg)
                     raise ValueError(error_msg)
 
                 logger.info("Tool mode: waiting for termination token, continue next step.")

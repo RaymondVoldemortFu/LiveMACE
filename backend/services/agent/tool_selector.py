@@ -150,6 +150,7 @@ def select_tools_with_llm(
 def _apply_tool_selection(
     registry: ToolRegistry,
     selected_tools: Iterable[str],
+    include_meta: bool = False,
 ):
     available = set(_available_tool_names(registry.openai_tools_all))
 
@@ -162,8 +163,8 @@ def _apply_tool_selection(
         if name not in combined:
             combined.append(name)
 
-    # Ensure meta tool is always available for re-selection
-    if META_TOOL_NAME in registry.tools and META_TOOL_NAME not in combined:
+    # Optionally keep the routing tool in the active list.
+    if include_meta and META_TOOL_NAME in registry.tools and META_TOOL_NAME not in combined:
         combined.append(META_TOOL_NAME)
 
     registry.set_active_tools(combined)
@@ -187,6 +188,7 @@ def select_tools_for_task(
     registry: ToolRegistry,
     messages: List[Dict[str, Any]],
     agent_name: str = "ReActAgent",
+    include_meta: bool = False,
 ) -> Dict[str, Any]:
     min_k = _calculate_min_k(registry)
 
@@ -198,7 +200,7 @@ def select_tools_for_task(
     selection_result = select_tools_with_llm(llm, messages, tool_schemas, min_k, agent_name)
     selected = selection_result.get("selected_tools", [])
     llm_trace = selection_result.get("llm_trace")
-    combined = _apply_tool_selection(registry, selected)
+    combined = _apply_tool_selection(registry, selected, include_meta=include_meta)
     try:
         tool_selection_logger.info(
             json.dumps(
@@ -225,7 +227,13 @@ def ensure_tool_selector_tool(llm: LLMClient, registry: ToolRegistry):
         return
 
     def _select(task: str):
-        return select_tools_for_task(llm, registry, [{"role": "user", "content": task}], agent_name="ToolSelector")
+        return select_tools_for_task(
+            llm,
+            registry,
+            [{"role": "user", "content": task}],
+            agent_name="ToolSelector",
+            include_meta=False,
+        )
 
     registry.register(
         Tool(
