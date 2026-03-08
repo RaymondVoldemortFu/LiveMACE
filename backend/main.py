@@ -105,6 +105,18 @@ def on_startup():
             db.add(default_user)
             db.commit()
             db.refresh(default_user)
+
+        # Clean up seeded placeholder credentials so the system never
+        # silently uses fake OpenAI defaults as if they were real config.
+        placeholder_accounts = db.query(Account).filter(
+            Account.api_key == "default-key-please-update-in-settings"
+        ).all()
+        for account in placeholder_accounts:
+            account.model = None
+            account.base_url = None
+            account.api_key = None
+        if placeholder_accounts:
+            db.commit()
         
         # Ensure default user has at least one account
         default_accounts = db.query(Account).filter(Account.user_id == default_user.id).all()
@@ -115,9 +127,9 @@ def on_startup():
                 version="v1",
                 name="GPT",
                 account_type="AI",
-                model="gpt-5-mini",
-                base_url="https://api.openai.com/v1",
-                api_key="default-key-please-update-in-settings",
+                model=None,
+                base_url=None,
+                api_key=None,
                 initial_capital=10000.0,  # $10,000 starting capital for crypto trading
                 current_cash=10000.0,
                 frozen_cash=0.0,

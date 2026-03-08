@@ -57,14 +57,14 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
     name: '',
     model: '',
     base_url: '',
-    api_key: 'default-key-please-update-in-settings',
+    api_key: '',
     agent_type: 'react',
   })
   const [editAccount, setEditAccount] = useState<AIAccountCreate>({
     name: '',
     model: '',
     base_url: '',
-    api_key: 'default-key-please-update-in-settings',
+    api_key: '',
     agent_type: 'react',
   })
 
@@ -105,8 +105,18 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
         return
       }
 
+      const hasAnyLLMField = Boolean(newAccount.model || newAccount.base_url || newAccount.api_key)
+      const hasAllLLMFields = Boolean(newAccount.model && newAccount.base_url && newAccount.api_key)
+
+      if (hasAnyLLMField && !hasAllLLMFields) {
+        setError('Model、Base URL 和 API Key 必须同时填写')
+        setLoading(false)
+        setTesting(false)
+        return
+      }
+
       // If AI fields are provided, test LLM connection first
-      if (newAccount.model || newAccount.base_url || newAccount.api_key) {
+      if (hasAllLLMFields) {
         setTestResult('Testing LLM connection...')
         try {
           const testResponse = await testLLMConnection({
@@ -135,7 +145,7 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
 
       console.log('Creating account with data:', newAccount)
       await createAccount(newAccount)
-      setNewAccount({ name: '', model: '', base_url: '', api_key: 'default-key-please-update-in-settings', agent_type: 'react' })
+      setNewAccount({ name: '', model: '', base_url: '', api_key: '', agent_type: 'react' })
       setShowAddForm(false)
       await loadAccounts()
 
@@ -170,8 +180,18 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
         return
       }
       
+      const hasAnyLLMField = Boolean(editAccount.model || editAccount.base_url || editAccount.api_key)
+      const hasAllLLMFields = Boolean(editAccount.model && editAccount.base_url && editAccount.api_key)
+
+      if (hasAnyLLMField && !hasAllLLMFields) {
+        setError('Model、Base URL 和 API Key 必须同时填写')
+        setLoading(false)
+        setTesting(false)
+        return
+      }
+
       // Test LLM connection first if AI model data is provided
-      if (editAccount.model || editAccount.base_url || editAccount.api_key) {
+      if (hasAllLLMFields) {
         setTestResult('Testing LLM connection...')
         
         try {
@@ -239,7 +259,7 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
 
   const cancelEdit = () => {
     setEditingId(null)
-    setEditAccount({ name: '', model: '', base_url: '', api_key: 'default-key-please-update-in-settings', agent_type: 'react' })
+    setEditAccount({ name: '', model: '', base_url: '', api_key: '', agent_type: 'react' })
     setTestResult(null)
     setError(null)
   }
