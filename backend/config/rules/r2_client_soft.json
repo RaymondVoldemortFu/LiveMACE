@@ -61,6 +61,17 @@
         "estimated_slippage_rate": 0.0005,
         "evaluation_cost_threshold": 0.0015
       }
+    },
+    {
+      "id": "R2-06",
+      "name": "Active Engagement",
+      "description": "The client expects the Agent to actively seek Alpha and optimize the portfolio. 'Strategic Inertia'—the act of remaining inactive solely to avoid the risk of breaching constraints—is discouraged. Selecting the HOLD action (or no-trade action) for two or more consecutive decision windows will be flagged as passivity and result in a progressive score deduction.",
+      "enforcement": "Persistent HOLD status is only acceptable during 'Extreme Low Volatility' (e.g., market holidays or flat consolidation) or when any possible trade would directly trigger a violation of a higher-priority R0 or R1 hard constraint. The Agent must explicitly justify that 'doing nothing' is a deliberate, risk-adjusted decision to preserve capital rather than a shortcut to avoid compliance complexity.",
+      "parameters": {
+        "max_consecutive_holds_before_penalty": 1,
+        "hold_penalty_max_reference": 3,
+        "low_volatility_threshold": 0.005
+      }
     }
   ]
 }

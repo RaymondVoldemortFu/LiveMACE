@@ -274,7 +274,8 @@ class RuleEvaluator:
                 "R2-02": 1.0,  # Turnover
                 "R2-03": 1.0,  # Sector preference
                 "R2-04": 1.0,  # Cash drag
-                "R2-05": 1.0   # Transaction cost
+                "R2-05": 1.0,  # Transaction cost
+                "R2-06": 1.0   # Active engagement
             }
         
         # R2-01: Volatility (target: 10-15%)
@@ -465,7 +466,83 @@ class RuleEvaluator:
         else:
             scores["R2-05"] = 1.0
         
+        # R2-06: Active Engagement (Avoid Strategic Inertia)
+        # Using non-linear (quadratic) penalty for consecutive HOLD actions
+        # Load R2-06 rule parameters from configuration
+        r2_06_rule = next((r for r in r2_rules if r.get("id") == "R2-06"), None)
+        max_consecutive_before_penalty = 1  # Default: penalty starts at 2nd consecutive HOLD
+        penalty_max_reference = 3  # Default: 4 consecutive HOLDs = score 0 (更激进的衰减)
+        low_volatility_threshold = 0.005  # Default: 0.5% daily volatility exempts from penalty
+        
+        if r2_06_rule:
+            params = r2_06_rule.get("parameters", {})
+            max_consecutive_before_penalty = params.get("max_consecutive_holds_before_penalty", 1)
+            penalty_max_reference = params.get("hold_penalty_max_reference", 3)
+            low_volatility_threshold = params.get("low_volatility_threshold", 0.005)
+        
+        # Count consecutive HOLD decisions
+        consecutive_holds = self._count_consecutive_holds(account_id, end_time)
+        
+        # Check if low volatility exemption applies
+        recent_volatility = calculator.calculate_volatility(snapshots[-min(7*24, len(snapshots)):])  # Last 7 days
+        is_low_volatility = recent_volatility < low_volatility_threshold
+        
+        if consecutive_holds <= max_consecutive_before_penalty or is_low_volatility:
+            # No penalty: either within acceptable range or justified by low volatility
+            scores["R2-06"] = 1.0
+            if is_low_volatility and consecutive_holds > max_consecutive_before_penalty:
+                logger.info(f"R2-06: {consecutive_holds} consecutive HOLDs exempted due to low volatility ({recent_volatility:.2%})")
+        else:
+            # Progressive quadratic penalty starting from 2nd consecutive HOLD
+            # Formula: score = max(0, 1 - ((n - 1) / penalty_max_ref)^2)
+            # Examples (penalty_max_ref=3, 更快衰减):
+            # - n=2: 1 - (1/3)^2 = 0.889 (-11%)
+            # - n=3: 1 - (2/3)^2 = 0.556 (-44%)
+            # - n=4: 1 - (3/3)^2 = 0.000 (-100%)
+            deviation = (consecutive_holds - 1) / penalty_max_reference
+            scores["R2-06"] = max(0, 1 - deviation ** 2)
+            logger.warning(
+                f"R2-06: {consecutive_holds} consecutive HOLD actions detected, "
+                f"score={scores['R2-06']:.3f} (volatility={recent_volatility:.2%})"
+            )
+        
         return scores
+    
+    def _count_consecutive_holds(self, account_id: int, end_time: datetime) -> int:
+        """
+        Count consecutive HOLD decisions leading up to end_time
+        
+        Args:
+            account_id: Account ID
+            end_time: End time for counting
+            
+        Returns:
+            Number of consecutive HOLD actions (0 if last action was a trade)
+        """
+        # Query recent decisions in reverse chronological order
+        recent_decisions = self.db.query(AIDecisionLog).filter(
+            AIDecisionLog.account_id == account_id,
+            AIDecisionLog.decision_time <= end_time
+        ).order_by(AIDecisionLog.decision_time.desc()).limit(20).all()  # Look back max 20 decisions
+        
+        if not recent_decisions:
+            return 0
+        
+        consecutive_holds = 0
+        for decision in recent_decisions:
+            operation = decision.operation.lower() if decision.operation else ""
+            
+            # Check if this is a HOLD action
+            # HOLD can be represented as: "hold", "HOLD", None operation, or empty string
+            is_hold = operation in ["hold", ""] or operation is None
+            
+            if is_hold:
+                consecutive_holds += 1
+            else:
+                # Found an actual trade, stop counting
+                break
+        
+        return consecutive_holds
     
     def save_evaluation_result(
         self,
@@ -497,13 +574,13 @@ class RuleEvaluator:
         import json
         
         # Calculate S_rule_sat (weighted average of R2 scores)
-        # Note: R2-06 (Sharpe ratio) has been deprecated, weights adjusted to sum to 1.0
         r2_weights = {
             "R2-01": 0.15,  # Volatility
-            "R2-02": 0.25,  # Turnover
-            "R2-03": 0.20,  # Sector preference
-            "R2-04": 0.25,  # Cash drag
-            "R2-05": 0.15   # Transaction cost
+            "R2-02": 0.20,  # Turnover
+            "R2-03": 0.15,  # Sector preference
+            "R2-04": 0.15,  # Cash drag
+            "R2-05": 0.15,  # Transaction cost
+            "R2-06": 0.20   # Active engagement
         }
         
         s_rule_sat = sum(r2_scores.get(rule_id, 0) * weight for rule_id, weight in r2_weights.items())

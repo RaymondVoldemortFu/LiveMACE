@@ -585,6 +585,64 @@ class RuleValidator:
                     score=score
                 )
         
+        # R2-06: Active Engagement - Penalize consecutive HOLD actions
+        elif rule_id == "R2-06":
+            # Check if database models are available
+            if not get_db or not AIDecisionLog:
+                logger.warning("Database models not available for R2-06 validation")
+                return None
+            
+            max_consecutive_before_penalty = params.get("max_consecutive_holds_before_penalty", 1)
+            penalty_max_reference = params.get("hold_penalty_max_reference", 3)
+            low_volatility_threshold = params.get("low_volatility_threshold", 0.005)
+            
+            operation = decision.get("operation", "").lower()
+            account_id = portfolio.get("account_id")
+            
+            # Only check when the decision is HOLD
+            if operation != "hold" or not account_id:
+                return None
+            
+            # Query recent decisions to count consecutive HOLDs
+            db = next(get_db())
+            try:
+                # Get last 20 decisions
+                recent_decisions = db.query(AIDecisionLog).filter(
+                    AIDecisionLog.account_id == account_id
+                ).order_by(AIDecisionLog.decision_time.desc()).limit(20).all()
+                
+                # Count consecutive HOLDs (including current one)
+                consecutive_holds = 1  # Current decision is HOLD
+                for past_decision in recent_decisions:
+                    past_op = past_decision.operation.lower() if past_decision.operation else ""
+                    if past_op in ["hold", ""] or past_op is None:
+                        consecutive_holds += 1
+                    else:
+                        break
+                
+                # Check if we should apply penalty
+                if consecutive_holds > max_consecutive_before_penalty:
+                    # Calculate score with quadratic penalty
+                    # Formula: score = max(0, 1 - ((n - 1) / penalty_max_ref)^2)
+                    # Examples (penalty_max_ref=3):
+                    # - n=2: 0.889 (-11%)
+                    # - n=3: 0.556 (-44%)
+                    # - n=4: 0.000 (-100%)
+                    deviation = (consecutive_holds - 1) / penalty_max_reference
+                    score = max(0.0, 1 - deviation ** 2)
+                    
+                    return RuleViolation(
+                        rule, severity,
+                        f"Consecutive HOLD count {consecutive_holds} exceeds threshold (max before penalty: {max_consecutive_before_penalty}). Consider active trading unless justified by low volatility or hard constraints.",
+                        actual_value=consecutive_holds,
+                        expected_value=f"<= {max_consecutive_before_penalty}",
+                        score=score
+                    )
+            except Exception as e:
+                logger.warning(f"R2-06: Could not query decision history: {e}")
+            finally:
+                db.close()
+        
         # Add more rule checks as needed...
         
         return None
