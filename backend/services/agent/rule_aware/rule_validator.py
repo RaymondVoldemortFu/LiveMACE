@@ -412,19 +412,27 @@ class RuleValidator:
                 
                 # Check if outside target range
                 if cash_ratio < target_min or cash_ratio > target_max:
-                    # Calculate score based on deviation
+                    # Calculate score based on deviation using quadratic penalty
                     if cash_ratio > target_max:
-                        # Too much cash: score decays as cash increases
-                        # 15%=1.0, 50%=0.58, 100%=0.0
+                        # Too much cash: quadratic penalty for over-allocation
+                        # Normalized deviation (100% cash = 1.0 deviation)
+                        # Examples:
+                        # - 20%: 1 - (0.05/0.85)^2 = 0.997 (very light)
+                        # - 30%: 1 - (0.15/0.85)^2 = 0.969 (light)
+                        # - 50%: 1 - (0.35/0.85)^2 = 0.831 (moderate)
+                        # - 100%: 1 - (0.85/0.85)^2 = 0.000 (worst)
                         deviation = cash_ratio - target_max
                         max_acceptable_deviation = 1.0 - target_max  # 0.85
-                        score = max(0.0, 1.0 - deviation / max_acceptable_deviation)
+                        score = max(0.0, 1.0 - (deviation / max_acceptable_deviation) ** 2)
                     else:
-                        # Too little cash: score decays as cash decreases
-                        # 5%=1.0, 2.5%=0.5, 0%=0.0
+                        # Too little cash: quadratic penalty for under-allocation
+                        # Examples:
+                        # - 4%: 1 - (0.01/0.05)^2 = 0.960 (light)
+                        # - 2.5%: 1 - (0.025/0.05)^2 = 0.750 (moderate)
+                        # - 0%: 1 - (0.05/0.05)^2 = 0.000 (worst)
                         deviation = target_min - cash_ratio
                         max_acceptable_deviation = target_min  # 0.05
-                        score = max(0.0, 1.0 - deviation / max_acceptable_deviation)
+                        score = max(0.0, 1.0 - (deviation / max_acceptable_deviation) ** 2)
                     
                     direction = "above" if cash_ratio > target_max else "below"
                     return RuleViolation(
@@ -534,11 +542,16 @@ class RuleValidator:
             
             # Check if position change exceeds threshold
             if target_portion > significant_threshold:
-                # Calculate score: penalize large single moves
-                # 10%=1.0, 50%=0.56, 100%=0.0
+                # Calculate score: quadratic penalty for large single moves
+                # Normalized deviation (100% move = 1.0 deviation)
+                # Examples:
+                # - 15%: 1 - (0.05/0.9)^2 = 0.997 (very light)
+                # - 30%: 1 - (0.2/0.9)^2 = 0.951 (light)
+                # - 50%: 1 - (0.4/0.9)^2 = 0.802 (moderate)
+                # - 100%: 1 - (0.9/0.9)^2 = 0.000 (worst)
                 excess = target_portion - significant_threshold
                 max_excess = 1.0 - significant_threshold  # 0.90
-                score = max(0.0, 1.0 - excess / max_excess)
+                score = max(0.0, 1.0 - (excess / max_excess) ** 2)
                 
                 return RuleViolation(
                     rule, severity,
@@ -573,13 +586,21 @@ class RuleValidator:
             # Minimum viable trade: configurable (default 10% of equity)
             
             if target_portion > 0 and target_portion < min_trade_size_ratio:
-                # Score: linear scale from 0 to min_trade_size_ratio
-                # 10%=1.0, 5%=0.5, 0%=0.0
-                score = min(1.0, target_portion / min_trade_size_ratio)
+                # Quadratic penalty (non-linear) for consistency with other R2 rules
+                # Normalized deviation: 0% = 1.0 deviation, 10% = 0.0 deviation
+                # Formula: score = 1 - ((min - actual) / min)^2
+                # Examples:
+                # - 10%: 1 - 0^2 = 1.000 (no penalty)
+                # - 7.5%: 1 - (0.25)^2 = 0.938 (light penalty)
+                # - 5%: 1 - (0.5)^2 = 0.750 (moderate penalty)
+                # - 2.5%: 1 - (0.75)^2 = 0.438 (heavy penalty)
+                # - 0%: 1 - (1.0)^2 = 0.000 (worst)
+                deviation = (min_trade_size_ratio - target_portion) / min_trade_size_ratio
+                score = max(0.0, 1 - deviation ** 2)
                 
                 return RuleViolation(
                     rule, severity,
-                    f"Trade size {target_portion:.2%} may be too small relative to fees (min recommended: {min_trade_size_ratio:.2%}, estimated fees: ${estimated_fees:.2f})",
+                    f"Trade size {target_portion:.2%} below recommended minimum {min_trade_size_ratio:.2%} (estimated fees: ${estimated_fees:.2f})",
                     actual_value=target_portion,
                     expected_value=f">= {min_trade_size_ratio:.2%}",
                     score=score
