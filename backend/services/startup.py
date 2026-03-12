@@ -69,6 +69,15 @@ def initialize_services():
         start_margin_monitor(interval_seconds=5)
         logger.info("Margin monitor started (5-second interval)")
 
+        # Start background order scheduler to process pending LIMIT orders
+        try:
+            from services.order_scheduler import start_order_scheduler
+
+            start_order_scheduler()
+            logger.info("Order scheduler started (process pending orders)")
+        except Exception as e:
+            logger.error(f"Failed to start order scheduler: {e}")
+
         # Start periodic evaluation checkpoint job (PnL/return per time slice)
         # The job is idempotent per (account, interval, period_end), so we can poll frequently.
         try:

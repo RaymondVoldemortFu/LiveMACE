@@ -7,6 +7,7 @@ import threading
 from decimal import Decimal
 from typing import Dict, Optional, Tuple, List
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
@@ -24,6 +25,7 @@ from services.ai_decision_service import (
     SUPPORTED_SYMBOLS,
     call_agent_for_decision
 )
+from services.baselines import BuyHoldBaseline, GridBaseline
 from config.agent_config import AgentConfig
 from services.alpaca_market_data import SUPPORTED_STOCKS as US_TRADING_SYMBOLS
 
@@ -31,6 +33,10 @@ from services.alpaca_market_data import SUPPORTED_STOCKS as US_TRADING_SYMBOLS
 logger = logging.getLogger(__name__)
 trade_logger = logging.getLogger("trade_execution")
 _ai_trade_run_lock = threading.Lock()
+
+
+_buy_hold_baseline = BuyHoldBaseline()
+_grid_baseline = GridBaseline()
 
 AI_TRADING_SYMBOLS: List[str] = ["BTC", "ETH", "SOL", "BNB", "XRP", "DOGE"]
 US_TRADING_SYMBOLS = list(US_TRADING_SYMBOLS)
@@ -159,7 +165,13 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
     db = None
     try:
         db = SessionLocal()
-        accounts = get_active_ai_accounts(db)
+        # For baseline accounts (buy_hold/grid), we intentionally DO NOT require LLM credentials.
+        # For agent accounts (react/multi_agent), we keep existing validation via get_active_ai_accounts.
+        accounts = (
+            db.query(Account)
+            .filter(Account.is_active == "true", Account.account_type == "AI")
+            .all()
+        )
         if not accounts:
             logger.debug("No available accounts, skipping AI trading")
             return
@@ -179,28 +191,54 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
             max(1, int(getattr(AgentConfig, "AGENT_MAX_CONCURRENCY", 1))),
         )
 
-        with ThreadPoolExecutor(max_workers=concurrency) as executor:
-            future_map = {
-                executor.submit(_collect_account_decision, account.id, prices): account.id
-                for account in accounts
-            }
-            for fut in as_completed(future_map):
-                account_id = future_map[fut]
-                try:
-                    result = fut.result()
-                    if result:
-                        decision_payloads.append(result)
-                except Exception as worker_err:
-                    logger.error(
-                        f"Decision worker crashed for account_id={account_id}: {worker_err}",
-                        exc_info=True,
-                    )
+        agent_accounts = [
+            a for a in accounts
+            if (getattr(a, "agent_type", "react") in {"react", "multi_agent"})
+        ]
+        if agent_accounts:
+            with ThreadPoolExecutor(max_workers=min(concurrency, len(agent_accounts))) as executor:
+                future_map = {
+                    executor.submit(_collect_account_decision, account.id, prices): account.id
+                    for account in agent_accounts
+                }
+                for fut in as_completed(future_map):
+                    account_id = future_map[fut]
+                    try:
+                        result = fut.result()
+                        if result:
+                            decision_payloads.append(result)
+                    except Exception as worker_err:
+                        logger.error(
+                            f"Decision worker crashed for account_id={account_id}: {worker_err}",
+                            exc_info=True,
+                        )
 
-        # Execute/save decisions sequentially to keep order lifecycle consistent
+        # 1) Run baselines (sequential) so they can create LIMIT orders etc.
+        now = datetime.now(timezone.utc)
+        for account in accounts:
+            agent_type = getattr(account, "agent_type", "react") or "react"
+            agent_type = str(agent_type).strip().lower()
+            if agent_type == "buy_hold":
+                try:
+                    _buy_hold_baseline.run_tick(db, account, prices, now=now)
+                except Exception as e:
+                    logger.error(f"BuyHold baseline failed for account={account.id} ({account.name}): {e}", exc_info=True)
+            elif agent_type == "grid":
+                try:
+                    _grid_baseline.run_tick(db, account, prices)
+                except Exception as e:
+                    logger.error(f"Grid baseline failed for account={account.id} ({account.name}): {e}", exc_info=True)
+
+        # 2) Execute/save agent decisions sequentially to keep order lifecycle consistent
         for payload in decision_payloads:
             account = db.query(Account).filter(Account.id == payload["account_id"]).first()
             if not account:
                 logger.warning(f"Account {payload['account_id']} disappeared before execution")
+                continue
+
+            account_agent_type = str(getattr(account, "agent_type", "react") or "react").strip().lower()
+            if account_agent_type not in {"react", "multi_agent"}:
+                # Baselines are handled above.
                 continue
 
             portfolio = payload["portfolio"]

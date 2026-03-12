@@ -24,7 +24,6 @@ import {
   testLLMConnection,
   type TradingAccount,
   type TradingAccountCreate,
-  type TradingAccountUpdate
 } from '@/lib/api'
 
 interface SettingsDialogProps {
@@ -319,6 +318,8 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
                             <SelectContent>
                               <SelectItem value="react">ReAct Agent</SelectItem>
                               <SelectItem value="multi_agent">Multi-Agent System</SelectItem>
+                              <SelectItem value="buy_hold">Baseline: Buy & Hold</SelectItem>
+                              <SelectItem value="grid">Baseline: Grid Trading</SelectItem>
                             </SelectContent>
                           </Select>
                         </div>
@@ -361,7 +362,7 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
                         <div className="space-y-1 flex-1">
                           <div className="font-medium">{account.name}</div>
                           <div className="text-xs text-muted-foreground">
-                            {account.model ? `Model: ${account.model}` : 'No model configured'} • {account.agent_type === 'multi_agent' ? 'Multi-Agent' : 'ReAct'}
+                            {account.model ? `Model: ${account.model}` : 'No model configured'} • {account.agent_type === 'multi_agent' ? 'Multi-Agent' : account.agent_type === 'buy_hold' ? 'Baseline: Buy & Hold' : account.agent_type === 'grid' ? 'Baseline: Grid Trading' : 'ReAct'}
                           </div>
                           {account.base_url && (
                             <div className="text-xs text-muted-foreground truncate">
@@ -415,6 +416,8 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
                     <SelectContent>
                       <SelectItem value="react">ReAct Agent</SelectItem>
                       <SelectItem value="multi_agent">Multi-Agent System</SelectItem>
+                      <SelectItem value="buy_hold">Baseline: Buy & Hold</SelectItem>
+                      <SelectItem value="grid">Baseline: Grid Trading</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
