@@ -430,7 +430,7 @@ class GridBaseline:
                         logger.debug(f"grid BUY order skipped: {e}")
 
             sell_key = ("SELL", _price_key(sell_price))
-            if sell_key not in existing_keys and per_sell_level_qty > 0:
+            if sell_key not in existing_keys:
                 qty = float(int(per_sell_level_qty)) if market == "US" else float(round(per_sell_level_qty, 8))
                 if qty * sell_price >= cfg.min_order_usd and qty > 0:
                     try:
