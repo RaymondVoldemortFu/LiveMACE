@@ -273,8 +273,8 @@ def main():
                 print(f"  Diversity Score: {md.get('diversity_score', 0):.3f}")
                 print(f"  Interpretation: {md.get('interpretation', 'N/A')}")
 
-                print("\n3. RETRIEVAL RELEVANCE")
-                rr = result['retrieval_relevance']
+                print("\n3. MEMORY USAGE")
+                rr = result['memory_usage']
                 print(f"  Total Searches: {rr['search_count']}")
                 print(f"  Ever Retrieved: {rr['ever_retrieved']} ({rr['retrieval_rate']:.1%})")
                 print(f"  Recently Retrieved (24h): {rr['recently_retrieved_24h']}")
