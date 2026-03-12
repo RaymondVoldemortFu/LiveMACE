@@ -91,6 +91,15 @@ class MemoryEvaluator(BaseEvaluator):
             else:
                 histogram["10+"] += 1
 
+        # Return histogram in fixed order
+        ordered_histogram = {
+            "10+": histogram.get("10+", 0),
+            "6-10": histogram.get("6-10", 0),
+            "3-5": histogram.get("3-5", 0),
+            "1-2": histogram.get("1-2", 0),
+            "0": histogram.get("0", 0)
+        }
+
         return {
             "total_memories": len(memories),
             "zombie_memories": zombie_memories,
@@ -99,7 +108,7 @@ class MemoryEvaluator(BaseEvaluator):
             "high_value_rate": round(high_value_memories / len(memories), 3),
             "avg_retrieval_count": round(np.mean(retrieval_counts), 2),
             "median_retrieval_count": int(np.median(retrieval_counts)),
-            "histogram": dict(histogram)
+            "histogram": ordered_histogram
         }
 
     def _evaluate_diversity(self, memories: List) -> Dict[str, Any]:
