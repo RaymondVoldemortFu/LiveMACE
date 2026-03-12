@@ -555,9 +555,10 @@ def reset_auto_trading_job():
     from services.auto_trader import AI_TRADE_JOB_ID
     from services.trading_commands import place_ai_driven_crypto_order
     import threading
-    
-    # Define interval (5 minutes)
-    AI_TRADE_INTERVAL_SECONDS = 300
+    import os
+
+    # Define interval (default 15 minutes, configurable via env)
+    AI_TRADE_INTERVAL_SECONDS = int(os.getenv("AI_TRADE_INTERVAL_SECONDS", "900"))
 
     def _setup_job_async():
         try:

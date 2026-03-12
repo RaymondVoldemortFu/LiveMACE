@@ -75,8 +75,14 @@ def initialize_services():
             from services.evaluation.checkpoint_service import run_checkpoint_jobs
 
             # Configure these in your `.env` for local development if needed:
+            # - AI_TRADE_INTERVAL_SECONDS=900 (agent decision interval)
             # - EVAL_CHECKPOINT_INTERVAL_SECONDS=900,3600,86400
             # - EVAL_CHECKPOINT_POLL_SECONDS=30
+
+            # Get AI trade interval (agent decision period)
+            ai_trade_interval = int(os.getenv("AI_TRADE_INTERVAL_SECONDS", "900"))
+
+            # Get evaluation checkpoint intervals
             raw_intervals = os.getenv("EVAL_CHECKPOINT_INTERVAL_SECONDS", "900,3600,86400")
             raw_poll = os.getenv("EVAL_CHECKPOINT_POLL_SECONDS", "30")
             try:
@@ -108,6 +114,8 @@ def initialize_services():
             if not intervals:
                 intervals = [3600]
 
+            # Add AI trade interval to the list (union, auto-dedup)
+            intervals.append(ai_trade_interval)
             intervals = sorted(set(intervals))
 
             def _run_eval_checkpoint_job():
