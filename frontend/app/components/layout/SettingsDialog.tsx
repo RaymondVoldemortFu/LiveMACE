@@ -44,6 +44,18 @@ interface AIAccountCreate extends TradingAccountCreate {
   api_key?: string
 }
 
+const AGENT_TYPE_LABELS: Record<string, string> = {
+  multi_agent: 'Multi-Agent',
+  buy_hold: 'Baseline: Buy & Hold',
+  grid: 'Baseline: Grid Trading',
+  react: 'ReAct',
+}
+
+const getAgentTypeLabel = (agentType?: string) => {
+  const key = (agentType || 'react').toLowerCase()
+  return AGENT_TYPE_LABELS[key] || AGENT_TYPE_LABELS.react
+}
+
 export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }: SettingsDialogProps) {
   const [accounts, setAccounts] = useState<AIAccount[]>([])
   const [loading, setLoading] = useState(false)
@@ -362,7 +374,7 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
                         <div className="space-y-1 flex-1">
                           <div className="font-medium">{account.name}</div>
                           <div className="text-xs text-muted-foreground">
-                            {account.model ? `Model: ${account.model}` : 'No model configured'} • {account.agent_type === 'multi_agent' ? 'Multi-Agent' : account.agent_type === 'buy_hold' ? 'Baseline: Buy & Hold' : account.agent_type === 'grid' ? 'Baseline: Grid Trading' : 'ReAct'}
+                            {account.model ? `Model: ${account.model}` : 'No model configured'} • {getAgentTypeLabel(account.agent_type)}
                           </div>
                           {account.base_url && (
                             <div className="text-xs text-muted-foreground truncate">

@@ -4,14 +4,12 @@ import logging
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from decimal import Decimal
 from typing import Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
 from database.models import Account, Order, Position
 from services.asset_calculator import calc_positions_value
-from services.market_data import get_last_price
 from services.market_data import get_market_status
 from services.alpaca_market_data import SUPPORTED_STOCKS
 from services.order_matching import (
@@ -20,11 +18,12 @@ from services.order_matching import (
     create_order,
     process_all_pending_orders,
 )
+from services.trading_symbols import AI_TRADING_SYMBOLS
 
 logger = logging.getLogger(__name__)
 
 
-CRYPTO_UNIVERSE: List[str] = ["BTC", "ETH", "SOL", "BNB", "XRP", "DOGE"]
+CRYPTO_UNIVERSE: List[str] = list(AI_TRADING_SYMBOLS)
 US_UNIVERSE: List[str] = list(SUPPORTED_STOCKS)
 BASELINE_UNIVERSE: List[str] = list(CRYPTO_UNIVERSE) + list(US_UNIVERSE)
 
@@ -177,47 +176,56 @@ class BuyHoldBaseline:
             for p in db.query(Position).filter(Position.account_id == account.id).all()
         }
 
-        for symbol in universe:
-            market = _infer_market(symbol)
-            if market == "US" and not _is_trading_open(symbol, market):
-                continue
+        try:
+            for symbol in universe:
+                market = _infer_market(symbol)
+                if market == "US" and not _is_trading_open(symbol, market):
+                    continue
 
-            price = float(prices[symbol])
-            pos = positions.get((market, symbol.upper()))
+                try:
+                    price = float(prices[symbol])
+                    pos = positions.get((market, symbol.upper()))
 
-            qty = float(pos.quantity) if pos is not None else 0.0
-            current_value = qty * price
-            delta_value = target_per_symbol - current_value
+                    qty = float(pos.quantity) if pos is not None else 0.0
+                    current_value = qty * price
+                    delta_value = target_per_symbol - current_value
 
-            # If position is SHORT, neutralize first (baseline is long-only)
-            if pos is not None and (pos.side or "LONG").upper() == "SHORT" and float(pos.quantity) > 0:
-                # Close short by BUYing the full quantity
-                close_qty = float(pos.quantity)
-                if market == "US":
-                    close_qty = float(int(close_qty))
-                if close_qty > 0:
-                    self._place_market_order(db, account, symbol, market=market, side="BUY", quantity=close_qty)
-                continue
+                    # If position is SHORT, neutralize first (baseline is long-only)
+                    if pos is not None and (pos.side or "LONG").upper() == "SHORT" and float(pos.quantity) > 0:
+                        # Close short by BUYing the full quantity
+                        close_qty = float(pos.quantity)
+                        if market == "US":
+                            close_qty = float(int(close_qty))
+                        if close_qty > 0:
+                            self._place_market_order(db, account, symbol, market=market, side="BUY", quantity=close_qty)
+                        continue
 
-            if abs(delta_value) < float(self.config.min_trade_usd):
-                continue
+                    if abs(delta_value) < float(self.config.min_trade_usd):
+                        continue
 
-            if delta_value > 0:
-                buy_qty = delta_value / price
-                if market == "US":
-                    buy_qty = float(int(buy_qty))
-                if buy_qty * price >= float(self.config.min_trade_usd) and buy_qty > 0:
-                    self._place_market_order(db, account, symbol, market=market, side="BUY", quantity=buy_qty)
-            else:
-                # Sell down, capped by available quantity
-                avail = float(pos.available_quantity) if pos is not None else 0.0
-                sell_qty = min(avail, (-delta_value) / price)
-                if market == "US":
-                    sell_qty = float(int(sell_qty))
-                if sell_qty * price >= float(self.config.min_trade_usd) and sell_qty > 0:
-                    self._place_market_order(db, account, symbol, market=market, side="SELL", quantity=sell_qty)
-
-        self._last_rebalance_end[account.id] = period_end
+                    if delta_value > 0:
+                        buy_qty = delta_value / price
+                        if market == "US":
+                            buy_qty = float(int(buy_qty))
+                        if buy_qty * price >= float(self.config.min_trade_usd) and buy_qty > 0:
+                            self._place_market_order(db, account, symbol, market=market, side="BUY", quantity=buy_qty)
+                    else:
+                        # Sell down, capped by available quantity
+                        avail = float(pos.available_quantity) if pos is not None else 0.0
+                        sell_qty = min(avail, (-delta_value) / price)
+                        if market == "US":
+                            sell_qty = float(int(sell_qty))
+                        if sell_qty * price >= float(self.config.min_trade_usd) and sell_qty > 0:
+                            self._place_market_order(db, account, symbol, market=market, side="SELL", quantity=sell_qty)
+                except Exception:
+                    logger.exception(
+                        "BuyHold rebalance failed for account=%s symbol=%s market=%s",
+                        account.id,
+                        symbol,
+                        market,
+                    )
+        finally:
+            self._last_rebalance_end[account.id] = period_end
 
     def _place_market_order(self, db: Session, account: Account, symbol: str, market: str, side: str, quantity: float) -> None:
         name = symbol
@@ -225,23 +233,43 @@ class BuyHoldBaseline:
             quantity = float(int(quantity))
             if quantity <= 0:
                 return
-        order = create_order(
-            db=db,
-            account=account,
-            symbol=symbol,
-            name=name,
-            side=side,
-            order_type="MARKET",
-            price=None,
-            quantity=float(int(quantity)) if market == "US" else float(round(quantity, 8)),
-            leverage=1,
-            market=market,
-        )
-        db.commit()
-        db.refresh(order)
-        executed = check_and_execute_order(db, order)
-        if not executed:
-            logger.info(f"BuyHold MARKET order not executed immediately: account={account.id} {side} {symbol} qty={quantity}")
+        try:
+            order = create_order(
+                db=db,
+                account=account,
+                symbol=symbol,
+                name=name,
+                side=side,
+                order_type="MARKET",
+                price=None,
+                quantity=float(int(quantity)) if market == "US" else float(round(quantity, 8)),
+                leverage=1,
+                market=market,
+            )
+            db.commit()
+            db.refresh(order)
+            executed = check_and_execute_order(db, order)
+            if not executed:
+                logger.info(
+                    "BuyHold MARKET order not executed immediately: account=%s %s %s qty=%s",
+                    account.id,
+                    side,
+                    symbol,
+                    quantity,
+                )
+        except Exception:
+            logger.exception(
+                "Error placing MARKET order in BuyHold baseline: account=%s side=%s symbol=%s qty=%s market=%s",
+                account.id,
+                side,
+                symbol,
+                quantity,
+                market,
+            )
+            try:
+                db.rollback()
+            except Exception:
+                logger.exception("Error rolling back DB session after failed BuyHold MARKET order")
 
 
 class GridBaseline:
@@ -260,7 +288,10 @@ class GridBaseline:
             market = _infer_market(symbol)
             if market == "US" and not _is_trading_open(symbol, market):
                 continue
-            self._maintain_symbol_grid(db, account, symbol, market, float(prices[symbol]))
+            try:
+                self._maintain_symbol_grid(db, account, symbol, market, float(prices[symbol]))
+            except Exception as e:
+                logger.warning(f"_maintain_symbol_grid failed for symbol={symbol} market={market}: {e}")
 
         # 2) Try executing any pending orders (in case order scheduler isn't running)
         try:
@@ -330,6 +361,22 @@ class GridBaseline:
             )
             .first()
         )
+        if pos is not None and (pos.side or "LONG").upper() == "SHORT" and float(pos.quantity) > 0:
+            close_qty = float(pos.quantity)
+            if market == "US":
+                close_qty = float(int(close_qty))
+            if close_qty > 0:
+                self._place_market_order(db, account, symbol, market=market, side="BUY", quantity=close_qty)
+            pos = (
+                db.query(Position)
+                .filter(
+                    Position.account_id == account.id,
+                    Position.market == market,
+                    Position.symbol == symbol,
+                )
+                .first()
+            )
+
         if pos is None or float(pos.quantity) <= 0:
             seed_usd = max(cfg.min_order_usd, budget * 0.5)
             seed_qty = seed_usd / current_price
@@ -347,13 +394,19 @@ class GridBaseline:
                 .first()
             )
 
-        available_to_sell = float(pos.available_quantity) if pos is not None else 0.0
+        is_long_position = pos is not None and (pos.side or "LONG").upper() != "SHORT" and float(pos.quantity) > 0
+        available_to_sell = float(pos.available_quantity) if is_long_position else 0.0
         per_sell_level_qty = max(0.0, available_to_sell / max(1, cfg.levels))
         if market == "US":
             per_sell_level_qty = float(int(per_sell_level_qty))
 
+        price_precision = 2 if market == "US" else 8
+
+        def _price_key(price: float) -> float:
+            return round(float(price), price_precision)
+
         existing_keys = {
-            (o.side.upper(), round(float(o.price), 2))
+            (o.side.upper(), _price_key(float(o.price)))
             for o in still_pending
             if o.price is not None and float(o.price) > 0
         }
@@ -366,7 +419,7 @@ class GridBaseline:
             buy_price = current_price * (1.0 - cfg.step_pct * level)
             sell_price = current_price * (1.0 + cfg.step_pct * level)
 
-            buy_key = ("BUY", round(buy_price, 2))
+            buy_key = ("BUY", _price_key(buy_price))
             if buy_key not in existing_keys:
                 qty = float(int(buy_qty)) if market == "US" else float(round(buy_qty, 8))
                 if qty * buy_price >= cfg.min_order_usd and qty > 0:
@@ -376,8 +429,8 @@ class GridBaseline:
                     except Exception as e:
                         logger.debug(f"grid BUY order skipped: {e}")
 
-            sell_key = ("SELL", round(sell_price, 2))
-            if sell_key not in existing_keys:
+            sell_key = ("SELL", _price_key(sell_price))
+            if sell_key not in existing_keys and per_sell_level_qty > 0:
                 qty = float(int(per_sell_level_qty)) if market == "US" else float(round(per_sell_level_qty, 8))
                 if qty * sell_price >= cfg.min_order_usd and qty > 0:
                     try:
@@ -393,20 +446,35 @@ class GridBaseline:
             if quantity <= 0:
                 return
             price = float(round(price, 2))
-        order = create_order(
-            db=db,
-            account=account,
-            symbol=symbol,
-            name=name,
-            side=side,
-            order_type="LIMIT",
-            price=float(price),
-            quantity=float(int(quantity)) if market == "US" else float(quantity),
-            leverage=1,
-            market=market,
-        )
-        db.commit()
-        db.refresh(order)
+        try:
+            order = create_order(
+                db=db,
+                account=account,
+                symbol=symbol,
+                name=name,
+                side=side,
+                order_type="LIMIT",
+                price=float(price),
+                quantity=float(int(quantity)) if market == "US" else float(quantity),
+                leverage=1,
+                market=market,
+            )
+            db.commit()
+            db.refresh(order)
+        except Exception:
+            logger.exception(
+                "Error placing LIMIT order in Grid baseline: account=%s side=%s symbol=%s qty=%s price=%s market=%s",
+                account.id,
+                side,
+                symbol,
+                quantity,
+                price,
+                market,
+            )
+            try:
+                db.rollback()
+            except Exception:
+                logger.exception("Error rolling back DB session after failed Grid LIMIT order")
 
     def _place_market_order(self, db: Session, account: Account, symbol: str, market: str, side: str, quantity: float) -> None:
         name = symbol
@@ -414,18 +482,32 @@ class GridBaseline:
             quantity = float(int(quantity))
             if quantity <= 0:
                 return
-        order = create_order(
-            db=db,
-            account=account,
-            symbol=symbol,
-            name=name,
-            side=side,
-            order_type="MARKET",
-            price=None,
-            quantity=float(int(quantity)) if market == "US" else float(round(quantity, 8)),
-            leverage=1,
-            market=market,
-        )
-        db.commit()
-        db.refresh(order)
-        check_and_execute_order(db, order)
+        try:
+            order = create_order(
+                db=db,
+                account=account,
+                symbol=symbol,
+                name=name,
+                side=side,
+                order_type="MARKET",
+                price=None,
+                quantity=float(int(quantity)) if market == "US" else float(round(quantity, 8)),
+                leverage=1,
+                market=market,
+            )
+            db.commit()
+            db.refresh(order)
+            check_and_execute_order(db, order)
+        except Exception:
+            logger.exception(
+                "Error placing MARKET order in Grid baseline: account=%s side=%s symbol=%s qty=%s market=%s",
+                account.id,
+                side,
+                symbol,
+                quantity,
+                market,
+            )
+            try:
+                db.rollback()
+            except Exception:
+                logger.exception("Error rolling back DB session after failed Grid MARKET order")

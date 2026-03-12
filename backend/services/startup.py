@@ -6,12 +6,6 @@ import os
 import dotenv
 import anyio
 
-from services.auto_trader import (
-    place_ai_driven_crypto_order,
-    place_random_crypto_order,
-    AUTO_TRADE_JOB_ID,
-    AI_TRADE_JOB_ID
-)
 from services.scheduler import start_scheduler, setup_market_tasks, task_scheduler, start_margin_monitor
 from services.container_service import ContainerService
 
@@ -145,6 +139,14 @@ def shutdown_services():
     try:
         from services.scheduler import stop_scheduler
         stop_scheduler()
+
+        try:
+            from services.order_scheduler import stop_order_scheduler
+
+            stop_order_scheduler()
+            logger.info("Order scheduler stopped")
+        except Exception as e:
+            logger.error(f"Failed to stop order scheduler: {e}")
         
         # Shutdown Docker Container Service
         try:
