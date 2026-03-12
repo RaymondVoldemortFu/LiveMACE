@@ -28,6 +28,7 @@ from services.ai_decision_service import (
 from services.baselines import BuyHoldBaseline, GridBaseline
 from config.agent_config import AgentConfig
 from services.alpaca_market_data import SUPPORTED_STOCKS as US_TRADING_SYMBOLS
+from services.trading_symbols import AI_TRADING_SYMBOLS
 
 
 logger = logging.getLogger(__name__)
@@ -38,7 +39,6 @@ _ai_trade_run_lock = threading.Lock()
 _buy_hold_baseline = BuyHoldBaseline()
 _grid_baseline = GridBaseline()
 
-AI_TRADING_SYMBOLS: List[str] = ["BTC", "ETH", "SOL", "BNB", "XRP", "DOGE"]
 US_TRADING_SYMBOLS = list(US_TRADING_SYMBOLS)
 
 
@@ -77,6 +77,31 @@ def _get_market_prices(symbols: List[str], market: str) -> Dict[str, float]:
         except Exception as err:
             logger.warning(f"Failed to get price for {symbol}: {err}")
     return prices
+
+
+def _get_active_ai_trading_accounts(db: Session) -> List[Account]:
+    return (
+        db.query(Account)
+        .filter(Account.is_active == "true", Account.account_type == "AI")
+        .all()
+    )
+
+
+def _load_trading_accounts(db: Session) -> List[Account]:
+    active_accounts = _get_active_ai_trading_accounts(db)
+    if not AgentConfig.USE_AGENT:
+        return active_accounts
+
+    agent_accounts = get_active_ai_accounts(db)
+    baseline_accounts = [
+        account
+        for account in active_accounts
+        if (getattr(account, "agent_type", "react") or "react").strip().lower() in {"buy_hold", "grid"}
+    ]
+    accounts_by_id = {account.id: account for account in agent_accounts}
+    for account in baseline_accounts:
+        accounts_by_id.setdefault(account.id, account)
+    return list(accounts_by_id.values())
 
 
 def _select_side(db: Session, account: Account, symbol: str, max_value: float) -> Optional[Tuple[str, int]]:
@@ -165,13 +190,7 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
     db = None
     try:
         db = SessionLocal()
-        # For baseline accounts (buy_hold/grid), we intentionally DO NOT require LLM credentials.
-        # For agent accounts (react/multi_agent), we keep existing validation via get_active_ai_accounts.
-        accounts = (
-            db.query(Account)
-            .filter(Account.is_active == "true", Account.account_type == "AI")
-            .all()
-        )
+        accounts = _load_trading_accounts(db)
         if not accounts:
             logger.debug("No available accounts, skipping AI trading")
             return
