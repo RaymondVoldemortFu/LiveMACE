@@ -29,6 +29,8 @@ from services.baselines import BuyHoldBaseline, GridBaseline
 from config.agent_config import AgentConfig
 from services.alpaca_market_data import SUPPORTED_STOCKS as US_TRADING_SYMBOLS
 from services.trading_symbols import AI_TRADING_SYMBOLS
+from repositories.account_repo import get_account, list_active_ai_accounts
+from repositories.position_repo import get_position
 
 
 logger = logging.getLogger(__name__)
@@ -80,11 +82,7 @@ def _get_market_prices(symbols: List[str], market: str) -> Dict[str, float]:
 
 
 def _get_active_ai_trading_accounts(db: Session) -> List[Account]:
-    return (
-        db.query(Account)
-        .filter(Account.is_active == "true", Account.account_type == "AI")
-        .all()
-    )
+    return list_active_ai_accounts(db)
 
 
 def _load_trading_accounts(db: Session) -> List[Account]:
@@ -118,11 +116,7 @@ def _select_side(db: Session, account: Account, symbol: str, max_value: float) -
         return None
 
     max_quantity_by_value = int(Decimal(str(max_value)) // Decimal(str(price)))
-    position = (
-        db.query(Position)
-        .filter(Position.account_id == account.id, Position.symbol == symbol, Position.market == market)
-        .first()
-    )
+    position = get_position(db, account.id, symbol, market)
     available_quantity = int(position.available_quantity) if position else 0
 
     choices = []
@@ -150,7 +144,7 @@ def _collect_account_decision(account_id: int, prices: Dict[str, float]) -> Opti
     """
     db = SessionLocal()
     try:
-        account = db.query(Account).filter(Account.id == account_id).first()
+        account = get_account(db, account_id)
         if not account:
             logger.warning(f"Account {account_id} not found while collecting decision")
             return None
@@ -250,7 +244,7 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
 
         # 2) Execute/save agent decisions sequentially to keep order lifecycle consistent
         for payload in decision_payloads:
-            account = db.query(Account).filter(Account.id == payload["account_id"]).first()
+            account = get_account(db, payload["account_id"])
             if not account:
                 logger.warning(f"Account {payload['account_id']} disappeared before execution")
                 continue
@@ -333,11 +327,7 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
                 # Calculate quantity based on operation
                 if operation == "open":
                     # Check if there's already a position on this coin (ONE position per coin rule)
-                    existing_position = (
-                        db.query(Position)
-                        .filter(Position.account_id == account.id, Position.symbol == symbol, Position.market == market)
-                        .first()
-                    )
+                    existing_position = get_position(db, account.id, symbol, market)
                     
                     if existing_position and float(existing_position.quantity) > 0:
                         logger.warning(f"Cannot open {direction} position on {symbol} - already have a {existing_position.side} position. Only ONE position per coin allowed. Close existing position first.")
@@ -370,11 +360,7 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
 
                 elif operation == "close":
                     # Close a position - calculate quantity based on position and target portion
-                    position = (
-                        db.query(Position)
-                        .filter(Position.account_id == account.id, Position.symbol == symbol, Position.market == market)
-                        .first()
-                    )
+                    position = get_position(db, account.id, symbol, market)
                     
                     if not position or float(position.quantity) <= 0:
                         logger.warning(f"No position available to close for {symbol} for {account.name}, skipping")

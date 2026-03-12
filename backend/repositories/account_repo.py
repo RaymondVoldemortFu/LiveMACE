@@ -4,6 +4,14 @@ from database.models import Account, User
 from decimal import Decimal
 
 
+def list_active_ai_accounts(db: Session) -> List[Account]:
+    return (
+        db.query(Account)
+        .filter(Account.is_active == "true", Account.account_type == "AI")
+        .all()
+    )
+
+
 def create_account(
     db: Session,
     user_id: int,
