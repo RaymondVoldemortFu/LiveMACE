@@ -239,11 +239,16 @@ def main():
             if not account:
                 print(f"Account {account_id} not found")
                 return
+            if account.memory_enabled != "true":
+                print(f"Account {account_id} does not have memory enabled")
+                return
             accounts = [account]
         else:
-            accounts = data_loader.get_agent_accounts()
+            # Only evaluate accounts with memory enabled
+            all_accounts = data_loader.get_agent_accounts()
+            accounts = [acc for acc in all_accounts if acc.memory_enabled == "true"]
             if not accounts:
-                print("No AI accounts found")
+                print("No accounts with memory enabled found")
                 return
 
         print(f"\nEvaluating {len(accounts)} account(s)\n")
