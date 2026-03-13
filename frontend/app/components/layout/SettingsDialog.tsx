@@ -24,7 +24,6 @@ import {
   testLLMConnection,
   type TradingAccount,
   type TradingAccountCreate,
-  type TradingAccountUpdate
 } from '@/lib/api'
 
 interface SettingsDialogProps {
@@ -43,6 +42,18 @@ interface AIAccountCreate extends TradingAccountCreate {
   model?: string
   base_url?: string
   api_key?: string
+}
+
+const AGENT_TYPE_LABELS: Record<string, string> = {
+  multi_agent: 'Multi-Agent',
+  buy_hold: 'Baseline: Buy & Hold',
+  grid: 'Baseline: Grid Trading',
+  react: 'ReAct',
+}
+
+const getAgentTypeLabel = (agentType?: string) => {
+  const key = (agentType || 'react').toLowerCase()
+  return AGENT_TYPE_LABELS[key] || AGENT_TYPE_LABELS.react
 }
 
 export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }: SettingsDialogProps) {
@@ -319,6 +330,8 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
                             <SelectContent>
                               <SelectItem value="react">ReAct Agent</SelectItem>
                               <SelectItem value="multi_agent">Multi-Agent System</SelectItem>
+                              <SelectItem value="buy_hold">Baseline: Buy & Hold</SelectItem>
+                              <SelectItem value="grid">Baseline: Grid Trading</SelectItem>
                             </SelectContent>
                           </Select>
                         </div>
@@ -361,7 +374,7 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
                         <div className="space-y-1 flex-1">
                           <div className="font-medium">{account.name}</div>
                           <div className="text-xs text-muted-foreground">
-                            {account.model ? `Model: ${account.model}` : 'No model configured'} • {account.agent_type === 'multi_agent' ? 'Multi-Agent' : 'ReAct'}
+                            {account.model ? `Model: ${account.model}` : 'No model configured'} • {getAgentTypeLabel(account.agent_type)}
                           </div>
                           {account.base_url && (
                             <div className="text-xs text-muted-foreground truncate">
@@ -415,6 +428,8 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
                     <SelectContent>
                       <SelectItem value="react">ReAct Agent</SelectItem>
                       <SelectItem value="multi_agent">Multi-Agent System</SelectItem>
+                      <SelectItem value="buy_hold">Baseline: Buy & Hold</SelectItem>
+                      <SelectItem value="grid">Baseline: Grid Trading</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>

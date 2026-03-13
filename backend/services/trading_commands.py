@@ -7,6 +7,7 @@ import threading
 from decimal import Decimal
 from typing import Dict, Optional, Tuple, List
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
@@ -24,15 +25,22 @@ from services.ai_decision_service import (
     SUPPORTED_SYMBOLS,
     call_agent_for_decision
 )
+from services.baselines import BuyHoldBaseline, GridBaseline
 from config.agent_config import AgentConfig
 from services.alpaca_market_data import SUPPORTED_STOCKS as US_TRADING_SYMBOLS
+from services.trading_symbols import AI_TRADING_SYMBOLS
+from repositories.account_repo import get_account, list_active_ai_accounts
+from repositories.position_repo import get_position
 
 
 logger = logging.getLogger(__name__)
 trade_logger = logging.getLogger("trade_execution")
 _ai_trade_run_lock = threading.Lock()
 
-AI_TRADING_SYMBOLS: List[str] = ["BTC", "ETH", "SOL", "BNB", "XRP", "DOGE"]
+
+_buy_hold_baseline = BuyHoldBaseline()
+_grid_baseline = GridBaseline()
+
 US_TRADING_SYMBOLS = list(US_TRADING_SYMBOLS)
 
 
@@ -73,6 +81,27 @@ def _get_market_prices(symbols: List[str], market: str) -> Dict[str, float]:
     return prices
 
 
+def _get_active_ai_trading_accounts(db: Session) -> List[Account]:
+    return list_active_ai_accounts(db)
+
+
+def _load_trading_accounts(db: Session) -> List[Account]:
+    active_accounts = _get_active_ai_trading_accounts(db)
+    if not AgentConfig.USE_AGENT:
+        return active_accounts
+
+    agent_accounts = get_active_ai_accounts(db)
+    baseline_accounts = [
+        account
+        for account in active_accounts
+        if (getattr(account, "agent_type", "react") or "react").strip().lower() in {"buy_hold", "grid"}
+    ]
+    accounts_by_id = {account.id: account for account in agent_accounts}
+    for account in baseline_accounts:
+        accounts_by_id.setdefault(account.id, account)
+    return list(accounts_by_id.values())
+
+
 def _select_side(db: Session, account: Account, symbol: str, max_value: float) -> Optional[Tuple[str, int]]:
     """Select random trading side and quantity for legacy random trading"""
     market = "CRYPTO"
@@ -87,11 +116,7 @@ def _select_side(db: Session, account: Account, symbol: str, max_value: float) -
         return None
 
     max_quantity_by_value = int(Decimal(str(max_value)) // Decimal(str(price)))
-    position = (
-        db.query(Position)
-        .filter(Position.account_id == account.id, Position.symbol == symbol, Position.market == market)
-        .first()
-    )
+    position = get_position(db, account.id, symbol, market)
     available_quantity = int(position.available_quantity) if position else 0
 
     choices = []
@@ -119,7 +144,7 @@ def _collect_account_decision(account_id: int, prices: Dict[str, float]) -> Opti
     """
     db = SessionLocal()
     try:
-        account = db.query(Account).filter(Account.id == account_id).first()
+        account = get_account(db, account_id)
         if not account:
             logger.warning(f"Account {account_id} not found while collecting decision")
             return None
@@ -159,7 +184,7 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
     db = None
     try:
         db = SessionLocal()
-        accounts = get_active_ai_accounts(db)
+        accounts = _load_trading_accounts(db)
         if not accounts:
             logger.debug("No available accounts, skipping AI trading")
             return
@@ -179,28 +204,54 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
             max(1, int(getattr(AgentConfig, "AGENT_MAX_CONCURRENCY", 1))),
         )
 
-        with ThreadPoolExecutor(max_workers=concurrency) as executor:
-            future_map = {
-                executor.submit(_collect_account_decision, account.id, prices): account.id
-                for account in accounts
-            }
-            for fut in as_completed(future_map):
-                account_id = future_map[fut]
-                try:
-                    result = fut.result()
-                    if result:
-                        decision_payloads.append(result)
-                except Exception as worker_err:
-                    logger.error(
-                        f"Decision worker crashed for account_id={account_id}: {worker_err}",
-                        exc_info=True,
-                    )
+        agent_accounts = [
+            a for a in accounts
+            if (getattr(a, "agent_type", "react") in {"react", "multi_agent"})
+        ]
+        if agent_accounts:
+            with ThreadPoolExecutor(max_workers=min(concurrency, len(agent_accounts))) as executor:
+                future_map = {
+                    executor.submit(_collect_account_decision, account.id, prices): account.id
+                    for account in agent_accounts
+                }
+                for fut in as_completed(future_map):
+                    account_id = future_map[fut]
+                    try:
+                        result = fut.result()
+                        if result:
+                            decision_payloads.append(result)
+                    except Exception as worker_err:
+                        logger.error(
+                            f"Decision worker crashed for account_id={account_id}: {worker_err}",
+                            exc_info=True,
+                        )
 
-        # Execute/save decisions sequentially to keep order lifecycle consistent
+        # 1) Run baselines (sequential) so they can create LIMIT orders etc.
+        now = datetime.now(timezone.utc)
+        for account in accounts:
+            agent_type = getattr(account, "agent_type", "react") or "react"
+            agent_type = str(agent_type).strip().lower()
+            if agent_type == "buy_hold":
+                try:
+                    _buy_hold_baseline.run_tick(db, account, prices, now=now)
+                except Exception as e:
+                    logger.error(f"BuyHold baseline failed for account={account.id} ({account.name}): {e}", exc_info=True)
+            elif agent_type == "grid":
+                try:
+                    _grid_baseline.run_tick(db, account, prices)
+                except Exception as e:
+                    logger.error(f"Grid baseline failed for account={account.id} ({account.name}): {e}", exc_info=True)
+
+        # 2) Execute/save agent decisions sequentially to keep order lifecycle consistent
         for payload in decision_payloads:
-            account = db.query(Account).filter(Account.id == payload["account_id"]).first()
+            account = get_account(db, payload["account_id"])
             if not account:
                 logger.warning(f"Account {payload['account_id']} disappeared before execution")
+                continue
+
+            account_agent_type = str(getattr(account, "agent_type", "react") or "react").strip().lower()
+            if account_agent_type not in {"react", "multi_agent"}:
+                # Baselines are handled above.
                 continue
 
             portfolio = payload["portfolio"]
@@ -276,11 +327,7 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
                 # Calculate quantity based on operation
                 if operation == "open":
                     # Check if there's already a position on this coin (ONE position per coin rule)
-                    existing_position = (
-                        db.query(Position)
-                        .filter(Position.account_id == account.id, Position.symbol == symbol, Position.market == market)
-                        .first()
-                    )
+                    existing_position = get_position(db, account.id, symbol, market)
                     
                     if existing_position and float(existing_position.quantity) > 0:
                         logger.warning(f"Cannot open {direction} position on {symbol} - already have a {existing_position.side} position. Only ONE position per coin allowed. Close existing position first.")
@@ -313,11 +360,7 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
 
                 elif operation == "close":
                     # Close a position - calculate quantity based on position and target portion
-                    position = (
-                        db.query(Position)
-                        .filter(Position.account_id == account.id, Position.symbol == symbol, Position.market == market)
-                        .first()
-                    )
+                    position = get_position(db, account.id, symbol, market)
                     
                     if not position or float(position.quantity) <= 0:
                         logger.warning(f"No position available to close for {symbol} for {account.name}, skipping")
