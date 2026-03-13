@@ -93,11 +93,11 @@ class MemoryEvaluator(BaseEvaluator):
 
         # Return histogram in fixed order
         ordered_histogram = {
-            "10+": histogram.get("10+", 0),
-            "6-10": histogram.get("6-10", 0),
-            "3-5": histogram.get("3-5", 0),
+            "0": histogram.get("0", 0),
             "1-2": histogram.get("1-2", 0),
-            "0": histogram.get("0", 0)
+            "3-5": histogram.get("3-5", 0),
+            "6-10": histogram.get("6-10", 0),
+            "10+": histogram.get("10+", 0)
         }
 
         return {
