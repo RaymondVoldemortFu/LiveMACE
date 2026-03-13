@@ -1,52 +1,55 @@
 You are evaluating whether the Manager invoked sub-agents rationally and efficiently.
 
-Based ONLY on the execution trace, assess whether and how agent invocations are justified.
+Use ONLY explicit evidence from the provided summary and raw execution trace.
+Do NOT infer hidden intent.
+Do NOT judge task correctness.
+Do NOT assume "more collaboration is better."
 
-Consider the following aspects cumulatively:
-1. The Manager clearly states why each sub-agent is invoked.
-2. Each invoked agent provides information that is relevant to that stated purpose.
-3. Agent calls are non-redundant, minimal, and avoid unnecessary repetition.
-4. The Manager refrains from invoking agents when they are not clearly needed.
+Evaluate each invocation by three checks:
+- Purpose stated (P): explicit reason for this call.
+- Relevance satisfied (V): returned content matches stated purpose.
+- Redundancy status (R): no unnecessary duplicate/repeated call for the same need.
 
-Only count evidence that is explicitly visible in the execution trace.
-Do NOT judge the quality of the task outcome.
-Do NOT assume that using agents is always beneficial or required.
+Also track explicit non-invocation decisions (N):
+- Manager explicitly states that a call/tool is unnecessary and proceeds without it.
 
-Scoring notes:
-- If reasons for agent calls are missing or vague, score must be 0 or 1.
-- To score 2, the trace must show at least one explicit decision to NOT call an agent/tool when unnecessary.
-- If the trace shows repeated or redundant calls, cap at 1.
+Hard constraints:
+- If most calls lack explicit purpose, score must be 0 or 1.
+- If clear redundant repeated calls exist without justification, max score = 1.
 
-Scoring principles:
-- Determinism: score only from explicit trace evidence.
-- Consistency: apply the same thresholds across traces.
-- Tie-breaker: if between two scores, choose the lower one unless higher criteria are fully met.
+Deterministic scoring procedure:
+1. Count total calls C, calls with purpose P_count, relevant returns V_count, unjustified redundant calls R_bad.
+2. Count explicit non-invocation decisions N_count.
+3. Assign score by highest fully satisfied level; if uncertain, choose lower.
 
-Score from 0 to 4:
+Score rubric (0-4):
+0:
+- Calls are mostly unexplained or clearly wasteful; OR P_count = 0 with C > 0.
 
-0: Unjustified or wasteful invocation  
-- Agent calls appear random, habitual, or unexplained.  
-- There is no clear rationale for invoking agents, or calls are clearly unnecessary or redundant.
+1:
+- Some purpose is stated, but weak/partial alignment; OR notable unjustified redundancy.
 
-1: Weakly justified invocation  
-- The Manager provides explicit reasons for some agent calls, and the agents are loosely relevant.  
-- However, justifications may be vague, overly cautious, or misaligned, and there may be redundant or weakly motivated calls.
+2:
+- Most calls have explicit purpose and relevant return (roughly majority of C).
+- At most minor inefficiency.
+- N_count is optional at this level.
 
-2: Moderately justified but imperfect  
-- Most calls are explicitly motivated and relevant.  
-- Some redundancy or over-cautious invocation remains.  
-- No explicit evidence of avoiding unnecessary calls.
+3:
+- Nearly all calls are clearly justified and relevant.
+- No meaningful unjustified redundancy.
+- N_count >= 1 with explicit rationale for not calling.
 
-3: Clear and efficient invocation  
-- Agent calls are explicitly motivated, purposeful, and aligned with stated needs.  
-- Invocations are minimal and non-redundant.  
-- At least one explicit decision to NOT call an agent/tool when unnecessary.
+4:
+- Meets score 3.
+- N_count >= 2 across distinct decision points.
+- Explicit cost/latency/coordination-awareness language is present in at least 2 decisions.
+- No call judged weak on purpose/relevance.
 
-4: Highly efficient and cost-aware  
-- All invocations are justified with clear purpose and expected benefit.  
-- Explicit avoidance of unnecessary calls occurs multiple times.  
-- Communication shows clear awareness of coordination costs (e.g., “no need to call X”).
+Tie-break rules (to reduce judge variance):
+- If C is small (<=2 calls total), default max score = 3 unless exceptional explicit cost reasoning exists.
+- If purpose is stated but generic and repetitive, downgrade one level.
+- If uncertain between 3 and 4, choose 3.
 
-Provide a step-by-step justification citing specific parts of the execution trace.
-End your response with:
-"The score is [score]."
+Output format requirements:
+- Provide concise step-by-step justification with cited trace evidence.
+- End with exactly: "The score is [0-4]."
