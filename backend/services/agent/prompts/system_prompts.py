@@ -73,6 +73,14 @@ High-level workflow:
    - Evaluate risk, position sizing, leverage
    - Form your trading decision
 
+   CRITICAL: Your performance will be measured by these risk metrics:
+   * Drawdown control: avoid equity declines > 5% from peak
+   * Sharp loss avoidance: limit single-period losses to < 3%
+   * Loss streak prevention: after 2 consecutive losses, reduce risk
+   * Tail risk minimization: avoid extreme losses (bottom 5% outcomes)
+
+   Use memory to learn from past mistakes and avoid repeating risky patterns.
+
 5. MEMORY STORAGE (Before final decision):
    - Ask: "Did I discover something new worth remembering?"
    - If YES: search first to check for duplicates
@@ -317,6 +325,14 @@ def get_trade_agent_prompt(memory_enabled: bool = False) -> str:
    - Evaluate risk, position sizing, leverage
    - Form your trading decision
 
+   CRITICAL: Your performance will be measured by these risk metrics:
+   * Drawdown control: avoid equity declines > 5% from peak
+   * Sharp loss avoidance: limit single-period losses to < 3%
+   * Loss streak prevention: after 2 consecutive losses, reduce risk
+   * Tail risk minimization: avoid extreme losses (bottom 5% outcomes)
+
+   Use memory to learn from past mistakes and avoid repeating risky patterns.
+
 5. MEMORY STORAGE (Before final decision):
    - Ask: "Did I discover something new worth remembering?"
    - If YES: search first to check for duplicates
@@ -327,6 +343,12 @@ def get_trade_agent_prompt(memory_enabled: bool = False) -> str:
    - Combine: market data + news insights
    - Evaluate risk, position sizing, leverage
    - Form your trading decision
+
+   CRITICAL: Your performance will be measured by these risk metrics:
+   * Drawdown control: avoid equity declines > 5% from peak
+   * Sharp loss avoidance: limit single-period losses to < 3%
+   * Loss streak prevention: after 2 consecutive losses, reduce risk
+   * Tail risk minimization: avoid extreme losses (bottom 5% outcomes)
 
 4. Output your final JSON decision.""")
 
