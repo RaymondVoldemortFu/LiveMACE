@@ -50,12 +50,12 @@ class RunningStats:
 
 
 def load_metric_prompt(metric_name: str) -> str:
-    path = Path(__file__).parent.parent / f"{metric_name}.txt"
+    path = Path(__file__).parent / "prompts" / f"{metric_name}.txt"
     return path.read_text(encoding="utf-8")
 
 
 def load_summary_prompt() -> str:
-    path = Path(__file__).parent.parent / "summary_prompt.txt"
+    path = Path(__file__).parent / "prompts" / "summary_prompt.txt"
     return path.read_text(encoding="utf-8")
 
 
