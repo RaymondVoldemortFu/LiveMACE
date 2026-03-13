@@ -4,6 +4,7 @@ import 'chart.js/auto'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Brain } from 'lucide-react'
 import { getMemories, getMemoryMetrics, getMemoryGrowthTimeline } from '@/lib/api'
 
 interface MemoryViewProps {
@@ -66,8 +67,6 @@ export function MemoryView({ account, accounts }: MemoryViewProps) {
     }
   }, [selectedAccountId])
 
-  const selectedAccount = accounts.find(a => a.id === selectedAccountId)
-
   if (memoryEnabledAccounts.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-96 space-y-4">
@@ -103,9 +102,12 @@ export function MemoryView({ account, accounts }: MemoryViewProps) {
 
   if (memories.length === 0) {
     return (
-      <div className="space-y-6 p-6">
+      <div className="h-full flex flex-col p-4 gap-4">
         <div className="flex items-center justify-between">
-          <h1 className="text-3xl font-bold">Memory System</h1>
+          <h2 className="text-2xl font-bold flex items-center gap-2">
+            <Brain className="w-6 h-6" />
+            Memory System
+          </h2>
           <Select value={selectedAccountId.toString()} onValueChange={(v) => setSelectedAccountId(Number(v))}>
             <SelectTrigger className="w-64">
               <SelectValue />
@@ -129,23 +131,25 @@ export function MemoryView({ account, accounts }: MemoryViewProps) {
   }
 
   return (
-    <div className="h-full overflow-y-auto">
-      <div className="space-y-6 p-6">
-        <div className="flex items-center justify-between">
-          <h1 className="text-3xl font-bold">Memory System - {selectedAccount?.name}</h1>
-          <Select value={selectedAccountId.toString()} onValueChange={(v) => setSelectedAccountId(Number(v))}>
-            <SelectTrigger className="w-64">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {memoryEnabledAccounts.map((acc) => (
-                <SelectItem key={acc.id} value={acc.id.toString()}>
-                  {acc.name} ({acc.account_type})
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
+    <div className="h-full flex flex-col p-4 gap-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-2xl font-bold flex items-center gap-2">
+          <Brain className="w-6 h-6" />
+          Memory System
+        </h2>
+        <Select value={selectedAccountId.toString()} onValueChange={(v) => setSelectedAccountId(Number(v))}>
+          <SelectTrigger className="w-64">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {memoryEnabledAccounts.map((acc) => (
+              <SelectItem key={acc.id} value={acc.id.toString()}>
+                {acc.name} ({acc.account_type})
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
 
         {/* Memory List */}
         <Card>
@@ -356,7 +360,6 @@ export function MemoryView({ account, accounts }: MemoryViewProps) {
             </CardContent>
           </Card>
         )}
-      </div>
     </div>
   )
 }
