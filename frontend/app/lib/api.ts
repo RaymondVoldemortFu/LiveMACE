@@ -393,17 +393,20 @@ export async function getTraceHistory(accountId: number): Promise<TraceSummary[]
 }
 
 // Memory API
-export async function getMemories(accountId: number) {
-  const response = await apiRequest(`/memory/${accountId}/list`)
+export async function getMemories(accountId: number, market?: string) {
+  const params = market ? `?market=${market}` : ''
+  const response = await apiRequest(`/memory/${accountId}/list${params}`)
   return response.json()
 }
 
-export async function getMemoryMetrics(accountId: number) {
-  const response = await apiRequest(`/memory/${accountId}/metrics`)
+export async function getMemoryMetrics(accountId: number, market?: string) {
+  const params = market ? `?market=${market}` : ''
+  const response = await apiRequest(`/memory/${accountId}/metrics${params}`)
   return response.json()
 }
 
-export async function getMemoryGrowthTimeline(accountId: number) {
-  const response = await apiRequest(`/memory/${accountId}/growth-timeline`)
+export async function getMemoryGrowthTimeline(accountId: number, market?: string) {
+  const params = market ? `?market=${market}` : ''
+  const response = await apiRequest(`/memory/${accountId}/growth-timeline${params}`)
   return response.json()
 }

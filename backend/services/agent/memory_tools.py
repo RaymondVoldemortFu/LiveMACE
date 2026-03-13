@@ -48,7 +48,7 @@ def create_memory_tools(db: Session):
         logger.warning(f"Could not resolve account_id '{account_id}', using as-is")
         return account_id
 
-    def memory_add_with_db(experience: str, account_id: str, metadata: Optional[str] = None) -> dict:
+    def memory_add_with_db(experience: str, account_id: str, market: str = "CRYPTO", metadata: Optional[str] = None) -> dict:
         """Add memory using provided db session, with automatic deduplication"""
         try:
             if not memory_service:
@@ -57,7 +57,7 @@ def create_memory_tools(db: Session):
             account_id = _resolve_account_id(account_id)
 
             # Hard dedup: search for similar memories before adding
-            existing = memory_service.search(query=experience, account_id=account_id, limit=1, db=db)
+            existing = memory_service.search(query=experience, account_id=account_id, limit=1, db=db, market=market)
             if existing and existing[0].get("similarity", 0) >= DEDUP_SIMILARITY_THRESHOLD:
                 dup = existing[0]
                 logger.info(f"Memory dedup: rejected for account {account_id} (similarity={dup['similarity']:.3f}): {experience[:80]}...")
@@ -75,8 +75,8 @@ def create_memory_tools(db: Session):
                 except json.JSONDecodeError:
                     logger.warning(f"Invalid metadata JSON: {metadata}")
 
-            memory_service.add(content=experience, account_id=account_id, metadata=metadata_dict, db=db)
-            logger.info(f"Memory added for account {account_id}: {experience[:100]}...")
+            memory_service.add(content=experience, account_id=account_id, metadata=metadata_dict, db=db, market=market)
+            logger.info(f"Memory added for account {account_id} market {market}: {experience[:100]}...")
 
             return {
                 "status": "success",
@@ -88,7 +88,7 @@ def create_memory_tools(db: Session):
             logger.error(error_msg)
             return {"status": "error", "message": error_msg}
     
-    def memory_search_with_db(query: str, account_id: str, limit: int = 2) -> dict:
+    def memory_search_with_db(query: str, account_id: str, market: str = "CRYPTO", limit: int = 2) -> dict:
         """Search memories using provided db session"""
         try:
             if not memory_service:
@@ -97,7 +97,7 @@ def create_memory_tools(db: Session):
             account_id = _resolve_account_id(account_id)
 
             limit = min(limit, 5)
-            results = memory_service.search(query=query, account_id=account_id, limit=limit, db=db)
+            results = memory_service.search(query=query, account_id=account_id, limit=limit, db=db, market=market)
             
             if not results:
                 return {"status": "success", "message": "No relevant memories found", "query": query, "count": 0, "memories": []}
@@ -130,30 +130,32 @@ def create_memory_tools(db: Session):
     
     memory_add_tool = Tool(
         name="memory_add",
-        description="Store a reusable trading rule to long-term memory. Format: [CONDITION] → [OBSERVATION] → [RULE], 1-3 sentences max. Do NOT store news, specific dates/prices, or event logs — only generalizable patterns.",
+        description="Store a reusable trading rule to long-term memory. Format: [CONDITION] → [OBSERVATION] → [RULE], 1-3 sentences max. Do NOT store news, specific dates/prices, or event logs — only generalizable patterns. You MUST specify the market parameter.",
         parameters={
             "type": "object",
             "properties": {
                 "experience": {"type": "string", "description": "A reusable trading rule in the format: [CONDITION] → [OBSERVATION] → [RULE]. Strip specific dates and prices. Max 1-3 sentences."},
                 "account_id": {"type": "string", "description": "Your account ID"},
+                "market": {"type": "string", "enum": ["CRYPTO", "US"], "description": "The market this memory belongs to. Use CRYPTO for crypto trading rules, US for US stock trading rules."},
                 "metadata": {"type": "string", "description": "Optional JSON string with additional context", "default": None}
             },
-            "required": ["experience", "account_id"]
+            "required": ["experience", "account_id", "market"]
         },
         func=memory_add_with_db
     )
 
     memory_search_tool = Tool(
         name="memory_search",
-        description="Search long-term memory for trading rules relevant to current market conditions. Query with pattern descriptions (e.g. 'altcoin oversold during BTC downtrend'), not specific events or dates.",
+        description="Search long-term memory for trading rules relevant to current market conditions. Query with pattern descriptions (e.g. 'altcoin oversold during BTC downtrend'), not specific events or dates. You MUST specify the market parameter to search only relevant memories.",
         parameters={
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "A pattern description of the market condition you want rules for (e.g. 'high leverage risk in downtrend', 'SOL support breakdown patterns')"},
                 "account_id": {"type": "string", "description": "Your account ID"},
+                "market": {"type": "string", "enum": ["CRYPTO", "US"], "description": "The market to search memories for. Use CRYPTO for crypto rules, US for US stock rules."},
                 "limit": {"type": "integer", "description": "Maximum number of memories to return (default: 2, max: 5)", "default": 2}
             },
-            "required": ["query", "account_id"]
+            "required": ["query", "account_id", "market"]
         },
         func=memory_search_with_db
     )

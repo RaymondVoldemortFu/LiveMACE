@@ -114,7 +114,7 @@ class EvaluationDataLoader:
 
     # ========== Memory-related queries ==========
 
-    def get_memories(self, account_id: int, start_time: Optional[datetime] = None, end_time: Optional[datetime] = None) -> List[AgentMemory]:
+    def get_memories(self, account_id: int, start_time: Optional[datetime] = None, end_time: Optional[datetime] = None, market: Optional[str] = None) -> List[AgentMemory]:
         """
         Get all memories for a specific account within a time range.
 
@@ -122,18 +122,21 @@ class EvaluationDataLoader:
             account_id: Account ID
             start_time: Start time filter (optional)
             end_time: End time filter (optional)
+            market: Market filter, e.g. "CRYPTO" or "US" (optional)
 
         Returns:
             List of AgentMemory objects
         """
         query = self.db.query(AgentMemory).filter(AgentMemory.account_id == account_id)
+        if market:
+            query = query.filter(AgentMemory.market == market)
         if start_time:
             query = query.filter(AgentMemory.created_at >= start_time)
         if end_time:
             query = query.filter(AgentMemory.created_at <= end_time)
         return query.order_by(AgentMemory.created_at).all()
 
-    def get_memory_stats(self, account_id: int, start_time: Optional[datetime] = None, end_time: Optional[datetime] = None) -> Dict:
+    def get_memory_stats(self, account_id: int, start_time: Optional[datetime] = None, end_time: Optional[datetime] = None, market: Optional[str] = None) -> Dict:
         """
         Get memory statistics for an account.
 
@@ -141,6 +144,8 @@ class EvaluationDataLoader:
             Dictionary with memory statistics including count, avg length, etc.
         """
         query = self.db.query(AgentMemory).filter(AgentMemory.account_id == account_id)
+        if market:
+            query = query.filter(AgentMemory.market == market)
         if start_time:
             query = query.filter(AgentMemory.created_at >= start_time)
         if end_time:

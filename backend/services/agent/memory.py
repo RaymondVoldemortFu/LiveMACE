@@ -30,12 +30,12 @@ class MemoryInterface(ABC):
     """Abstract interface for memory systems"""
 
     @abstractmethod
-    def add(self, content: str, account_id: str, metadata: Optional[Dict] = None, trace_id: Optional[str] = None, db: Session = None):
+    def add(self, content: str, account_id: str, metadata: Optional[Dict] = None, trace_id: Optional[str] = None, db: Session = None, market: str = "CRYPTO"):
         """Add a memory item."""
         pass
 
     @abstractmethod
-    def search(self, query: str, account_id: str, limit: int = 2, db: Session = None) -> List[Dict]:
+    def search(self, query: str, account_id: str, limit: int = 2, db: Session = None, market: str = "CRYPTO") -> List[Dict]:
         """Search for memories."""
         pass
 
@@ -93,7 +93,7 @@ class LocalMemory(MemoryInterface):
             logger.error(f"Failed to compute embedding: {e}")
             return None
 
-    def add(self, content: str, account_id: str, metadata: Optional[Dict] = None, trace_id: Optional[str] = None, db: Session = None):
+    def add(self, content: str, account_id: str, metadata: Optional[Dict] = None, trace_id: Optional[str] = None, db: Session = None, market: str = "CRYPTO"):
         """Add a memory with its embedding to the database"""
         if not self.model:
             logger.warning("Memory model not initialized. Cannot add memory.")
@@ -113,6 +113,7 @@ class LocalMemory(MemoryInterface):
             mem_entry = AgentMemory(
                 memory_id=memory_id,
                 account_id=int(account_id) if account_id.isdigit() else 0,
+                market=market,
                 trace_id=trace_id,
                 content=content,
                 metadata_json=metadata,
@@ -137,7 +138,7 @@ class LocalMemory(MemoryInterface):
             logger.error(f"Error computing cosine similarity: {e}")
             return 0.0
 
-    def search(self, query: str, account_id: str, limit: int = 2, db: Session = None) -> List[Dict]:
+    def search(self, query: str, account_id: str, limit: int = 2, db: Session = None, market: str = "CRYPTO") -> List[Dict]:
         """Search for similar memories using cosine similarity"""
         if not self.model:
             logger.warning("Memory model not initialized. Cannot search.")
@@ -152,7 +153,8 @@ class LocalMemory(MemoryInterface):
 
             # Use provided db session
             memories = db.query(AgentMemory).filter(
-                AgentMemory.account_id == int(account_id) if account_id.isdigit() else 0
+                AgentMemory.account_id == (int(account_id) if account_id.isdigit() else 0),
+                AgentMemory.market == market
             ).all()
 
             if not memories:

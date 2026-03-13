@@ -19,6 +19,7 @@ export function MemoryView({ account, accounts }: MemoryViewProps) {
   const [selectedAccountId, setSelectedAccountId] = useState<number | null>(
     memoryEnabledAccounts.find(a => a.id === account?.id)?.id || memoryEnabledAccounts[0]?.id || null
   )
+  const [selectedMarket, setSelectedMarket] = useState<'ALL' | 'CRYPTO' | 'US'>('ALL')
   const [memories, setMemories] = useState<any[]>([])
   const [metrics, setMetrics] = useState<any>(null)
   const [timeline, setTimeline] = useState<any[]>([])
@@ -42,10 +43,12 @@ export function MemoryView({ account, accounts }: MemoryViewProps) {
     setLoading(true)
     setError(null)
 
+    const marketParam = selectedMarket !== 'ALL' ? selectedMarket : undefined
+
     Promise.all([
-      getMemories(selectedAccountId),
-      getMemoryMetrics(selectedAccountId),
-      getMemoryGrowthTimeline(selectedAccountId)
+      getMemories(selectedAccountId, marketParam),
+      getMemoryMetrics(selectedAccountId, marketParam),
+      getMemoryGrowthTimeline(selectedAccountId, marketParam)
     ])
       .then(([memData, metricData, timelineData]) => {
         if (!cancelled) {
@@ -65,7 +68,7 @@ export function MemoryView({ account, accounts }: MemoryViewProps) {
     return () => {
       cancelled = true
     }
-  }, [selectedAccountId])
+  }, [selectedAccountId, selectedMarket])
 
   if (memoryEnabledAccounts.length === 0) {
     return (
@@ -108,18 +111,30 @@ export function MemoryView({ account, accounts }: MemoryViewProps) {
             <Brain className="w-6 h-6" />
             Memory System
           </h2>
-          <Select value={selectedAccountId.toString()} onValueChange={(v) => setSelectedAccountId(Number(v))}>
-            <SelectTrigger className="w-64">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {memoryEnabledAccounts.map((acc) => (
-                <SelectItem key={acc.id} value={acc.id.toString()}>
-                  {acc.name} ({acc.account_type})
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <div className="flex items-center gap-2">
+            <Select value={selectedMarket} onValueChange={(v) => setSelectedMarket(v as 'ALL' | 'CRYPTO' | 'US')}>
+              <SelectTrigger className="w-40">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="ALL">All Markets</SelectItem>
+                <SelectItem value="CRYPTO">Crypto</SelectItem>
+                <SelectItem value="US">US Stocks</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={selectedAccountId.toString()} onValueChange={(v) => setSelectedAccountId(Number(v))}>
+              <SelectTrigger className="w-64">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {memoryEnabledAccounts.map((acc) => (
+                  <SelectItem key={acc.id} value={acc.id.toString()}>
+                    {acc.name} ({acc.account_type})
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
         </div>
         <div className="flex items-center justify-center h-96">
           <p className="text-muted-foreground">
@@ -137,18 +152,30 @@ export function MemoryView({ account, accounts }: MemoryViewProps) {
           <Brain className="w-6 h-6" />
           Memory System
         </h2>
-        <Select value={selectedAccountId.toString()} onValueChange={(v) => setSelectedAccountId(Number(v))}>
-          <SelectTrigger className="w-64">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {memoryEnabledAccounts.map((acc) => (
-              <SelectItem key={acc.id} value={acc.id.toString()}>
-                {acc.name} ({acc.account_type})
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <div className="flex items-center gap-2">
+          <Select value={selectedMarket} onValueChange={(v) => setSelectedMarket(v as 'ALL' | 'CRYPTO' | 'US')}>
+            <SelectTrigger className="w-40">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="ALL">All Markets</SelectItem>
+              <SelectItem value="CRYPTO">Crypto</SelectItem>
+              <SelectItem value="US">US Stocks</SelectItem>
+            </SelectContent>
+          </Select>
+          <Select value={selectedAccountId.toString()} onValueChange={(v) => setSelectedAccountId(Number(v))}>
+            <SelectTrigger className="w-64">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {memoryEnabledAccounts.map((acc) => (
+                <SelectItem key={acc.id} value={acc.id.toString()}>
+                  {acc.name} ({acc.account_type})
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
       </div>
 
         {/* Memory List */}
@@ -163,6 +190,7 @@ export function MemoryView({ account, accounts }: MemoryViewProps) {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Content</TableHead>
+                    <TableHead className="w-24">Market</TableHead>
                     <TableHead className="w-32">Retrieval Count</TableHead>
                     <TableHead className="w-48">Created At</TableHead>
                   </TableRow>
@@ -171,6 +199,11 @@ export function MemoryView({ account, accounts }: MemoryViewProps) {
                   {memories.map((m) => (
                     <TableRow key={m.id}>
                       <TableCell className="font-mono text-sm">{m.content}</TableCell>
+                      <TableCell>
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${m.market === 'US' ? 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200' : 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200'}`}>
+                          {m.market || 'CRYPTO'}
+                        </span>
+                      </TableCell>
                       <TableCell>{m.retrieval_count}</TableCell>
                       <TableCell className="text-sm text-muted-foreground">
                         {new Date(m.created_at).toLocaleString()}

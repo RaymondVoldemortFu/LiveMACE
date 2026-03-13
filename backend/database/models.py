@@ -306,6 +306,7 @@ class AgentMemory(Base):
     id = Column(Integer, primary_key=True, index=True)
     memory_id = Column(String(36), unique=True, nullable=False, index=True)  # UUID
     account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False)
+    market = Column(String(10), nullable=False, default="CRYPTO", index=True)  # "CRYPTO" or "US"
     trace_id = Column(String(36), nullable=True, index=True)  # Linked conversation/trace ID
 
     content = Column(Text, nullable=False)  # The actual memory text

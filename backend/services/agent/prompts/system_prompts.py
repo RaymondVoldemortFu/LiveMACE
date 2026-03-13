@@ -141,13 +141,16 @@ MEMORY TOOLS:
 
 - memory_search
   Search your long-term memory for relevant trading rules and lessons.
+  IMPORTANT: You MUST specify the "market" parameter ("CRYPTO" or "US") to only retrieve rules for the relevant market.
   Query examples:
-  - "SOL oversold bounce patterns"
-  - "high leverage risk during downtrend"
-  - "BTC support breakdown trading rules"
+  - memory_search(query="SOL oversold bounce patterns", account_id="123", market="CRYPTO")
+  - memory_search(query="NVDA earnings momentum patterns", account_id="123", market="US")
+  - memory_search(query="high leverage risk during downtrend", account_id="123", market="CRYPTO")
 
 - memory_add
   Store a reusable trading rule to long-term memory.
+  IMPORTANT: You MUST specify the "market" parameter ("CRYPTO" or "US") so the rule is stored with the correct market tag.
+  Example: memory_add(experience="When...", account_id="123", market="CRYPTO")
 
 WHAT TO STORE vs WHAT NOT TO STORE:
 

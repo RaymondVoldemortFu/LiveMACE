@@ -105,7 +105,7 @@ class ChromaMemory(MemoryInterface):
             logger.error(f"Failed to compute embedding: {e}")
             return None
 
-    def add(self, content: str, account_id: str, metadata: Optional[Dict] = None, trace_id: Optional[str] = None, db: Session = None):
+    def add(self, content: str, account_id: str, metadata: Optional[Dict] = None, trace_id: Optional[str] = None, db: Session = None, market: str = "CRYPTO"):
         """Add a memory to both Chroma and SQLite"""
         if not self.model or not self.collection:
             logger.warning("Chroma memory not initialized. Cannot add memory.")
@@ -124,6 +124,7 @@ class ChromaMemory(MemoryInterface):
             # Prepare metadata for Chroma
             chroma_metadata = {
                 "account_id": str(account_id),
+                "market": market,
                 "created_at": datetime.now().isoformat()
             }
             if trace_id:
@@ -148,6 +149,7 @@ class ChromaMemory(MemoryInterface):
                     mem_entry = AgentMemory(
                         memory_id=memory_id,
                         account_id=int(account_id) if account_id.isdigit() else 0,
+                        market=market,
                         trace_id=trace_id,
                         content=content,
                         metadata_json=metadata,
@@ -164,7 +166,7 @@ class ChromaMemory(MemoryInterface):
         except Exception as e:
             logger.error(f"Error adding memory to Chroma: {e}")
 
-    def search(self, query: str, account_id: str, limit: int = 2, db: Session = None) -> List[Dict]:
+    def search(self, query: str, account_id: str, limit: int = 2, db: Session = None, market: str = "CRYPTO") -> List[Dict]:
         """Search for similar memories using Chroma's optimized vector search"""
         if not self.model or not self.collection:
             logger.warning("Chroma memory not initialized. Cannot search.")
@@ -181,7 +183,7 @@ class ChromaMemory(MemoryInterface):
             results = self.collection.query(
                 query_embeddings=[query_embedding],
                 n_results=limit,
-                where={"account_id": str(account_id)},
+                where={"$and": [{"account_id": str(account_id)}, {"market": market}]},
                 include=["documents", "metadatas", "distances"]
             )
 

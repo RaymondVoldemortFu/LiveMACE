@@ -49,10 +49,11 @@ class MemoryEvaluator(BaseEvaluator):
 
         start_time = agent_data.get("start_time")
         end_time = agent_data.get("end_time")
+        market = agent_data.get("market")  # Optional: "CRYPTO", "US", or None for all
 
-        logger.info(f"Evaluating memory for account {account_id}")
+        logger.info(f"Evaluating memory for account {account_id}" + (f" market={market}" if market else ""))
 
-        memories = self.data_loader.get_memories(account_id, start_time, end_time)
+        memories = self.data_loader.get_memories(account_id, start_time, end_time, market=market)
         decisions = self.data_loader.get_decisions(account_id, start_time, end_time)
         tool_usage = self.data_loader.get_memory_tool_usage_from_traces(account_id, start_time, end_time)
 
