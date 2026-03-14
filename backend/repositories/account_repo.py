@@ -4,14 +4,22 @@ from database.models import Account, User
 from decimal import Decimal
 
 
+def list_active_ai_accounts(db: Session) -> List[Account]:
+    return (
+        db.query(Account)
+        .filter(Account.is_active == "true", Account.account_type == "AI")
+        .all()
+    )
+
+
 def create_account(
     db: Session,
     user_id: int,
     name: str,
     account_type: str = "AI",
     initial_capital: float = 10000.0,
-    model: str = "gpt-4-turbo",
-    base_url: str = "https://api.openai.com/v1",
+    model: str = None,
+    base_url: str = None,
     api_key: str = None
 ) -> Account:
     """Create a new trading account"""
@@ -52,9 +60,9 @@ def get_or_create_default_account(
     user_id: int,
     account_name: str = "Default AI Trader",
     initial_capital: float = 10000.0,
-    model: str = "gpt-4-turbo",
-    base_url: str = "https://api.openai.com/v1",
-    api_key: str = "default-key-please-update-in-settings"
+    model: str = None,
+    base_url: str = None,
+    api_key: str = None
 ) -> Account:
     """Get existing account or create default AI account for user"""
     # Check if user has any accounts

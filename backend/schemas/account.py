@@ -5,8 +5,8 @@ from typing import Optional
 class AccountCreate(BaseModel):
     """Create a new AI Trading Account"""
     name: str  # Display name (e.g., "GPT Trader", "Claude Analyst")
-    model: str = "gpt-4-turbo"
-    base_url: str = "https://api.openai.com/v1"
+    model: str
+    base_url: str
     api_key: str
     initial_capital: float = 10000.0
     account_type: str = "AI"  # "AI" or "MANUAL"

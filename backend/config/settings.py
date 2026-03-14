@@ -1,5 +1,11 @@
 from pydantic import BaseModel
-from typing import Dict
+from typing import Dict, List
+
+
+# Default crypto symbols used by AI trading and baselines.
+# Keep this as a single source of truth; services should import it from here
+# (directly or via services.trading_symbols for backward compatibility).
+AI_TRADING_SYMBOLS: List[str] = ["BTC", "ETH", "SOL", "BNB", "XRP", "DOGE"]
 
 
 class MarketConfig(BaseModel):

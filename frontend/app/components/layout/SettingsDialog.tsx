@@ -25,7 +25,7 @@ import {
   updateAccount as updateAccount,
   testLLMConnection,
   type TradingAccount,
-  type TradingAccountCreate
+  type TradingAccountCreate,
 } from '@/lib/api'
 
 interface SettingsDialogProps {
@@ -46,6 +46,18 @@ interface AIAccountCreate extends TradingAccountCreate {
   api_key?: string
 }
 
+const AGENT_TYPE_LABELS: Record<string, string> = {
+  multi_agent: 'Multi-Agent',
+  buy_hold: 'Baseline: Buy & Hold',
+  grid: 'Baseline: Grid Trading',
+  react: 'ReAct',
+}
+
+const getAgentTypeLabel = (agentType?: string) => {
+  const key = (agentType || 'react').toLowerCase()
+  return AGENT_TYPE_LABELS[key] || AGENT_TYPE_LABELS.react
+}
+
 export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }: SettingsDialogProps) {
   const [accounts, setAccounts] = useState<AIAccount[]>([])
   const [loading, setLoading] = useState(false)
@@ -58,7 +70,7 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
     name: '',
     model: '',
     base_url: '',
-    api_key: 'default-key-please-update-in-settings',
+    api_key: '',
     agent_type: 'react',
     memory_enabled: 'false',
   })
@@ -66,7 +78,7 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
     name: '',
     model: '',
     base_url: '',
-    api_key: 'default-key-please-update-in-settings',
+    api_key: '',
     agent_type: 'react',
     memory_enabled: 'false',
   })
@@ -108,8 +120,18 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
         return
       }
 
+      const hasAnyLLMField = Boolean(newAccount.model || newAccount.base_url || newAccount.api_key)
+      const hasAllLLMFields = Boolean(newAccount.model && newAccount.base_url && newAccount.api_key)
+
+      if (hasAnyLLMField && !hasAllLLMFields) {
+        setError('Model、Base URL 和 API Key 必须同时填写')
+        setLoading(false)
+        setTesting(false)
+        return
+      }
+
       // If AI fields are provided, test LLM connection first
-      if (newAccount.model || newAccount.base_url || newAccount.api_key) {
+      if (hasAllLLMFields) {
         setTestResult('Testing LLM connection...')
         try {
           const testResponse = await testLLMConnection({
@@ -138,7 +160,7 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
 
       console.log('Creating account with data:', newAccount)
       await createAccount(newAccount)
-      setNewAccount({ name: '', model: '', base_url: '', api_key: 'default-key-please-update-in-settings', agent_type: 'react' })
+      setNewAccount({ name: '', model: '', base_url: '', api_key: '', agent_type: 'react' })
       setShowAddForm(false)
       await loadAccounts()
 
@@ -173,8 +195,18 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
         return
       }
       
+      const hasAnyLLMField = Boolean(editAccount.model || editAccount.base_url || editAccount.api_key)
+      const hasAllLLMFields = Boolean(editAccount.model && editAccount.base_url && editAccount.api_key)
+
+      if (hasAnyLLMField && !hasAllLLMFields) {
+        setError('Model、Base URL 和 API Key 必须同时填写')
+        setLoading(false)
+        setTesting(false)
+        return
+      }
+
       // Test LLM connection first if AI model data is provided
-      if (editAccount.model || editAccount.base_url || editAccount.api_key) {
+      if (hasAllLLMFields) {
         setTestResult('Testing LLM connection...')
         
         try {
@@ -243,7 +275,7 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
 
   const cancelEdit = () => {
     setEditingId(null)
-    setEditAccount({ name: '', model: '', base_url: '', api_key: 'default-key-please-update-in-settings', agent_type: 'react' })
+    setEditAccount({ name: '', model: '', base_url: '', api_key: '', agent_type: 'react' })
     setTestResult(null)
     setError(null)
   }
@@ -303,6 +335,8 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
                             <SelectContent>
                               <SelectItem value="react">ReAct Agent</SelectItem>
                               <SelectItem value="multi_agent">Multi-Agent System</SelectItem>
+                              <SelectItem value="buy_hold">Baseline: Buy & Hold</SelectItem>
+                              <SelectItem value="grid">Baseline: Grid Trading</SelectItem>
                             </SelectContent>
                           </Select>
                         </div>
@@ -353,7 +387,7 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
                         <div className="space-y-1 flex-1">
                           <div className="font-medium">{account.name}</div>
                           <div className="text-xs text-muted-foreground">
-                            {account.model ? `Model: ${account.model}` : 'No model configured'} • {account.agent_type === 'multi_agent' ? 'Multi-Agent' : 'ReAct'}
+                            {account.model ? `Model: ${account.model}` : 'No model configured'} • {getAgentTypeLabel(account.agent_type)}
                             {account.memory_enabled === 'true' && ' • 🧠 Memory'}
                           </div>
                           {account.base_url && (
@@ -408,6 +442,8 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
                     <SelectContent>
                       <SelectItem value="react">ReAct Agent</SelectItem>
                       <SelectItem value="multi_agent">Multi-Agent System</SelectItem>
+                      <SelectItem value="buy_hold">Baseline: Buy & Hold</SelectItem>
+                      <SelectItem value="grid">Baseline: Grid Trading</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
