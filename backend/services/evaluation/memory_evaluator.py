@@ -1,11 +1,10 @@
 """
 Memory Evaluator V2
 
-Focused on 4 core metrics:
-1. Retrieval Distribution - How memories are being retrieved
-2. Memory Usage - Memory usage patterns
-3. Retrieval Relevance - Quality of search results
-4. Memory Growth Pattern - How memory system evolves over time
+Focused on 3 core metrics:
+1. Retrieval Distribution - How memories are being retrieved (includes recency)
+2. Memory Diversity - Semantic diversity of stored memories
+3. Memory Growth Pattern - How memory system evolves over time
 """
 
 from typing import Dict, Any, List, Optional
@@ -23,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 class MemoryEvaluator(BaseEvaluator):
-    """Simplified memory evaluator focused on 4 core metrics."""
+    """Simplified memory evaluator focused on 3 core metrics."""
 
     def __init__(self, db: Session):
         self.db = db
@@ -35,13 +34,13 @@ class MemoryEvaluator(BaseEvaluator):
 
     def evaluate(self, agent_data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Evaluate memory system with 4 core metrics.
+        Evaluate memory system with 3 core metrics.
 
         Args:
             agent_data: Must contain 'account_id', optional 'start_time', 'end_time'
 
         Returns:
-            Evaluation results with 4 core metrics
+            Evaluation results with 3 core metrics
         """
         account_id = agent_data.get("account_id")
         if not account_id:
@@ -62,21 +61,28 @@ class MemoryEvaluator(BaseEvaluator):
             "evaluation_time": datetime.now().isoformat(),
             "retrieval_distribution": self._evaluate_retrieval_distribution(memories),
             "memory_diversity": self._evaluate_diversity(memories),
-            "memory_usage": self._evaluate_usage(memories, tool_usage),
             "growth_pattern": self._evaluate_growth(memories, tool_usage, decisions)
         }
 
     def _evaluate_retrieval_distribution(self, memories: List) -> Dict[str, Any]:
         """
         Metric 1: Retrieval Distribution
-        Analyzes how memories are being retrieved (zombie vs high-value).
+        Analyzes how memories are being retrieved (zombie vs high-value), including recency.
         """
         if not memories:
-            return {"total_memories": 0, "zombie_rate": 0, "high_value_rate": 0, "histogram": {}}
+            return {"total_memories": 0, "zombie_rate": 0, "high_value_rate": 0, "recently_retrieved_24h": 0, "histogram": {}}
 
         retrieval_counts = [getattr(m, 'retrieval_count', 0) for m in memories]
         zombie_memories = sum(1 for c in retrieval_counts if c == 0)
         high_value_memories = sum(1 for c in retrieval_counts if c >= 5)
+
+        # Count memories retrieved in last 24 hours
+        now = datetime.now()
+        recently_retrieved_24h = sum(
+            1 for m in memories
+            if getattr(m, 'last_retrieved_at', None) and
+            (now - m.last_retrieved_at).total_seconds() < 86400
+        )
 
         # Histogram: group by retrieval count ranges
         histogram = Counter()
@@ -109,6 +115,7 @@ class MemoryEvaluator(BaseEvaluator):
             "high_value_rate": round(high_value_memories / len(memories), 3),
             "avg_retrieval_count": round(np.mean(retrieval_counts), 2),
             "median_retrieval_count": int(np.median(retrieval_counts)),
+            "recently_retrieved_24h": recently_retrieved_24h,
             "histogram": ordered_histogram
         }
 
@@ -145,39 +152,9 @@ class MemoryEvaluator(BaseEvaluator):
             "interpretation": "High diversity" if diversity_score > 0.5 else "Low diversity"
         }
 
-    def _evaluate_usage(self, memories: List, tool_usage: Dict) -> Dict[str, Any]:
-        """
-        Metric 3: Memory Usage
-        Analyzes memory usage patterns: search frequency, coverage, and recent activity.
-        """
-        if not memories:
-            return {"total_memories": 0, "recently_retrieved": 0, "retrieval_rate": 0}
-
-        search_count = tool_usage.get("memory_search_count", 0)
-
-        # Count memories retrieved in last 24 hours
-        now = datetime.now()
-        recently_retrieved = sum(
-            1 for m in memories
-            if getattr(m, 'last_retrieved_at', None) and
-            (now - m.last_retrieved_at).total_seconds() < 86400
-        )
-
-        # Memories with retrieval_count > 0 (ever retrieved)
-        ever_retrieved = sum(1 for m in memories if getattr(m, 'retrieval_count', 0) > 0)
-
-        return {
-            "total_memories": len(memories),
-            "search_count": search_count,
-            "ever_retrieved": ever_retrieved,
-            "retrieval_rate": round(ever_retrieved / len(memories), 3),
-            "recently_retrieved_24h": recently_retrieved,
-            "avg_searches_per_memory": round(search_count / len(memories), 2) if memories else 0
-        }
-
     def _evaluate_growth(self, memories: List, tool_usage: Dict, decisions: List) -> Dict[str, Any]:
         """
-        Metric 4: Memory Growth Pattern
+        Metric 3: Memory Growth Pattern
         Analyzes how memory system evolves over time.
         """
         if not memories:
@@ -279,6 +256,7 @@ def main():
                 print(f"  Zombie Rate: {rd['zombie_rate']:.1%} ({rd['zombie_memories']} memories)")
                 print(f"  High-Value Rate: {rd['high_value_rate']:.1%} ({rd['high_value_memories']} memories)")
                 print(f"  Avg Retrieval Count: {rd['avg_retrieval_count']}")
+                print(f"  Recently Retrieved (24h): {rd['recently_retrieved_24h']}")
                 print(f"  Histogram: {rd['histogram']}")
 
                 print("\n2. MEMORY DIVERSITY")
@@ -288,13 +266,7 @@ def main():
                 print(f"  Diversity Score: {md.get('diversity_score', 0):.3f}")
                 print(f"  Interpretation: {md.get('interpretation', 'N/A')}")
 
-                print("\n3. MEMORY USAGE")
-                rr = result['memory_usage']
-                print(f"  Total Searches: {rr['search_count']}")
-                print(f"  Ever Retrieved: {rr['ever_retrieved']} ({rr['retrieval_rate']:.1%})")
-                print(f"  Recently Retrieved (24h): {rr['recently_retrieved_24h']}")
-
-                print("\n4. GROWTH PATTERN")
+                print("\n3. GROWTH PATTERN")
                 gp = result['growth_pattern']
                 print(f"  Time Span: {gp['time_span_days']} days")
                 print(f"  Growth Rate: {gp['growth_rate_per_day']:.2f} memories/day")

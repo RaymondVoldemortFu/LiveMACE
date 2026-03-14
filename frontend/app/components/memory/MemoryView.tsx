@@ -216,32 +216,172 @@ export function MemoryView({ account, accounts }: MemoryViewProps) {
           </CardContent>
         </Card>
 
-        {/* Metrics Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {/* Retrieval Distribution */}
+        {/* Metrics Row: Retrieval Distribution (wider) + Diversity & Growth stacked */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          {/* Retrieval Distribution - spans 2 columns */}
           {metrics?.retrieval_distribution && (
-            <Card>
+            <Card className="md:col-span-2">
               <CardHeader>
                 <CardTitle>Retrieval Distribution</CardTitle>
-                <CardDescription>
-                  Zombie Rate: {(metrics.retrieval_distribution.zombie_rate * 100).toFixed(1)}% |
-                  High-Value Rate: {(metrics.retrieval_distribution.high_value_rate * 100).toFixed(1)}%
-                </CardDescription>
               </CardHeader>
               <CardContent>
-                <Bar
+                <div className="grid grid-cols-2 gap-6">
+                  <div>
+                    <Bar
+                      data={{
+                        labels: Object.keys(metrics.retrieval_distribution.histogram),
+                        datasets: [{
+                          label: 'Memory Count',
+                          data: Object.values(metrics.retrieval_distribution.histogram),
+                          backgroundColor: 'rgba(59, 130, 246, 0.5)',
+                          borderColor: 'rgb(59, 130, 246)',
+                          borderWidth: 1
+                        }]
+                      }}
+                      options={{
+                        responsive: true,
+                        plugins: {
+                          legend: { display: false }
+                        },
+                        scales: {
+                          y: { beginAtZero: true }
+                        }
+                      }}
+                    />
+                  </div>
+                  <div className="flex items-center justify-center h-full">
+                    <div className="grid grid-cols-2 w-full h-full">
+                      <div className="p-4 flex flex-col items-center justify-center border-r border-b">
+                        <p className="text-xs text-muted-foreground">Zombie Rate</p>
+                        <p className="text-2xl font-semibold">{(metrics.retrieval_distribution.zombie_rate * 100).toFixed(1)}%</p>
+                      </div>
+                      <div className="p-4 flex flex-col items-center justify-center border-b">
+                        <p className="text-xs text-muted-foreground">High-Value Rate</p>
+                        <p className="text-2xl font-semibold">{(metrics.retrieval_distribution.high_value_rate * 100).toFixed(1)}%</p>
+                      </div>
+                      <div className="p-4 flex flex-col items-center justify-center border-r">
+                        <p className="text-xs text-muted-foreground">Avg Retrieval</p>
+                        <p className="text-2xl font-semibold">{metrics.retrieval_distribution.avg_retrieval_count}</p>
+                      </div>
+                      <div className="p-4 flex flex-col items-center justify-center">
+                        <p className="text-xs text-muted-foreground">Recently (24h)</p>
+                        <p className="text-2xl font-semibold">{metrics.retrieval_distribution.recently_retrieved_24h ?? 0}</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Right column: Diversity on top, Growth Pattern below, equal height */}
+          <div className="flex flex-col gap-6">
+            {/* Memory Diversity - gauge */}
+            {metrics?.memory_diversity && (
+              <Card className="flex-1">
+                <CardHeader>
+                  <CardTitle>Memory Diversity</CardTitle>
+                  <CardDescription>
+                    {metrics.memory_diversity.interpretation || 'Semantic diversity analysis'}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex items-center justify-center">
+                    <div className="relative w-36 h-20">
+                      <Doughnut
+                        data={{
+                          labels: ['Diversity', 'Similarity'],
+                          datasets: [{
+                            data: [
+                              metrics.memory_diversity.diversity_score || 0,
+                              metrics.memory_diversity.avg_similarity || 0
+                            ],
+                            backgroundColor: ['rgba(34, 197, 94, 0.5)', 'rgba(239, 68, 68, 0.2)'],
+                            borderColor: ['rgb(34, 197, 94)', 'rgb(239, 68, 68)'],
+                            borderWidth: 1
+                          }]
+                        }}
+                        options={{
+                          responsive: true,
+                          maintainAspectRatio: false,
+                          circumference: 180,
+                          rotation: -90,
+                          cutout: '70%',
+                          plugins: {
+                            legend: { display: false },
+                            tooltip: { enabled: false }
+                          }
+                        }}
+                      />
+                      <div className="absolute bottom-0 left-1/2 -translate-x-1/2 text-center">
+                        <span className="text-lg font-semibold">{(metrics.memory_diversity.diversity_score || 0).toFixed(3)}</span>
+                      </div>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Growth Pattern */}
+            {metrics?.growth_pattern && (
+              <Card className="flex-1">
+                <CardHeader>
+                  <CardTitle>Growth Pattern</CardTitle>
+                  <CardDescription>
+                    {metrics.growth_pattern.growth_rate_per_day} memories/day
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-1.5">
+                    <div className="flex justify-between">
+                      <span className="text-sm font-medium">Time Span:</span>
+                      <span className="text-sm">{metrics.growth_pattern.time_span_days} days</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-sm font-medium">Add Attempts:</span>
+                      <span className="text-sm">{metrics.growth_pattern.add_attempts}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-sm font-medium">Dedup Rejections:</span>
+                      <span className="text-sm">
+                        {metrics.growth_pattern.dedup_rejections} ({(metrics.growth_pattern.dedup_rejection_rate * 100).toFixed(1)}%)
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-sm font-medium">Addition Rate:</span>
+                      <span className="text-sm">{metrics.growth_pattern.addition_rate_per_decision.toFixed(3)} per decision</span>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+          </div>
+        </div>
+
+        {/* Memory Growth Trend - full width, compact */}
+        {timeline.length > 0 && (
+          <Card>
+            <CardHeader>
+              <CardTitle>Memory Growth Trend</CardTitle>
+              <CardDescription>Cumulative memory count</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="h-96">
+                <Line
                   data={{
-                    labels: Object.keys(metrics.retrieval_distribution.histogram),
+                    labels: timeline.map(t => t.date),
                     datasets: [{
-                      label: 'Memory Count',
-                      data: Object.values(metrics.retrieval_distribution.histogram),
-                      backgroundColor: 'rgba(59, 130, 246, 0.5)',
+                      label: 'Total Memories',
+                      data: timeline.map(t => t.cumulative_count),
                       borderColor: 'rgb(59, 130, 246)',
-                      borderWidth: 1
+                      backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                      fill: true,
+                      tension: 0.4
                     }]
                   }}
                   options={{
                     responsive: true,
+                    maintainAspectRatio: false,
                     plugins: {
                       legend: { display: false }
                     },
@@ -250,146 +390,7 @@ export function MemoryView({ account, accounts }: MemoryViewProps) {
                     }
                   }}
                 />
-              </CardContent>
-            </Card>
-          )}
-
-          {/* Diversity Score */}
-          {metrics?.memory_diversity && (
-            <Card>
-              <CardHeader>
-                <CardTitle>Memory Diversity</CardTitle>
-                <CardDescription>
-                  {metrics.memory_diversity.interpretation || 'Semantic diversity analysis'}
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="flex items-center justify-center h-64">
-                  <Doughnut
-                    data={{
-                      labels: ['Diversity', 'Similarity'],
-                      datasets: [{
-                        data: [
-                          metrics.memory_diversity.diversity_score || 0,
-                          metrics.memory_diversity.avg_similarity || 0
-                        ],
-                        backgroundColor: ['rgba(34, 197, 94, 0.5)', 'rgba(239, 68, 68, 0.5)'],
-                        borderColor: ['rgb(34, 197, 94)', 'rgb(239, 68, 68)'],
-                        borderWidth: 1
-                      }]
-                    }}
-                    options={{
-                      responsive: true,
-                      maintainAspectRatio: false
-                    }}
-                  />
-                </div>
-                <div className="mt-4 text-center">
-                  <p className="text-sm text-muted-foreground">
-                    Diversity Score: {(metrics.memory_diversity.diversity_score || 0).toFixed(3)}
-                  </p>
-                </div>
-              </CardContent>
-            </Card>
-          )}
-
-          {/* Memory Usage */}
-          {metrics?.memory_usage && (
-            <Card>
-              <CardHeader>
-                <CardTitle>Memory Usage</CardTitle>
-                <CardDescription>Memory usage statistics</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-4">
-                  <div className="flex justify-between">
-                    <span className="text-sm font-medium">Total Searches:</span>
-                    <span className="text-sm">{metrics.memory_usage.search_count}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-sm font-medium">Ever Retrieved:</span>
-                    <span className="text-sm">
-                      {metrics.memory_usage.ever_retrieved} ({(metrics.memory_usage.retrieval_rate * 100).toFixed(1)}%)
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-sm font-medium">Recently Retrieved (24h):</span>
-                    <span className="text-sm">{metrics.memory_usage.recently_retrieved_24h}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-sm font-medium">Avg Searches per Memory:</span>
-                    <span className="text-sm">{metrics.memory_usage.avg_searches_per_memory.toFixed(2)}</span>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          )}
-
-          {/* Growth Pattern */}
-          {metrics?.growth_pattern && (
-            <Card>
-              <CardHeader>
-                <CardTitle>Growth Pattern</CardTitle>
-                <CardDescription>
-                  Growth Rate: {metrics.growth_pattern.growth_rate_per_day} memories/day
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-4">
-                  <div className="flex justify-between">
-                    <span className="text-sm font-medium">Time Span:</span>
-                    <span className="text-sm">{metrics.growth_pattern.time_span_days} days</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-sm font-medium">Add Attempts:</span>
-                    <span className="text-sm">{metrics.growth_pattern.add_attempts}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-sm font-medium">Dedup Rejections:</span>
-                    <span className="text-sm">
-                      {metrics.growth_pattern.dedup_rejections} ({(metrics.growth_pattern.dedup_rejection_rate * 100).toFixed(1)}%)
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-sm font-medium">Addition Rate:</span>
-                    <span className="text-sm">{metrics.growth_pattern.addition_rate_per_decision.toFixed(3)} per decision</span>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          )}
-        </div>
-
-        {/* Growth Curve */}
-        {timeline.length > 0 && (
-          <Card>
-            <CardHeader>
-              <CardTitle>Memory Growth Over Time</CardTitle>
-              <CardDescription>Cumulative memory count</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Line
-                data={{
-                  labels: timeline.map(t => t.date),
-                  datasets: [{
-                    label: 'Total Memories',
-                    data: timeline.map(t => t.cumulative_count),
-                    borderColor: 'rgb(59, 130, 246)',
-                    backgroundColor: 'rgba(59, 130, 246, 0.1)',
-                    fill: true,
-                    tension: 0.4
-                  }]
-                }}
-                options={{
-                  responsive: true,
-                  plugins: {
-                    legend: { display: true }
-                  },
-                  scales: {
-                    y: { beginAtZero: true }
-                  }
-                }}
-              />
+              </div>
             </CardContent>
           </Card>
         )}
