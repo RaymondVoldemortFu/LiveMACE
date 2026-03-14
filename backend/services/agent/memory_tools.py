@@ -23,12 +23,13 @@ def get_or_create_memory_service():
         _memory_service = get_memory_service()
     return _memory_service
 
-def create_memory_tools(db: Session):
+def create_memory_tools(db: Session, trace_id: str = None):
     """
     Factory function to create memory tools with a specific database session.
 
     Args:
         db: SQLAlchemy Session to use for database operations
+        trace_id: Trace ID for linking memories to the agent session that created them
 
     Returns:
         Tuple of (memory_add_tool, memory_search_tool)
@@ -75,7 +76,7 @@ def create_memory_tools(db: Session):
                 except json.JSONDecodeError:
                     logger.warning(f"Invalid metadata JSON: {metadata}")
 
-            memory_service.add(content=experience, account_id=account_id, metadata=metadata_dict, db=db, market=market)
+            memory_service.add(content=experience, account_id=account_id, metadata=metadata_dict, trace_id=trace_id, db=db, market=market)
             logger.info(f"Memory added for account {account_id} market {market}: {experience[:100]}...")
 
             return {

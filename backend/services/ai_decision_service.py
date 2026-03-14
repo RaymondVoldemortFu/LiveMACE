@@ -492,7 +492,7 @@ def call_agent_for_decision(
         )
 
         registry = ToolRegistry()
-        register_default_tools(registry, db, account_id)
+        register_default_tools(registry, db, account_id, trace_id=trace_id)
         
         # Register the new history tool
         registry.register(HistoryTool(db, account_id))
