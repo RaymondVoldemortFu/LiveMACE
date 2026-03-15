@@ -18,6 +18,7 @@ import Sidebar from '@/components/layout/Sidebar'
 import Portfolio from '@/components/portfolio/Portfolio'
 import ComprehensiveView from '@/components/portfolio/ComprehensiveView'
 import AgentStatusView from '@/components/agent/AgentStatusView'
+import ComplianceDashboard from '@/components/compliance/ComplianceDashboard'
 import { AIDecision, getAccounts } from '@/lib/api'
 
 interface User {
@@ -33,6 +34,8 @@ interface Account {
   initial_capital: number
   current_cash: number
   frozen_cash: number
+  is_active: boolean
+  enable_rule_aware?: boolean  // Add support for rule-aware flag
 }
 
 interface Overview {
@@ -57,6 +60,7 @@ interface Trade { id: number; order_id: number; account_id: number; symbol: stri
 const PAGE_TITLES: Record<string, string> = {
   portfolio: 'Crypto Paper Trading',
   comprehensive: '同花顺Bench',
+  compliance: 'Rule Compliance',
 }
 
 function App() {
@@ -313,6 +317,10 @@ function App() {
         
         {currentPage === 'agent-status' && (
           <AgentStatusView accounts={accounts} />
+        )}
+        
+        {currentPage === 'compliance' && (
+          <ComplianceDashboard accounts={accounts} />
         )}
       </main>
     )

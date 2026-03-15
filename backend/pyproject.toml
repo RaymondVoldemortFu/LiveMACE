@@ -23,8 +23,8 @@ dependencies = [
     "alpaca-py>=0.43.2",
 ]
 
-[tool.uv]
-dev-dependencies = [
+[dependency-groups]
+dev = [
     "pytest",
     "black",
     "ruff",

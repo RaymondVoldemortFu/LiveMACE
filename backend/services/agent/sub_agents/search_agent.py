@@ -13,6 +13,14 @@ llm_logger = logging.getLogger("llm_trace")
 agent_logger = logging.getLogger("agent_decision")
 search_logger = logging.getLogger("search_results")
 
+# Try to import tiktoken for accurate token counting
+try:
+    import tiktoken
+    TIKTOKEN_AVAILABLE = True
+except ImportError:
+    TIKTOKEN_AVAILABLE = False
+    logger.warning("tiktoken not available, using approximate token counting")
+
 
 class SearchSubAgent:
     def __init__(self, model: str = "gpt-4o-mini", api_key: str = None, base_url: str = None):
@@ -31,6 +39,16 @@ class SearchSubAgent:
         self.llm_client = OpenAI(api_key=api_key, base_url=base_url) if api_key else None
         self.model = model
         self.max_steps = ToolConfig.MAX_SEARCH_STEPS
+        self.max_context_tokens = ToolConfig.MAX_CONTEXT_TOKENS
+        
+        # Initialize tokenizer for accurate counting if available
+        self.tokenizer = None
+        if TIKTOKEN_AVAILABLE:
+            try:
+                self.tokenizer = tiktoken.encoding_for_model(model)
+            except KeyError:
+                # Fallback to cl100k_base for unknown models
+                self.tokenizer = tiktoken.get_encoding("cl100k_base")
 
     def _search_tool(self, query: str, topic: str = "general", time_range: str = None, 
                      search_depth: str = "basic", max_results: int = 5) -> Dict[str, Any]:
@@ -76,6 +94,90 @@ class SearchSubAgent:
         except Exception as e:
             logger.error(f"Extract failed: {e}")
             return {"error": str(e)}
+    
+    def _estimate_tokens(self, messages: List[Dict[str, Any]]) -> int:
+        """
+        Estimate the total number of tokens in the message list.
+        Uses tiktoken if available, otherwise approximates with char count / 4.
+        """
+        if self.tokenizer:
+            # Accurate counting with tiktoken
+            total = 0
+            for msg in messages:
+                # Count role
+                total += len(self.tokenizer.encode(msg.get("role", "")))
+                # Count content
+                if "content" in msg and msg["content"]:
+                    total += len(self.tokenizer.encode(str(msg["content"])))
+                # Count tool calls if present
+                if "tool_calls" in msg and msg["tool_calls"]:
+                    total += len(self.tokenizer.encode(json.dumps(msg["tool_calls"])))
+                # Count function name for tool messages
+                if "name" in msg:
+                    total += len(self.tokenizer.encode(msg["name"]))
+            return total
+        else:
+            # Approximate: 1 token ≈ 4 characters for English text
+            total_chars = len(json.dumps(messages, ensure_ascii=False))
+            return total_chars // 4
+    
+    def _summarize_messages(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Summarize the conversation history to reduce token count.
+        Keeps system prompt and recent context, summarizes the middle.
+        """
+        if len(messages) <= 3:  # system + user + 1 response
+            return messages
+        
+        agent_logger.warning(f"Context approaching limit, summarizing {len(messages)} messages")
+        
+        # Keep system prompt (first message) and last 2 messages
+        system_msg = messages[0]
+        recent_msgs = messages[-2:]
+        middle_msgs = messages[1:-2]
+        
+        # Create summary of middle messages
+        summary_content = "Previous conversation summary:\n"
+        for msg in middle_msgs:
+            role = msg.get("role", "unknown")
+            if role == "assistant":
+                content = msg.get("content", "")
+                if content:
+                    summary_content += f"- Assistant: {content[:200]}...\n"
+                if msg.get("tool_calls"):
+                    summary_content += f"- Assistant called {len(msg['tool_calls'])} tool(s)\n"
+            elif role == "tool":
+                tool_name = msg.get("name", "unknown")
+                summary_content += f"- Executed {tool_name}\n"
+        
+        # Call LLM to create a concise summary
+        try:
+            summary_request = [
+                {"role": "system", "content": "You are a summarization assistant. Summarize the following search conversation history concisely, preserving key information and search results."},
+                {"role": "user", "content": summary_content}
+            ]
+            
+            response = self.llm_client.chat.completions.create(
+                model=self.model,
+                messages=summary_request,
+                temperature=0.3,
+                max_tokens=1000
+            )
+            
+            summarized_text = response.choices[0].message.content
+            agent_logger.info(f"Summarized {len(middle_msgs)} messages into summary")
+            
+            # Return: system + summary + recent messages
+            return [
+                system_msg,
+                {"role": "assistant", "content": f"[Context Summary]: {summarized_text}"},
+                *recent_msgs
+            ]
+        except Exception as e:
+            logger.error(f"Failed to summarize messages: {e}")
+            agent_logger.error(f"Summarization failed, truncating history instead")
+            # Fallback: just keep system + last 3 messages
+            return [system_msg] + messages[-3:]
 
     def run(self, query: str, topic: str = "general", time_range: str = "none", 
             search_depth: str = "basic", max_results: int = 5) -> Dict[str, Any]:
@@ -131,6 +233,17 @@ class SearchSubAgent:
 
         for step in range(self.max_steps):
             agent_logger.info(f"--- Sub-Agent Step {step+1}/{self.max_steps} ---")
+            
+            # Check token count before making request
+            current_tokens = self._estimate_tokens(messages)
+            agent_logger.info(f"Current context: ~{current_tokens} tokens")
+            
+            # If approaching limit, summarize
+            if current_tokens > self.max_context_tokens * 0.8:  # 80% threshold
+                agent_logger.warning(f"Context at {current_tokens}/{self.max_context_tokens} tokens, triggering summarization")
+                messages = self._summarize_messages(messages)
+                current_tokens = self._estimate_tokens(messages)
+                agent_logger.info(f"After summarization: ~{current_tokens} tokens")
             
             try:
                 # Log Request

@@ -5,15 +5,13 @@ Account and Asset Curve API Routes (Cleaned)
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-from typing import List
-from datetime import date, datetime, timedelta, timezone
-from decimal import Decimal
+from datetime import datetime, timezone
 import logging
+import requests
 
 from database.connection import SessionLocal
-from database.models import Account, Position, Trade, CryptoPrice
+from database.models import Account, Position, Trade
 from services.time_source import now_utc
-from services.agent.llm_client import LLMClient
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +43,7 @@ async def list_all_accounts(db: Session = Depends(get_db)):
                 "name": account.name,
                 "account_type": account.account_type,
                 "agent_type": getattr(account, "agent_type", "react"),
+                "enable_rule_aware": getattr(account, "enable_rule_aware", "false") == "true",
                 "initial_capital": float(account.initial_capital),
                 "current_cash": float(account.current_cash),
                 "frozen_cash": float(account.frozen_cash),
@@ -83,11 +82,35 @@ async def get_specific_account_overview(account_id: int, db: Session = Depends(g
             Position.quantity > 0
         ).count()
         
-        from database.models import Order
+        from database.models import Order, RuleEvaluationResult
         pending_orders = db.query(Order).filter(
             Order.account_id == account.id,
             Order.status == "PENDING"
         ).count()
+        
+        # Get LLM audit statistics from rule_evaluation_results table
+        llm_audit_stats = None
+        try:
+            from sqlalchemy import func
+            audit_results = db.query(
+                func.count(RuleEvaluationResult.id).label('count'),
+                func.avg(RuleEvaluationResult.llm_audit_score).label('avg_score'),
+                func.avg(RuleEvaluationResult.llm_audit_coverage).label('avg_coverage'),
+                func.avg(RuleEvaluationResult.llm_audit_conflict).label('avg_conflict')
+            ).filter(
+                RuleEvaluationResult.account_id == account.id,
+                RuleEvaluationResult.llm_audit_score.isnot(None)  # Only include records with LLM audit
+            ).first()
+            
+            if audit_results and audit_results.count > 0:
+                llm_audit_stats = {
+                    "count": audit_results.count,
+                    "avg_score": round(float(audit_results.avg_score), 3) if audit_results.avg_score else None,
+                    "avg_coverage": round(float(audit_results.avg_coverage), 2) if audit_results.avg_coverage else None,
+                    "avg_conflict": round(float(audit_results.avg_conflict), 2) if audit_results.avg_conflict else None
+                }
+        except Exception as e:
+            logger.warning(f"Failed to calculate LLM audit stats: {e}")
         
         return {
             "account": {
@@ -102,12 +125,14 @@ async def get_specific_account_overview(account_id: int, db: Session = Depends(g
             "positions_value": positions_value,
             "positions_count": positions_count,
             "pending_orders": pending_orders,
+            "llm_audit_stats": llm_audit_stats
         }
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Failed to get account {account_id} overview: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to get account overview: {str(e)}")
+
 
 
 @router.get("/overview")
@@ -165,6 +190,9 @@ async def create_new_account(payload: dict, db: Session = Depends(get_db)):
     try:
         from database.models import User
         
+        # Log incoming payload for debugging
+        logger.info(f"Creating account with payload: {payload}")
+        
         # Get the default user (or first user)
         user = db.query(User).filter(User.username == "default").first()
         if not user:
@@ -182,12 +210,16 @@ async def create_new_account(payload: dict, db: Session = Depends(get_db)):
         api_key = (payload.get("api_key") or "").strip() or None
 
         # Create new account
+        enable_rule_aware_value = "true" if payload.get("enable_rule_aware") is True else "false"
+        logger.info(f"Setting enable_rule_aware to: {enable_rule_aware_value} (from {payload.get('enable_rule_aware')})")
+        
         new_account = Account(
             user_id=user.id,
             version="v1",
             name=payload["name"],
             account_type=payload.get("account_type", "AI"),
             agent_type=payload.get("agent_type", "react"),
+            enable_rule_aware=enable_rule_aware_value,
             model=model,
             base_url=base_url,
             api_key=api_key,
@@ -200,6 +232,8 @@ async def create_new_account(payload: dict, db: Session = Depends(get_db)):
         db.add(new_account)
         db.commit()
         db.refresh(new_account)
+        
+        logger.info(f"Account created successfully: ID={new_account.id}, name={new_account.name}, enable_rule_aware={new_account.enable_rule_aware}")
         
         # Reset auto trading job after creating new account
         try:
@@ -215,6 +249,8 @@ async def create_new_account(payload: dict, db: Session = Depends(get_db)):
             "username": user.username,
             "name": new_account.name,
             "account_type": new_account.account_type,
+            "agent_type": new_account.agent_type,
+            "enable_rule_aware": new_account.enable_rule_aware == "true",
             "initial_capital": float(new_account.initial_capital),
             "current_cash": float(new_account.current_cash),
             "frozen_cash": float(new_account.frozen_cash),
@@ -260,6 +296,10 @@ async def update_account_settings(account_id: int, payload: dict, db: Session = 
             account.agent_type = payload["agent_type"]
             logger.info(f"Updated agent_type to: {account.agent_type}")
         
+        if "enable_rule_aware" in payload:
+            account.enable_rule_aware = "true" if payload["enable_rule_aware"] is True else "false"
+            logger.info(f"Updated enable_rule_aware to: {account.enable_rule_aware}")
+        
         if "base_url" in payload:
             account.base_url = payload["base_url"]
             logger.info(f"Updated base_url to: {account.base_url}")
@@ -290,6 +330,7 @@ async def update_account_settings(account_id: int, payload: dict, db: Session = 
             "name": account.name,
             "account_type": account.account_type,
             "agent_type": getattr(account, "agent_type", "react"),
+            "enable_rule_aware": getattr(account, "enable_rule_aware", "false") == "true",
             "initial_capital": float(account.initial_capital),
             "current_cash": float(account.current_cash),
             "frozen_cash": float(account.frozen_cash),
@@ -494,51 +535,114 @@ async def test_llm_connection(payload: dict):
         model = (payload.get("model") or "").strip()
         base_url = (payload.get("base_url") or "").strip()
         api_key = (payload.get("api_key") or "").strip()
+        
+        logger.info(f"Testing LLM connection with payload: {payload}")
 
         if not model:
             return {"success": False, "message": "Model is required"}
         
+        logger.info(f"LLM test params: model={model}, base_url={base_url}, api_key_length={len(api_key) if api_key else 0}")
+        
         if not api_key:
+            logger.warning("LLM test failed: API key is required")
             return {"success": False, "message": "API key is required"}
         
         if not base_url:
+            logger.warning("LLM test failed: Base URL is required")
             return {"success": False, "message": "Base URL is required"}
-
+        
+        # Clean up base_url - ensure it doesn't end with slash
+        if base_url.endswith('/'):
+            base_url = base_url.rstrip('/')
+        
+        # Test the connection with a simple completion request
         try:
-            llm = LLMClient(
-                model=model,
-                api_key=api_key,
-                base_url=base_url,
-            )
-            content = llm.test_connection()
-            normalized_base_url = llm.normalize_base_url(base_url)
-            logger.info(f"LLM test successful for model {model} at {normalized_base_url}")
-            return {
-                "success": True,
-                "message": f"Connection successful! Model {model} responded correctly.",
-                "response": content or "Connection test successful",
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}"
             }
-        except Exception as e:
-            logger.error(f"LLM test failed: {e}", exc_info=True)
-            status_code = getattr(e, "status_code", None)
-            error_message = str(e)
-
-            if status_code == 401:
-                return {"success": False, "message": "Authentication failed. Please check your API key."}
-            if status_code == 403:
-                return {"success": False, "message": "Permission denied. Your API key may not have access to this model."}
-            if status_code == 404:
-                return {"success": False, "message": f"Model '{model}' not found or endpoint not available."}
-            if status_code == 429:
-                return {"success": False, "message": "Rate limit exceeded. Please try again later."}
-
-            if "timed out" in error_message.lower():
-                return {"success": False, "message": "Request timed out. The LLM service may be unavailable."}
-            if "connection" in error_message.lower():
-                return {"success": False, "message": f"Failed to connect to {base_url}. Please check the base URL."}
-
-            return {"success": False, "message": f"Connection test failed: {error_message}"}
             
+            # Use OpenAI-compatible chat completions format
+            payload_data = {
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": "You are a helpful assistant."},
+                    {"role": "user", "content": "Say 'Connection test successful' if you can read this."}
+                ],
+                "max_tokens": 50,
+                "temperature": 0
+            }
+            
+            # Construct API endpoint URL
+            api_endpoint = f"{base_url}/chat/completions"
+            
+            logger.info(f"Sending LLM test request to: {api_endpoint}")
+            
+            # Make the request
+            response = requests.post(
+                api_endpoint,
+                headers=headers,
+                json=payload_data,
+                timeout=10.0,
+                verify=False  # Disable SSL verification for custom AI endpoints
+            )
+            
+            logger.info(f"LLM test response status: {response.status_code}")
+            
+            # Check response status
+            if response.status_code == 200:
+                result = response.json()
+                logger.info(f"LLM test response body: {result}")
+                
+                # Extract text from OpenAI-compatible response format
+                if "choices" in result and len(result["choices"]) > 0:
+                    message = result["choices"][0].get("message", {})
+                    content = message.get("content", "")
+                    
+                    logger.info(f"LLM test extracted content: '{content}'")
+                    
+                    if content:
+                        logger.info(f"LLM test successful for model {model} at {base_url}")
+                        return {
+                            "success": True, 
+                            "message": f"Connection successful! Model {model} responded correctly.",
+                            "response": content
+                        }
+                    else:
+                        logger.warning(f"LLM test: empty content. Full response: {result}")
+                        return {
+                            "success": False, 
+                            "message": "LLM responded but with empty content",
+                            "debug_response": result  # add debug info
+                        }
+                else:
+                    logger.warning(f"LLM test: unexpected format. Full response: {result}")
+                    return {
+                        "success": False, 
+                        "message": "Unexpected response format from LLM",
+                        "debug_response": result  # add debug info
+                    }
+                    
+            elif response.status_code == 401:
+                return {"success": False, "message": "Authentication failed. Please check your API key."}
+            elif response.status_code == 403:
+                return {"success": False, "message": "Permission denied. Your API key may not have access to this model."}
+            elif response.status_code == 404:
+                return {"success": False, "message": f"Model '{model}' not found or endpoint not available."}
+            elif response.status_code == 429:
+                return {"success": False, "message": "Rate limit exceeded. Please try again later."}
+            else:
+                error_message = f"HTTP {response.status_code}: {response.text[:200]}"
+                return {"success": False, "message": f"Connection test failed: {error_message}"}
+
+        except requests.exceptions.Timeout:
+            return {"success": False, "message": "Request timed out. The LLM service may be unavailable."}
+        except requests.exceptions.ConnectionError:
+            return {"success": False, "message": f"Failed to connect to {base_url}. Please check the base URL."}
+        except requests.exceptions.RequestException as e:
+            error_message = str(e)
+            return {"success": False, "message": f"Connection test failed: {error_message}"}
+
     except Exception as e:
         logger.error(f"Failed to test LLM connection: {e}", exc_info=True)
         return {"success": False, "message": f"Failed to test LLM connection: {str(e)}"}

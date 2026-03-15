@@ -37,7 +37,7 @@ def _calculate_position_interest(position: Position) -> Decimal:
 
 def place_and_execute_crypto(
     db: Session,
-    account: Account,
+    account_id: int,
     symbol: str,
     name: str,
     side: str,
@@ -50,7 +50,7 @@ def place_and_execute_crypto(
     Place and execute a CRYPTO order with leverage support.
     
     Args:
-        account: Trading account
+        account_id: Trading account ID
         symbol: Trading pair (e.g., 'BTC/USDT')
         side: 'LONG' (open long) / 'SHORT' (open short) / 'BUY' (close short) / 'SELL' (close long)
         leverage: Leverage multiplier (1 = spot, 2-50 = leveraged)
@@ -59,6 +59,11 @@ def place_and_execute_crypto(
     Returns:
         Executed Order
     """
+    # Fetch account from database using account_id
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise ValueError(f"Account with id {account_id} not found")
+    
     if leverage < 1 or leverage > CRYPTO_MAX_LEVERAGE:
         raise ValueError(f"Leverage must be between 1 and {CRYPTO_MAX_LEVERAGE}")
     

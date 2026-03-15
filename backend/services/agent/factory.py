@@ -5,6 +5,10 @@ from .multi_agent import MultiAgent
 from .llm_client import LLMClient
 from .tools import ToolRegistry
 from config.agent_config import AgentConfig
+import os
+import logging
+
+logger = logging.getLogger(__name__)
 
 def create_agent(agent_type: str, llm: LLMClient, tools: ToolRegistry, **kwargs) -> BaseAgent:
     """
@@ -33,6 +37,38 @@ def create_agent(agent_type: str, llm: LLMClient, tools: ToolRegistry, **kwargs)
         max_steps = kwargs.get("max_steps", 15) # Default less steps for manager loop
         user_id = kwargs.get("user_id")
         return MultiAgent(llm, tools, max_steps=max_steps, user_id=user_id)
+    
+    elif normalized_type == "rule_aware":
+        # Import rule-aware components
+        from .rule_aware import RuleAwareAgent, RuleEngine
+        
+        # Get rule documents path
+        rule_docs_path = kwargs.get("rule_docs_path")
+        if not rule_docs_path:
+            # Default to backend/config/rules directory
+            rule_docs_path = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                "config", "rules"
+            )
+        
+        # Initialize rule engine
+        rule_engine = RuleEngine(rule_docs_path)
+        logger.info(f"Loaded {rule_engine.get_rule_summary()} rules for rule-aware agent")
+        
+        max_steps = kwargs.get("max_steps", AgentConfig.MAX_STEPS)
+        user_id = kwargs.get("user_id")
+        account_id = kwargs.get("account_id")
+        enable_llm_audit = kwargs.get("enable_llm_audit", False)
+        
+        return RuleAwareAgent(
+            llm, 
+            tools, 
+            rule_engine, 
+            max_steps=max_steps, 
+            user_id=user_id,
+            account_id=account_id,
+            enable_llm_audit=enable_llm_audit
+        )
         
     elif normalized_type == "advanced_multi_agent":
         from .multi_agent_advanced import AdvancedMultiAgent
