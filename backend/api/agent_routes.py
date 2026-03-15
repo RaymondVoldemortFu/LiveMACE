@@ -1,12 +1,38 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from typing import List, Dict, Any, Optional
 import json
+import ast
 
 from database.connection import get_db
 from database.models import AgentTrace, AIDecisionLog, Account
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
+
+
+def _parse_maybe_json(raw: Any) -> Any:
+    """
+    Parse JSON-like payloads stored in trace fields.
+    Falls back to Python literal parsing for legacy rows and returns
+    original text when parsing fails.
+    """
+    if raw is None or not isinstance(raw, str):
+        return raw
+
+    text = raw.strip()
+    if not text:
+        return None
+
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
+
+    try:
+        return ast.literal_eval(text)
+    except Exception:
+        return raw
 
 @router.get("/trace/{trace_id}")
 def get_agent_trace(trace_id: str, db: Session = Depends(get_db)):
@@ -28,8 +54,8 @@ def get_agent_trace(trace_id: str, db: Session = Depends(get_db)):
             "step_number": t.step_number,
             "role": t.role,
             "content": t.content,
-            "tool_calls": json.loads(t.tool_calls) if t.tool_calls else None,
-            "tool_output": json.loads(t.tool_output) if t.tool_output and t.role == "tool" else t.tool_output,
+            "tool_calls": _parse_maybe_json(t.tool_calls),
+            "tool_output": _parse_maybe_json(t.tool_output) if t.role == "tool" else t.tool_output,
             "created_at": t.created_at
         })
     
@@ -70,13 +96,44 @@ def get_trace_history(account_id: int, limit: int = 20, db: Session = Depends(ge
     
     history = []
     for d in decisions:
+        reason_text = ""
+        if d.reason is not None:
+            reason_text = str(d.reason)
         history.append({
             "trace_id": d.trace_id,
             "timestamp": d.decision_time,
             "operation": d.operation,
             "symbol": d.symbol,
-            "reason": d.reason[:50] + "..." if d.reason else ""
+            "reason": reason_text[:50] + "..." if reason_text else ""
         })
-        
+
+    # Backward compatibility:
+    # older tool-mode runs may have trace rows but no trace_id on decision logs.
+    if not history:
+        trace_rows = (
+            db.query(
+                AgentTrace.trace_id.label("trace_id"),
+                func.max(AgentTrace.created_at).label("timestamp"),
+            )
+            .filter(
+                AgentTrace.account_id == account_id,
+                AgentTrace.trace_id.isnot(None),
+            )
+            .group_by(AgentTrace.trace_id)
+            .order_by(func.max(AgentTrace.created_at).desc())
+            .limit(limit)
+            .all()
+        )
+        for row in trace_rows:
+            history.append(
+                {
+                    "trace_id": row.trace_id,
+                    "timestamp": row.timestamp,
+                    "operation": "trace",
+                    "symbol": None,
+                    "reason": "Agent trace session",
+                }
+            )
+
     return history
 

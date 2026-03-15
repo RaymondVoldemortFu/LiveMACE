@@ -132,6 +132,16 @@ You can call the following tools to retrieve data, manage the virtual environmen
   - Risk/return calculations
   - Any non-trivial quantitative or data processing tasks
 
+- execute_trade
+  Execute REAL trade immediately.
+  This tool supports:
+  - Ratio-based sizing: size_mode="portion" + target_portion_of_balance
+  - USD-based sizing: size_mode="usd" + usd_amount
+  - Quick actions:
+    - operation="all_in" for full-position entry
+    - operation="close_all" for liquidation
+  You can call execute_trade multiple times in one decision process.
+
 ========================
 MEMORY SYSTEM (CRITICAL FOR LEARNING)
 ========================
@@ -218,24 +228,20 @@ BEFORE outputting your final decision, complete this checklist:
 CRITICAL: If you answer YES to memory_add, you MUST call the memory_add tool in your NEXT action. Only output FINAL_JSON AFTER the tool call completes.
 
 ========================
-FINAL OUTPUT REQUIREMENTS
+DECISION PROTOCOL
 ========================
-When—and ONLY when—you have completed planning, tool calls, and analysis, you MUST output a single JSON object wrapped by the markers <FINAL_JSON> and </FINAL_JSON>, with the following format:
+The runtime will explicitly tell you which protocol is active.
 
-<FINAL_JSON>
-{
-  "operation": "open" | "close" | "hold",
-  "symbol": "BTC" | "ETH" | "SOL" | "BNB" | "XRP" | "DOGE" | "AAPL" | "NVDA" | "GOOGL" | "META" | "AMZN" | "TSLA" | "PG" | "JNJ" | "UNH" | "JPM" | "V" | "BA" | "XOM" | "NEE" | "AMT" | "PLD" | "LIN",
-  "market": "CRYPTO" | "US",
-  "direction": "long" | "short",
-  "target_portion_of_balance": number between 0.0 and 1.0,
-  "leverage": integer between 1 and 10,
-  "reason": "A concise explanation in English of how you used the tool outputs and data to arrive at this decision."
-}
-</FINAL_JSON>
+If runtime says TOOL MODE:
+- You should make decisions by calling execute_trade directly.
+- You may call execute_trade multiple times in one decision process.
+- You must end by outputting ONLY the termination token specified at runtime.
+- In TOOL MODE, do NOT output <FINAL_JSON>.
 
-Additional decision rules:
+If runtime says LEGACY FINAL_JSON MODE:
+- You must output one final decision wrapped by <FINAL_JSON> ... </FINAL_JSON>.
 
+In LEGACY FINAL_JSON MODE, follow this schema and rules:
 - operation:
   - "open": Open a new position. The field `direction` specifies long/short.
   - "close": Close an existing position in the given symbol and direction.
@@ -295,6 +301,12 @@ you MUST output the final decision exactly in the following format and NOTHING e
 Remember:
 - Outside of the final output, the string "<FINAL_JSON>" MUST NOT appear.
 - Inside the tags, the content MUST be valid JSON.
+
+Common constraints:
+- Never guess prices/account/positions; use tools.
+- For US symbols, verify market status before trading.
+- For close operations, confirm position exists and side matches.
+- For leverage, keep within [1, 10] and use leverage=1 for US market.
 """
 
 

@@ -7,11 +7,20 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 from datetime import datetime, timezone
 import logging
-import requests
+from openai import (
+    APIConnectionError,
+    APITimeoutError,
+    AuthenticationError,
+    PermissionDeniedError,
+    NotFoundError,
+    RateLimitError,
+    BadRequestError,
+)
 
 from database.connection import SessionLocal
 from database.models import Account, Position, Trade
 from services.time_source import now_utc
+from services.agent.llm_client import LLMClient
 
 logger = logging.getLogger(__name__)
 
@@ -541,14 +550,19 @@ async def test_llm_connection(payload: dict):
         model = (payload.get("model") or "").strip()
         base_url = (payload.get("base_url") or "").strip()
         api_key = (payload.get("api_key") or "").strip()
-
-        logger.info(f"Testing LLM connection with payload: {payload}")
+        timeout_seconds_raw = payload.get("timeout_seconds", 15)
+        
+        # Keep logs safe: never print full api key
+        logger.info(
+            "Testing LLM connection with payload keys: model=%s base_url=%s api_key_length=%s timeout_seconds=%s",
+            model,
+            base_url,
+            len(api_key) if api_key else 0,
+            timeout_seconds_raw,
+        )
 
         if not model:
             return {"success": False, "message": "Model is required"}
-        
-        logger.info(f"LLM test params: model={model}, base_url={base_url}, api_key_length={len(api_key) if api_key else 0}")
-
         if not api_key:
             logger.warning("LLM test failed: API key is required")
             return {"success": False, "message": "API key is required"}
@@ -557,97 +571,69 @@ async def test_llm_connection(payload: dict):
             logger.warning("LLM test failed: Base URL is required")
             return {"success": False, "message": "Base URL is required"}
 
-        # Clean up base_url - ensure it doesn't end with slash
-        if base_url.endswith('/'):
-            base_url = base_url.rstrip('/')
+        # Use the same client path as real agent runtime.
+        # This also normalizes base_url formats like:
+        # - https://host/v1
+        # - https://host/v1/
+        # - https://host/v1/chat/completions
+        normalized_base_url = LLMClient.normalize_base_url(base_url)
+        timeout_seconds = float(timeout_seconds_raw) if timeout_seconds_raw is not None else 15.0
+        timeout_seconds = max(3.0, min(timeout_seconds, 120.0))
 
-        # Test the connection with a simple completion request
+        logger.info(
+            "LLM test params: model=%s normalized_base_url=%s timeout=%ss",
+            model,
+            normalized_base_url,
+            timeout_seconds,
+        )
+
         try:
-            headers = {
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {api_key}"
+            client = LLMClient(model=model, api_key=api_key, base_url=base_url)
+            content = client.test_connection(timeout_seconds=timeout_seconds)
+            if content:
+                logger.info("LLM test successful for model=%s base_url=%s", model, normalized_base_url)
+                return {
+                    "success": True,
+                    "message": f"Connection successful! Model {model} responded correctly.",
+                    "response": content,
+                    "normalized_base_url": normalized_base_url,
+                }
+            return {
+                "success": False,
+                "message": "LLM responded but returned empty content.",
+                "normalized_base_url": normalized_base_url,
             }
-
-            # Use OpenAI-compatible chat completions format
-            payload_data = {
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": "You are a helpful assistant."},
-                    {"role": "user", "content": "Say 'Connection test successful' if you can read this."}
-                ],
-                "max_tokens": 50,
-                "temperature": 0
+        except APITimeoutError:
+            return {
+                "success": False,
+                "message": (
+                    f"Request timed out after {timeout_seconds:.0f}s. "
+                    "Please verify endpoint responsiveness or increase timeout_seconds."
+                ),
+                "normalized_base_url": normalized_base_url,
             }
-
-            # Construct API endpoint URL
-            api_endpoint = f"{base_url}/chat/completions"
-
-            logger.info(f"Sending LLM test request to: {api_endpoint}")
-
-            # Make the request
-            response = requests.post(
-                api_endpoint,
-                headers=headers,
-                json=payload_data,
-                timeout=10.0,
-                verify=False  # Disable SSL verification for custom AI endpoints
-            )
-
-            logger.info(f"LLM test response status: {response.status_code}")
-
-            # Check response status
-            if response.status_code == 200:
-                result = response.json()
-                logger.info(f"LLM test response body: {result}")
-
-                # Extract text from OpenAI-compatible response format
-                if "choices" in result and len(result["choices"]) > 0:
-                    message = result["choices"][0].get("message", {})
-                    content = message.get("content", "")
-
-                    logger.info(f"LLM test extracted content: '{content}'")
-
-                    if content:
-                        logger.info(f"LLM test successful for model {model} at {base_url}")
-                        return {
-                            "success": True,
-                            "message": f"Connection successful! Model {model} responded correctly.",
-                            "response": content
-                        }
-                    else:
-                        logger.warning(f"LLM test: empty content. Full response: {result}")
-                        return {
-                            "success": False,
-                            "message": "LLM responded but with empty content",
-                            "debug_response": result  # add debug info
-                        }
-                else:
-                    logger.warning(f"LLM test: unexpected format. Full response: {result}")
-                    return {
-                        "success": False,
-                        "message": "Unexpected response format from LLM",
-                        "debug_response": result  # add debug info
-                    }
-
-            elif response.status_code == 401:
-                return {"success": False, "message": "Authentication failed. Please check your API key."}
-            elif response.status_code == 403:
-                return {"success": False, "message": "Permission denied. Your API key may not have access to this model."}
-            elif response.status_code == 404:
-                return {"success": False, "message": f"Model '{model}' not found or endpoint not available."}
-            elif response.status_code == 429:
-                return {"success": False, "message": "Rate limit exceeded. Please try again later."}
-            else:
-                error_message = f"HTTP {response.status_code}: {response.text[:200]}"
-                return {"success": False, "message": f"Connection test failed: {error_message}"}
-
-        except requests.exceptions.Timeout:
-            return {"success": False, "message": "Request timed out. The LLM service may be unavailable."}
-        except requests.exceptions.ConnectionError:
-            return {"success": False, "message": f"Failed to connect to {base_url}. Please check the base URL."}
-        except requests.exceptions.RequestException as e:
-            error_message = str(e)
-            return {"success": False, "message": f"Connection test failed: {error_message}"}
+        except AuthenticationError:
+            return {"success": False, "message": "Authentication failed. Please check your API key."}
+        except PermissionDeniedError:
+            return {"success": False, "message": "Permission denied. API key may not access this model."}
+        except NotFoundError:
+            return {"success": False, "message": f"Model '{model}' not found or endpoint unavailable."}
+        except RateLimitError:
+            return {"success": False, "message": "Rate limit exceeded. Please try again later."}
+        except BadRequestError as e:
+            return {"success": False, "message": f"Invalid request: {str(e)}"}
+        except APIConnectionError as e:
+            return {
+                "success": False,
+                "message": f"Failed to connect to {normalized_base_url}. Error: {str(e)}",
+                "normalized_base_url": normalized_base_url,
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "message": f"Connection test failed: {str(e)}",
+                "normalized_base_url": normalized_base_url,
+            }
 
     except Exception as e:
         logger.error(f"Failed to test LLM connection: {e}", exc_info=True)
