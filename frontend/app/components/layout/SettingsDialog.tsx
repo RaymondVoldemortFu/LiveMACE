@@ -47,6 +47,7 @@ interface AIAccountCreate extends TradingAccountCreate {
 
 const AGENT_TYPE_LABELS: Record<string, string> = {
   multi_agent: 'Multi-Agent',
+  advanced_multi_agent: 'Advanced Multi-Agent System',
   buy_hold: 'Baseline: Buy & Hold',
   grid: 'Baseline: Grid Trading',
   react: 'ReAct',
@@ -342,6 +343,7 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
                             <SelectContent>
                               <SelectItem value="react">ReAct Agent</SelectItem>
                               <SelectItem value="multi_agent">Multi-Agent System</SelectItem>
+                              <SelectItem value="advanced_multi_agent">Advanced Multi-Agent System</SelectItem>
                               <SelectItem value="buy_hold">Baseline: Buy & Hold</SelectItem>
                               <SelectItem value="grid">Baseline: Grid Trading</SelectItem>
                             </SelectContent>
@@ -464,6 +466,7 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
                     <SelectContent>
                       <SelectItem value="react">ReAct Agent</SelectItem>
                       <SelectItem value="multi_agent">Multi-Agent System</SelectItem>
+                      <SelectItem value="advanced_multi_agent">Advanced Multi-Agent System</SelectItem>
                       <SelectItem value="buy_hold">Baseline: Buy & Hold</SelectItem>
                       <SelectItem value="grid">Baseline: Grid Trading</SelectItem>
                     </SelectContent>

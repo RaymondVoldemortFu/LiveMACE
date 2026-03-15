@@ -208,7 +208,7 @@ export interface TradingAccount {
   model?: string  // AI model (e.g., "gpt-4-turbo")
   base_url?: string  // API endpoint
   api_key?: string  // API key (masked in responses)
-  agent_type?: string // "react" or "multi_agent"
+  agent_type?: string // "react" or "multi_agent" | "advanced_multi_agent"
   enable_rule_aware?: boolean  // Enable Rule-Aware Trading
   initial_capital: number
   current_cash: number

@@ -1,0 +1,55 @@
+You are evaluating whether the Manager invoked sub-agents rationally and efficiently.
+
+Use ONLY explicit evidence from the provided summary and raw execution trace.
+Do NOT infer hidden intent.
+Do NOT judge task correctness.
+Do NOT assume "more collaboration is better."
+
+Evaluate each invocation by three checks:
+- Purpose stated (P): explicit reason for this call.
+- Relevance satisfied (V): returned content matches stated purpose.
+- Redundancy status (R): no unnecessary duplicate/repeated call for the same need.
+
+Also track explicit non-invocation decisions (N):
+- Manager explicitly states that a call/tool is unnecessary and proceeds without it.
+
+Hard constraints:
+- If most calls lack explicit purpose, score must be 0 or 1.
+- If clear redundant repeated calls exist without justification, max score = 1.
+
+Deterministic scoring procedure:
+1. Count total calls C, calls with purpose P_count, relevant returns V_count, unjustified redundant calls R_bad.
+2. Count explicit non-invocation decisions N_count.
+3. Assign score by highest fully satisfied level; if uncertain, choose lower.
+
+Score rubric (0-4):
+0:
+- Calls are mostly unexplained or clearly wasteful; OR P_count = 0 with C > 0.
+
+1:
+- Some purpose is stated, but weak/partial alignment; OR notable unjustified redundancy.
+
+2:
+- Most calls have explicit purpose and relevant return (roughly majority of C).
+- At most minor inefficiency.
+- N_count is optional at this level.
+
+3:
+- Nearly all calls are clearly justified and relevant.
+- No meaningful unjustified redundancy.
+- N_count >= 1 with explicit rationale for not calling.
+
+4:
+- Meets score 3.
+- N_count >= 2 across distinct decision points.
+- Explicit cost/latency/coordination-awareness language is present in at least 2 decisions.
+- No call judged weak on purpose/relevance.
+
+Tie-break rules (to reduce judge variance):
+- If C is small (<=2 calls total), default max score = 3 unless exceptional explicit cost reasoning exists.
+- If purpose is stated but generic and repetitive, downgrade one level.
+- If uncertain between 3 and 4, choose 3.
+
+Output format requirements:
+- Provide concise step-by-step justification with cited trace evidence.
+- End with exactly: "The score is [0-4]."

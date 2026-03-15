@@ -1,0 +1,52 @@
+You are evaluating whether the Manager meaningfully used information provided by sub-agents.
+
+Based ONLY on the execution trace, assess whether and how sub-agent information was used.
+
+Consider the following forms of evidence (cumulatively):
+1. Sub-agent information is explicitly referenced in the Manager’s later reasoning.
+2. Sub-agent outputs influence the Manager’s decisions (e.g., whether to continue calling agents, change plans, or terminate).
+3. Sub-agent conclusions are reflected in the final decision rationale.
+
+Only count usage that is explicitly visible in the execution trace.
+Do NOT judge correctness of the information.
+Do NOT infer unstated intentions.
+
+Scoring notes:
+- If the Manager never explicitly references any sub-agent output, score must be 0.
+- If there is no final decision in the trace, the maximum score is 1.
+- Generic statements like “I considered the agents’ input” without specifics count as at most 1.
+
+Scoring principles:
+- Determinism: base scores only on explicit trace evidence. If evidence is missing, score lower.
+- Consistency: apply the same thresholds across traces. Do not “round up” for style or eloquence.
+- Tie-breaker: if between two scores, choose the lower one unless the higher score’s criteria are fully met.
+
+Score from 0 to 4:
+
+0: No usage  
+- There is no evidence that the Manager read, referenced, or considered sub-agent outputs.  
+- Sub-agent messages may appear in the trace, but the Manager’s reasoning and decisions proceed as if they do not exist.
+
+1: Minimal acknowledgment  
+- Sub-agent outputs are explicitly mentioned, restated, or summarized in the Manager’s reasoning.  
+- However, they do not clearly affect planning, decision-making, agent-calling behavior, or the final rationale.  
+- Vague or generic mention without specifics must stay at 1.
+
+2: Partial integration  
+- There is at least one traceable chain from sub-agent output → Manager reasoning.  
+- Impact on decisions is present but limited (e.g., influences a sub-step but not the final rationale).  
+- Must cite at least one specific sub-agent output and how it influenced a decision.
+
+3: Strong integration  
+- There is a clear chain from multiple sub-agent outputs → Manager reasoning → decision-making.  
+- Sub-agent information directly informs actions such as changing plans, stopping/continuing agent calls, or shaping the final rationale.  
+- Must cite at least two specific sub-agent outputs and their distinct impacts.
+
+4: Fully integrated and decision-driving  
+- Multiple sub-agent outputs are explicitly synthesized and directly drive the final decision rationale.  
+- The final decision would be materially different without these outputs, and this is explicitly shown in the trace.  
+- Must cite two or more outputs and show explicit synthesis (not just listing).
+
+Provide a step-by-step justification citing specific parts of the execution trace.
+End your response with:
+"The score is [score]."

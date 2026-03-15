@@ -1,0 +1,50 @@
+You are evaluating the marginal value of using multiple agents.
+
+Based ONLY on the execution trace, assess whether sub-agents provide non-redundant value beyond what the Manager alone demonstrates.
+
+Consider the following aspects cumulatively:
+1. The final decision explicitly relies on information, analysis, or capabilities provided by sub-agents.
+2. These contributions are not already present in the Manager’s own reasoning or abilities as shown in the trace.
+3. If the sub-agents were removed, the Manager’s decision would likely become less complete, less informed, or less justified.
+4. Sub-agent contributions are meaningfully integrated into the final decision, not merely referenced or restated.
+
+Base all judgments strictly on evidence in the execution trace.
+Do NOT judge whether the final decision is correct.
+Do NOT use external knowledge or assumptions about agent capabilities.
+
+Scoring notes:
+- If there is no final decision in the trace, the maximum score is 1.
+- If the Manager never explicitly references sub-agent outputs, score must be 0.
+- To score 2, at least two non-redundant sub-agent contributions must be integrated into the final decision.
+
+Scoring principles:
+- Determinism: use only explicit trace evidence.
+- Consistency: apply the same thresholds across traces.
+- Tie-breaker: if between two scores, choose the lower one unless higher criteria are fully met.
+
+Score from 0 to 4:
+
+0: No marginal value  
+- Sub-agent outputs are unused, ignored, or entirely redundant with the Manager’s own reasoning.  
+- The execution trace shows no meaningful difference that sub-agents make to the final decision.
+
+1: Limited or weak marginal value  
+- Sub-agents provide some additional context or detail, but their contributions are superficial, loosely integrated, or largely substitutable by the Manager.  
+- Removing sub-agents would not materially weaken the decision or its justification.
+
+2: Moderate marginal value  
+- At least one non-redundant sub-agent contribution is integrated into the decision.  
+- Removing sub-agents would make the decision somewhat weaker, but not fundamentally different.
+
+3: Clear marginal value  
+- Multiple non-redundant contributions are integrated into the final decision.  
+- Without these contributions, the decision would be noticeably less informed or less justified.
+
+4: Strong, decision-critical marginal value  
+- The final decision explicitly depends on sub-agent outputs that the Manager does not provide independently.  
+- Removing sub-agents would clearly alter the decision or eliminate key justification.
+
+
+Provide a step-by-step justification citing specific parts of the execution trace.
+End your response with:
+"The score is [score]."
