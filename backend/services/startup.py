@@ -2,6 +2,8 @@
 
 import logging
 import threading
+import anyio
+import dotenv
 
 from services.auto_trader import (
     place_ai_driven_crypto_order,
