@@ -2,12 +2,16 @@
 
 import logging
 import threading
-import os
-import dotenv
-import anyio
 
-from services.scheduler import start_scheduler, setup_market_tasks, task_scheduler, start_margin_monitor
+from services.auto_trader import (
+    place_ai_driven_crypto_order,
+    place_random_crypto_order,
+    AUTO_TRADE_JOB_ID,
+    AI_TRADE_JOB_ID
+)
+from services.scheduler import start_scheduler, setup_market_tasks, task_scheduler, start_margin_monitor, start_database_snapshot
 from services.container_service import ContainerService
+from database.connection import SessionLocal
 
 logger = logging.getLogger(__name__)
 
@@ -62,70 +66,22 @@ def initialize_services():
         # Start margin monitoring for leveraged positions (every 5 seconds)
         start_margin_monitor(interval_seconds=5)
         logger.info("Margin monitor started (5-second interval)")
-
-        # Start background order scheduler to process pending LIMIT orders
+        
+        # Initialize asset metadata
         try:
-            from services.order_scheduler import start_order_scheduler
-
-            start_order_scheduler()
-            logger.info("Order scheduler started (process pending orders)")
-        except Exception as e:
-            logger.error(f"Failed to start order scheduler: {e}")
-
-        # Start periodic evaluation checkpoint job (PnL/return per time slice)
-        # The job is idempotent per (account, interval, period_end), so we can poll frequently.
-        try:
-            from services.evaluation.checkpoint_service import run_checkpoint_jobs
-
-            # Configure these in your `.env` for local development if needed:
-            # - EVAL_CHECKPOINT_INTERVAL_SECONDS=900,3600,86400
-            # - EVAL_CHECKPOINT_POLL_SECONDS=30
-            raw_intervals = os.getenv("EVAL_CHECKPOINT_INTERVAL_SECONDS", "900,3600,86400")
-            raw_poll = os.getenv("EVAL_CHECKPOINT_POLL_SECONDS", "30")
+            from init_asset_metadata import init_asset_metadata
+            db = SessionLocal()
             try:
-                poll_seconds = int(str(raw_poll).strip())
-            except Exception:
-                poll_seconds = 30
-                logger.warning(
-                    f"Invalid EVAL_CHECKPOINT_POLL_SECONDS={raw_poll!r}; falling back to {poll_seconds}s"
-                )
-
-            if poll_seconds < 1:
-                logger.warning(
-                    f"EVAL_CHECKPOINT_POLL_SECONDS={poll_seconds} is too small; clamping to 1s"
-                )
-                poll_seconds = 1
-
-            intervals: list[int] = []
-            for part in (raw_intervals or "").split(","):
-                part = part.strip()
-                if not part:
-                    continue
-                try:
-                    val = int(part)
-                    if val > 0:
-                        intervals.append(val)
-                except ValueError:
-                    logger.warning(f"Ignoring invalid EVAL_CHECKPOINT_INTERVAL_SECONDS item: {part}")
-
-            if not intervals:
-                intervals = [3600]
-
-            intervals = sorted(set(intervals))
-
-            def _run_eval_checkpoint_job():
-                return run_checkpoint_jobs(intervals)
-
-            task_scheduler.add_interval_task(
-                task_func=_run_eval_checkpoint_job,
-                interval_seconds=poll_seconds,
-                task_id="eval_checkpoint_job",
-            )
-            logger.info(
-                f"Evaluation checkpoint job started: intervals={intervals}, poll={poll_seconds}s"
-            )
+                init_asset_metadata(db)
+                logger.info("Asset metadata initialized successfully")
+            finally:
+                db.close()
         except Exception as e:
-            logger.error(f"Failed to start evaluation checkpoint job: {e}")
+            logger.error(f"Failed to initialize asset metadata: {e}")
+        
+        # Start database snapshot task for evaluation metrics (every 1 hour)
+        start_database_snapshot(interval_seconds=3600)
+        logger.info("Database snapshot started (1-hour interval)")
         
         logger.info("All services initialized successfully")
         

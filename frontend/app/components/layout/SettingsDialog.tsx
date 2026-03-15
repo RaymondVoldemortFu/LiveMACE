@@ -42,6 +42,7 @@ interface AIAccountCreate extends TradingAccountCreate {
   model?: string
   base_url?: string
   api_key?: string
+  enable_rule_aware?: boolean
 }
 
 const AGENT_TYPE_LABELS: Record<string, string> = {
@@ -69,6 +70,7 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
     model: '',
     base_url: '',
     api_key: '',
+    enable_rule_aware: false,
     agent_type: 'react',
   })
   const [editAccount, setEditAccount] = useState<AIAccountCreate>({
@@ -129,12 +131,20 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
       // If AI fields are provided, test LLM connection first
       if (hasAllLLMFields) {
         setTestResult('Testing LLM connection...')
+        
+        console.log('[SettingsDialog] Starting LLM test')
+        console.log('[SettingsDialog] newAccount:', newAccount)
+        console.log('[SettingsDialog] enable_rule_aware:', newAccount.enable_rule_aware, typeof newAccount.enable_rule_aware)
+        
         try {
           const testResponse = await testLLMConnection({
             model: newAccount.model,
             base_url: newAccount.base_url,
             api_key: newAccount.api_key,
           })
+          
+          console.log('[SettingsDialog] LLM test response:', testResponse)
+          
           if (!testResponse.success) {
             const message = testResponse.message || 'LLM connection test failed'
             setError(`LLM Test Failed: ${message}`)
@@ -145,6 +155,7 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
           }
           setTestResult('✅ LLM connection test passed! Creating account...')
         } catch (testError) {
+          console.error('[SettingsDialog] LLM test error:', testError)
           const message = testError instanceof Error ? testError.message : 'LLM connection test failed'
           setError(`LLM Test Failed: ${message}`)
           setTestResult(`❌ Test failed: ${message}`)
@@ -154,9 +165,9 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
         }
       }
 
-      console.log('Creating account with data:', newAccount)
+      console.log('[SettingsDialog] Creating account with data:', newAccount)
       await createAccount(newAccount)
-      setNewAccount({ name: '', model: '', base_url: '', api_key: '', agent_type: 'react' })
+      setNewAccount({ name: '', model: '', base_url: '', api_key: '', agent_type: 'react', enable_rule_aware: false })
       setShowAddForm(false)
       await loadAccounts()
 
@@ -265,19 +276,20 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
       base_url: account.base_url || '',
       api_key: account.api_key || '',
       agent_type: account.agent_type || 'react',
+      enable_rule_aware: account.enable_rule_aware || false,
     })
   }
 
   const cancelEdit = () => {
     setEditingId(null)
-    setEditAccount({ name: '', model: '', base_url: '', api_key: '', agent_type: 'react' })
+    setEditAccount({ name: '', model: '', base_url: '', api_key: '', agent_type: 'react', enable_rule_aware: false })
     setTestResult(null)
     setError(null)
   }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[600px] max-h-[85vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-hidden flex flex-col">
         <DialogHeader>
           <DialogTitle>Account Management</DialogTitle>
           <DialogDescription>
@@ -291,7 +303,7 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
           </div>
         )}
 
-        <div className="space-y-6">
+        <div className="space-y-6 overflow-y-auto pr-2">
           {/* Existing Accounts */}
           <div className="space-y-4">
             <div className="flex items-center justify-between">
@@ -335,6 +347,30 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
                             </SelectContent>
                           </Select>
                         </div>
+                        
+                        {/* Rule-Aware Toggle for Edit */}
+                        <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
+                          <div className="flex items-center gap-2">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-primary">
+                              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/>
+                              <path d="m9 12 2 2 4-4"/>
+                            </svg>
+                            <div>
+                              <p className="text-sm font-medium">Enable Rule-Aware Trading</p>
+                              <p className="text-xs text-muted-foreground">Monitor compliance with trading rules (R0/R1/R2)</p>
+                            </div>
+                          </div>
+                          <label className="relative inline-flex items-center cursor-pointer">
+                            <input
+                              type="checkbox"
+                              className="sr-only peer"
+                              checked={editAccount.enable_rule_aware || false}
+                              onChange={(e) => setEditAccount({ ...editAccount, enable_rule_aware: e.target.checked })}
+                            />
+                            <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-primary/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
+                          </label>
+                        </div>
+                        
                         <Input
                             placeholder="Model"
                             value={editAccount.model || ''}
@@ -433,6 +469,30 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
                     </SelectContent>
                   </Select>
                 </div>
+                
+                {/* Rule-Aware Toggle */}
+                <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
+                  <div className="flex items-center gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-primary">
+                      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/>
+                      <path d="m9 12 2 2 4-4"/>
+                    </svg>
+                    <div>
+                      <p className="text-sm font-medium">Enable Rule-Aware Trading</p>
+                      <p className="text-xs text-muted-foreground">Monitor compliance with trading rules (R0/R1/R2)</p>
+                    </div>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      className="sr-only peer"
+                      checked={newAccount.enable_rule_aware || false}
+                      onChange={(e) => setNewAccount({ ...newAccount, enable_rule_aware: e.target.checked })}
+                    />
+                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-primary/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
+                  </label>
+                </div>
+                
                 <Input
                     placeholder="Model (e.g., gpt-4)"
                     value={newAccount.model || ''}

@@ -14,6 +14,7 @@ from datetime import date, datetime
 from database.connection import SessionLocal
 from database.models import Position, CryptoPrice, Account, Order
 from decimal import Decimal
+from services.snapshot_service import create_snapshots_for_all_accounts
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +108,36 @@ class TaskScheduler:
         
         logger.info(f"Added margin monitor task, checking every {interval_seconds} seconds")
     
+    def add_database_snapshot_task(self, interval_seconds: int = 3600):
+        """
+        Add database snapshot task for all accounts
+        Creates account_snapshots records for evaluation metrics calculation
+        
+        Args:
+            interval_seconds: Snapshot interval (seconds), default 3600 (1 hour)
+        """
+        if not self.is_running():
+            self.start()
+        
+        job_id = "database_snapshot_all_accounts"
+        
+        # Check if task already exists
+        if self.scheduler.get_job(job_id):
+            logger.debug("Database snapshot task already exists")
+            return
+        
+        self.scheduler.add_job(
+            func=self._create_database_snapshots,
+            trigger=IntervalTrigger(seconds=interval_seconds),
+            id=job_id,
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=60
+        )
+        
+        logger.info(f"Added database snapshot task, interval {interval_seconds} seconds")
+    
     def remove_account_snapshot_task(self, account_id: int):
         """
         Remove snapshot update task for account
@@ -182,7 +213,7 @@ class TaskScheduler:
             })
         return jobs
 
-    async def _execute_account_snapshot(self, account_id: int):
+    def _execute_account_snapshot(self, account_id: int):
         """
         Internal method to execute account snapshot update
 
@@ -192,7 +223,7 @@ class TaskScheduler:
         start_time = datetime.now()
         try:
             # Dynamic import to avoid circular dependency
-            from api.ws import manager, _send_snapshot_optimized
+            from api.ws import manager
 
             # Check if account still has active connections
             if account_id not in manager.active_connections:
@@ -203,11 +234,6 @@ class TaskScheduler:
             # Execute optimized snapshot update
             db: Session = SessionLocal()
             try:
-                # Send optimized snapshot update (reduced frequency for expensive data)
-                # Note: For now, skip the async WebSocket update in sync scheduler context
-                # This can be enhanced later to properly handle async operations
-                logger.debug(f"Skipping WebSocket snapshot update for account {account_id} in sync context")
-
                 # Save latest prices for account's positions (less frequently)
                 if start_time.second % 30 == 0:  # Only every 30 seconds
                     self._save_position_prices(db, account_id)
@@ -281,6 +307,20 @@ class TaskScheduler:
         except Exception as e:
             logger.error(f"Failed to save account {account_id} position prices: {e}")
             db.rollback()
+    
+    def _create_database_snapshots(self):
+        """
+        Create database snapshots for all accounts
+        Used for evaluation metrics calculation (volatility, drawdown, turnover, etc.)
+        """
+        db = SessionLocal()
+        try:
+            result = create_snapshots_for_all_accounts(db)
+            logger.info(f"Database snapshot completed: {result['snapshots_created']} snapshots created")
+        except Exception as e:
+            logger.error(f"Database snapshot creation failed: {e}")
+        finally:
+            db.close()
     
     def _check_margin_levels(self):
         """
@@ -488,6 +528,12 @@ def start_margin_monitor(interval_seconds: int = 5):
     """Start margin monitoring task"""
     task_scheduler.add_margin_monitor_task(interval_seconds)
     logger.info(f"Margin monitor started - checking every {interval_seconds} seconds")
+
+
+def start_database_snapshot(interval_seconds: int = 3600):
+    """Start database snapshot task for all accounts"""
+    task_scheduler.add_database_snapshot_task(interval_seconds)
+    logger.info(f"Database snapshot started - creating snapshots every {interval_seconds} seconds")
 
 
 # Legacy compatibility functions
