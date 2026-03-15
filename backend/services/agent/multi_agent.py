@@ -10,12 +10,11 @@ from .llm_client import LLMClient
 from .tools import ToolRegistry
 from config.agent_config import AgentConfig
 from .prompts.multi_agent_prompts import (
-    MANAGER_PROMPT, 
-    TRADING_AGENT_PROMPT, 
-    NEWS_AGENT_PROMPT, 
+    MANAGER_PROMPT,
+    TRADING_AGENT_PROMPT,
+    NEWS_AGENT_PROMPT,
     CODER_AGENT_PROMPT
 )
-from .memory import get_memory_service
 
 logger = logging.getLogger(__name__)
 
@@ -28,8 +27,8 @@ class MultiAgent(BaseAgent):
         super().__init__(llm, tools)
         self.max_steps = max_steps
         self.user_id = user_id
-        self.memory = get_memory_service()
-        
+        # Memory tools are now registered in env_wrapper.register_default_tools()
+
         # Shared conversation history (context)
         self.context = []
 
@@ -212,30 +211,9 @@ class MultiAgent(BaseAgent):
     def run(self, portfolio: Dict[str, Any], prices: Dict[str, float], on_step: Optional[Callable[[Dict], None]] = None, trace_id: Optional[str] = None) -> Dict[str, Any]:
         
         logger.info("Starting Multi-Agent decision process")
-        
-        # 1. Retrieve Memory (Shared)
-        memory_content = ""
-        if self.memory and self.user_id:
-            try:
-                query = f"Trading context: {len(portfolio.get('positions', {}))} positions. Market: {list(prices.keys())}"
-                memories = self.memory.search(query, user_id=self.user_id)
-                if memories:
-                    texts = [m.get('memory') or m.get('text') or m.get('content') for m in memories]
-                    memory_content = "\n".join([f"- {t}" for t in texts if t])
-                    
-                    if on_step and memory_content:
-                        on_step({
-                            "role": "memory",
-                            "content": f"Retrieved Memories:\n{memory_content}",
-                            "metadata": {"type": "memory"}
-                        })
-            except Exception as e:
-                logger.error(f"Memory retrieval failed: {e}")
 
-        # 2. Main Manager Loop
+        # Main Manager Loop
         self.context = [] # Clear context
-        if memory_content:
-            self.context.append(f"Relevant Memories:\n{memory_content}")
             
         final_decision = None
         
@@ -315,15 +293,6 @@ class MultiAgent(BaseAgent):
                 "leverage": 1,
                 "reason": "MultiAgent Manager did not reach a conclusion within max steps."
             }
-
-        # Save to Memory
-        if self.memory and self.user_id:
-            try:
-                # Save the summary of the session
-                session_summary = "\n".join(self.context)
-                self.memory.add(session_summary, user_id=self.user_id, metadata={"trace_id": trace_id} if trace_id else {})
-            except Exception as e:
-                logger.error(f"Failed to save to memory: {e}")
 
         return final_decision
 

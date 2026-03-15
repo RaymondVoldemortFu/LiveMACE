@@ -18,6 +18,7 @@ import Sidebar from '@/components/layout/Sidebar'
 import Portfolio from '@/components/portfolio/Portfolio'
 import ComprehensiveView from '@/components/portfolio/ComprehensiveView'
 import AgentStatusView from '@/components/agent/AgentStatusView'
+import { MemoryView } from '@/components/memory/MemoryView'
 import ComplianceDashboard from '@/components/compliance/ComplianceDashboard'
 import { AIDecision, getAccounts } from '@/lib/api'
 
@@ -60,6 +61,7 @@ interface Trade { id: number; order_id: number; account_id: number; symbol: stri
 const PAGE_TITLES: Record<string, string> = {
   portfolio: 'Crypto Paper Trading',
   comprehensive: '同花顺Bench',
+  memory: 'Memory System',
   compliance: 'Rule Compliance',
 }
 
@@ -318,7 +320,11 @@ function App() {
         {currentPage === 'agent-status' && (
           <AgentStatusView accounts={accounts} />
         )}
-        
+
+        {currentPage === 'memory' && (
+          <MemoryView account={account} accounts={accounts} />
+        )}
+
         {currentPage === 'compliance' && (
           <ComplianceDashboard accounts={accounts} />
         )}

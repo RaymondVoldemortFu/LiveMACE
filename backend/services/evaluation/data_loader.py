@@ -3,8 +3,10 @@ from sqlalchemy import func, and_
 from typing import List, Dict, Optional
 from datetime import datetime
 
-from database.models import Account, AIDecisionLog, Trade, AgentTrace, Position
+from database.models import Account, AIDecisionLog, Trade, AgentTrace, Position, AgentMemory
 from services.asset_calculator import calc_positions_value
+
+import ast
 
 class EvaluationDataLoader:
     """
@@ -92,12 +94,12 @@ class EvaluationDataLoader:
         """
         accounts = self.get_agent_accounts(agent_type)
         summary = []
-        
+
         for acc in accounts:
             pnl_stats = self.calculate_pnl(acc.id)
             trades_count = self.db.query(func.count(Trade.id)).filter(Trade.account_id == acc.id).scalar()
             decisions_count = self.db.query(func.count(AIDecisionLog.id)).filter(AIDecisionLog.account_id == acc.id).scalar()
-            
+
             summary.append({
                 "account_id": acc.id,
                 "agent_name": acc.name,
@@ -107,6 +109,122 @@ class EvaluationDataLoader:
                 "decisions_count": decisions_count,
                 **pnl_stats
             })
-            
+
         return summary
 
+    # ========== Memory-related queries ==========
+
+    def get_memories(self, account_id: int, start_time: Optional[datetime] = None, end_time: Optional[datetime] = None, market: Optional[str] = None) -> List[AgentMemory]:
+        """
+        Get all memories for a specific account within a time range.
+
+        Args:
+            account_id: Account ID
+            start_time: Start time filter (optional)
+            end_time: End time filter (optional)
+            market: Market filter, e.g. "CRYPTO" or "US" (optional)
+
+        Returns:
+            List of AgentMemory objects
+        """
+        query = self.db.query(AgentMemory).filter(AgentMemory.account_id == account_id)
+        if market:
+            query = query.filter(AgentMemory.market == market)
+        if start_time:
+            query = query.filter(AgentMemory.created_at >= start_time)
+        if end_time:
+            query = query.filter(AgentMemory.created_at <= end_time)
+        return query.order_by(AgentMemory.created_at).all()
+
+    def get_memory_stats(self, account_id: int, start_time: Optional[datetime] = None, end_time: Optional[datetime] = None, market: Optional[str] = None) -> Dict:
+        """
+        Get memory statistics for an account.
+
+        Returns:
+            Dictionary with memory statistics including count, avg length, etc.
+        """
+        query = self.db.query(AgentMemory).filter(AgentMemory.account_id == account_id)
+        if market:
+            query = query.filter(AgentMemory.market == market)
+        if start_time:
+            query = query.filter(AgentMemory.created_at >= start_time)
+        if end_time:
+            query = query.filter(AgentMemory.created_at <= end_time)
+
+        memories = query.all()
+
+        if not memories:
+            return {
+                "total_count": 0,
+                "avg_length": 0,
+                "total_length": 0,
+                "time_span_days": 0
+            }
+
+        total_length = sum(len(m.content) for m in memories)
+        avg_length = total_length / len(memories) if memories else 0
+
+        # Calculate time span
+        time_span_days = 0
+        if len(memories) > 1:
+            first_time = min(m.created_at for m in memories)
+            last_time = max(m.created_at for m in memories)
+            time_span_days = (last_time - first_time).days
+
+        return {
+            "total_count": len(memories),
+            "avg_length": round(avg_length, 2),
+            "total_length": total_length,
+            "time_span_days": time_span_days
+        }
+
+    def get_memory_tool_usage_from_traces(self, account_id: int, start_time: Optional[datetime] = None, end_time: Optional[datetime] = None) -> Dict:
+        """
+        Analyze memory tool usage from agent traces.
+        Counts how many times memory_add and memory_search were called.
+
+        Returns:
+            Dictionary with memory tool usage statistics
+        """
+        traces = self.get_traces(account_id, start_time, end_time)
+
+        memory_add_count = 0
+        memory_search_count = 0
+
+        for trace in traces:
+            # Parse trace content to find tool calls
+            import json
+            try:
+                if trace.role == "assistant" and trace.tool_calls:
+                    # tool_calls is a JSON string, need to parse it first
+                    tool_calls_list = json.loads(trace.tool_calls)
+                    if isinstance(tool_calls_list, list):
+                        for tool_call in tool_calls_list:
+                            if isinstance(tool_call, str):
+                                # Inner element is a Python dict string, use ast.literal_eval
+                                tool_call = ast.literal_eval(tool_call)
+                            tool_name = tool_call.get("function", ).get("name")
+                            if tool_name == "memory_add":
+                                memory_add_count += 1
+                            elif tool_name == "memory_search":
+                                memory_search_count += 1
+            except Exception as e:
+                continue
+
+        return {
+            "memory_add_count": memory_add_count,
+            "memory_search_count": memory_search_count,
+            "total_memory_operations": memory_add_count + memory_search_count
+        }
+
+    def get_memories_by_trace(self, trace_id: str) -> List[AgentMemory]:
+        """
+        Get all memories associated with a specific trace/decision session.
+
+        Args:
+            trace_id: The trace ID to filter by
+
+        Returns:
+            List of AgentMemory objects linked to this trace
+        """
+        return self.db.query(AgentMemory).filter(AgentMemory.trace_id == trace_id).all()

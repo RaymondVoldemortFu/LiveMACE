@@ -38,8 +38,12 @@ def calc_positions_market_value(db: Session, account_id: int) -> float:
             if leverage > 1:
                 # Initial margin used
                 initial_margin = market_value / leverage
-                # Unrealized P&L
-                unrealized_pnl = quantity * (price - avg_cost)
+                # Unrealized P&L (direction-aware)
+                side = getattr(p, 'side', None) or "LONG"
+                if side.upper() == "SHORT":
+                    unrealized_pnl = quantity * (avg_cost - price)
+                else:
+                    unrealized_pnl = quantity * (price - avg_cost)
                 # Position equity = margin + P&L
                 position_equity = initial_margin + unrealized_pnl
             else:

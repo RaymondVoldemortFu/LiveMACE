@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from database.models import Position, Account, AIDecisionLog, AgentTrace
 import uuid
 import asyncio
-from services.asset_calculator import calc_positions_value
+from services.asset_calculator import calc_positions_market_value
 from services.news_feed import fetch_latest_news
 
 from services.agent.core import *
@@ -73,7 +73,7 @@ def _get_portfolio_data(db: Session, account: Account) -> Dict:
         "cash": float(account.current_cash),
         "frozen_cash": float(account.frozen_cash),
         "positions": portfolio,
-        "total_assets": float(account.current_cash) + calc_positions_value(db, account.id)
+        "total_assets": float(account.current_cash) + calc_positions_market_value(db, account.id)
     }
 
 
@@ -315,7 +315,7 @@ Rules:
         return None
 
 
-def save_ai_decision(db: Session, account_id: int, decision: Dict, portfolio: Dict, executed: bool = False, order_id: Optional[int] = None) -> None:
+def save_ai_decision(db: Session, account_id: int, decision: Dict, portfolio: Dict, executed: bool = False, order_id: Optional[int] = None, execution_price: Optional[float] = None, execution_quantity: Optional[float] = None) -> None:
     """Save AI decision to the decision log"""
     try:
         # Fetch account from database using account_id
@@ -324,7 +324,7 @@ def save_ai_decision(db: Session, account_id: int, decision: Dict, portfolio: Di
         if not fresh_account:
             logger.error(f"Account with id {account_id} not found in database")
             return
-        
+
         operation = decision.get("operation", "").lower() if decision.get("operation") else ""
         symbol_raw = decision.get("symbol")
         symbol = symbol_raw.upper() if symbol_raw else None
@@ -356,11 +356,14 @@ def save_ai_decision(db: Session, account_id: int, decision: Dict, portfolio: Di
             reason=reason,
             operation=operation,
             symbol=symbol if operation != "hold" else None,
+            direction=decision.get("direction", "long"),
             prev_portion=Decimal(str(prev_portion)),
             target_portion=Decimal(str(target_portion)),
             total_balance=Decimal(str(portfolio["total_assets"])),
             executed="true" if executed else "false",
             order_id=order_id,
+            execution_price=Decimal(str(execution_price)) if execution_price is not None else None,
+            execution_quantity=Decimal(str(execution_quantity)) if execution_quantity is not None else None,
             leverage=leverage_val,
             trace_id=trace_id
         )
@@ -371,7 +374,7 @@ def save_ai_decision(db: Session, account_id: int, decision: Dict, portfolio: Di
         symbol_str = symbol if symbol else "N/A"
         logger.info(f"Saved AI decision log for account_id={account_id}: {operation} {symbol_str} "
                    f"prev_portion={prev_portion:.4f} target_portion={target_portion:.4f} leverage={leverage_val} executed={executed}")
-        
+
         # Create account snapshot after saving decision
         try:
             from services.snapshot_service import create_account_snapshot
@@ -383,12 +386,12 @@ def save_ai_decision(db: Session, account_id: int, decision: Dict, portfolio: Di
                 logger.warning(f"Failed to create account snapshot for account_id={account_id}")
         except Exception as snapshot_err:
             logger.error(f"Error creating account snapshot: {snapshot_err}")
-        
+
         # Save rule evaluation results if this is a rule-aware agent
         # Use fresh_account which is attached to the current session
         enable_rule_aware = getattr(fresh_account, 'enable_rule_aware', 'false')
         is_rule_aware = enable_rule_aware == 'true' or enable_rule_aware == True
-        
+
         if is_rule_aware and "compliance_audit" in decision:
             _save_rule_evaluation(db, account_id, decision, trace_id)
 
@@ -402,15 +405,15 @@ def _save_rule_evaluation(db: Session, account_id: int, decision: Dict, trace_id
     try:
         from database.models import RuleEvaluationResult
         from datetime import datetime
-        
+
         logger.info(f"Saving rule evaluation for account_id={account_id}, trace_id={trace_id}")
-        
+
         compliance_audit = decision.get("compliance_audit", {})
         llm_audit = decision.get("llm_audit", {})
-        
+
         logger.info(f"compliance_audit keys: {list(compliance_audit.keys()) if compliance_audit else 'None'}")
         logger.info(f"llm_audit keys: {list(llm_audit.keys()) if llm_audit else 'None'}")
-        
+
         # Extract compliance data
         # gate_pass 表示是否通过硬约束检查（R0和R1）用于记录和监控
         # PASS = 完全通过，ADJUSTED = 有软约束违规(R2)但允许执行，FAIL = 有硬约束违规(R0/R1)
@@ -418,38 +421,38 @@ def _save_rule_evaluation(db: Session, account_id: int, decision: Dict, trace_id
         final_status = compliance_audit.get("final_status", "")
         gate_pass = final_status in ["PASS", "ADJUSTED"]
         logger.info(f"Gate pass: {gate_pass}, final_status={final_status} (execution continues regardless)")
-        
+
         # Extract violations and classify by rule level (从rule_id提取：R0-xx, R1-xx, R2-xx)
         violations = compliance_audit.get("violations", [])
         r0_violations = [v for v in violations if str(v.get("rule_id", "")).startswith("R0")]
         r1_violations = [v for v in violations if str(v.get("rule_id", "")).startswith("R1")]
         r2_violations = [v for v in violations if str(v.get("rule_id", "")).startswith("R2")]
         logger.info(f"Violations: total={len(violations)}, R0={len(r0_violations)}, R1={len(r1_violations)}, R2={len(r2_violations)}")
-        
+
         # Extract R2 scores
         r2_results = compliance_audit.get("r2_results", {})
         r2_scores = r2_results.get("rule_scores", {})
         logger.info(f"R2 scores: {list(r2_scores.keys()) if r2_scores else 'None'}")
-        
+
         # Extract scores from compliance audit
         # s_rule_sat is calculated in compliance_auditor based on R2 average score
         # (forced to 0 if R0/R1 violations exist)
         s_rule_sat = compliance_audit.get("s_rule_sat")
         s_audit = llm_audit.get("final_normalized_score")
-        
+
         logger.info(f"Scores: s_rule_sat={s_rule_sat}, s_audit={s_audit}")
         logger.info(f"Violations breakdown: R0={len(r0_violations)}, R1={len(r1_violations)}, R2={len(r2_violations)}")
-        
+
         # Extract LLM audit details
         coverage_data = llm_audit.get("coverage", {})
         conflict_data = llm_audit.get("conflict", {})
-        
+
         llm_audit_score = llm_audit.get("final_normalized_score")  # Final normalized score (0-1)
         llm_audit_coverage = coverage_data.get("score") if isinstance(coverage_data, dict) else None  # Coverage score (1-5)
         llm_audit_conflict = conflict_data.get("score") if isinstance(conflict_data, dict) else None  # Conflict score (1-5)
-        
+
         logger.info(f"LLM audit details: score={llm_audit_score}, coverage={llm_audit_coverage}, conflict={llm_audit_conflict}")
-        
+
         # Calculate final score
         # s_rule_sat is R2 average score (or 0 if R0/R1 violations)
         # final_score is the average of s_rule_sat and s_audit
@@ -461,10 +464,10 @@ def _save_rule_evaluation(db: Session, account_id: int, decision: Dict, trace_id
             final_score = s_rule_sat
         elif s_audit is not None:
             final_score = s_audit
-        
+
         has_hard_violations = len(r0_violations) > 0 or len(r1_violations) > 0
         logger.info(f"Final score: {final_score:.3f} (s_rule_sat={s_rule_sat:.3f}, s_audit={s_audit:.3f}, has_hard_violations={has_hard_violations})")
-        
+
         # Create evaluation record
         eval_result = RuleEvaluationResult(
             trace_id=trace_id,
@@ -483,21 +486,21 @@ def _save_rule_evaluation(db: Session, account_id: int, decision: Dict, trace_id
             llm_audit_conflict=llm_audit_conflict,
             llm_audit_json=json.dumps(llm_audit, ensure_ascii=False) if llm_audit else None
         )
-        
+
         logger.info(f"Adding rule evaluation record to database...")
         db.add(eval_result)
         db.commit()
         logger.info(f"✓ Rule evaluation committed successfully")
-        
+
         # Format scores for logging
         s_rule_sat_str = f"{s_rule_sat:.3f}" if s_rule_sat is not None else "N/A"
         s_audit_str = f"{s_audit:.3f}" if s_audit is not None else "N/A"
         final_score_str = f"{final_score:.3f}" if final_score is not None else "N/A"
-        
+
         logger.info(f"Saved rule evaluation for account_id={account_id}: "
                    f"gate_pass={gate_pass}, s_rule_sat={s_rule_sat_str}, "
                    f"s_audit={s_audit_str}, final_score={final_score_str}")
-        
+
     except Exception as err:
         logger.error(f"Failed to save rule evaluation results: {err}", exc_info=True)
         # Don't rollback here as we already committed decision_log
@@ -575,21 +578,14 @@ def call_agent_for_decision(
                     reasoning = message.get("reasoning")
                     if reasoning not in (None, ""):
                         content = reasoning
-            
+
             # Skip saving if content is empty and no tool_calls (empty assistant response)
             tool_calls_data = message.get("tool_calls")
             if role == "assistant" and not content and not tool_calls_data:
                 logger.debug(f"Skipping empty assistant response at step {step_counter}")
                 step_counter -= 1  # Don't count empty responses
                 return
-            
-            # Handle tool calls serialization
-            tool_calls_data = message.get("tool_calls")
-            if role == "assistant" and not content and not tool_calls_data:
-                logger.debug(f"Skipping empty assistant response at step {step_counter}")
-                step_counter -= 1  # Don't count empty responses
-                return
-            
+
             # Handle tool calls serialization
             tool_calls_str = None
             if tool_calls_data:
@@ -636,7 +632,7 @@ def call_agent_for_decision(
         )
 
         registry = ToolRegistry()
-        register_default_tools(registry, db, account_id)
+        register_default_tools(registry, db, account_id, trace_id=trace_id)
         
         # Register the new history tool
         registry.register(HistoryTool(db, account_id))
@@ -646,18 +642,18 @@ def call_agent_for_decision(
         # Check if rule-aware is enabled for this account
         enable_rule_aware = getattr(account, 'enable_rule_aware', 'false')
         is_rule_aware = enable_rule_aware == 'true' or enable_rule_aware == True
-        
+
         logger.info(f"Account {account.name} - enable_rule_aware: {enable_rule_aware}, is_rule_aware: {is_rule_aware}")
-        
+
         # Use factory to create agent based on account config
         if is_rule_aware:
             # Use rule-aware agent with rule evaluation pipeline
             logger.info(f"Creating Rule-Aware Agent for account {account.name}")
             agent = create_agent(
                 agent_type="rule_aware",
-                llm=llm, 
-                tools=registry, 
-                max_steps=AgentConfig.MAX_STEPS, 
+                llm=llm,
+                tools=registry,
+                max_steps=AgentConfig.MAX_STEPS,
                 user_id=str(account.id),
                 account_id=account.id,
                 enable_llm_audit=True  # Enable LLM-based audit scoring
@@ -669,9 +665,9 @@ def call_agent_for_decision(
             logger.info(f"Creating standard {agent_type} agent for account {account.name}")
             agent = create_agent(
                 agent_type=agent_type,
-                llm=llm, 
-                tools=registry, 
-                max_steps=AgentConfig.MAX_STEPS, 
+                llm=llm,
+                tools=registry,
+                max_steps=AgentConfig.MAX_STEPS,
                 user_id=str(account.id)
             )
             logger.info(f"Standard {agent_type} agent created successfully for account {account.name}")
@@ -679,7 +675,7 @@ def call_agent_for_decision(
         # Get account info before run (to avoid DetachedInstanceError later)
         account_id = account.id
         account_name = account.name
-        
+
         logger.info(f"Calling agent.run() for account {account_name}")
         decision = agent.run(portfolio=portfolio, prices=prices, on_step=on_step, trace_id=trace_id)
         logger.info(f"Agent.run() completed for account {account_name}, decision: {decision}")

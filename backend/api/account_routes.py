@@ -43,6 +43,7 @@ async def list_all_accounts(db: Session = Depends(get_db)):
                 "name": account.name,
                 "account_type": account.account_type,
                 "agent_type": getattr(account, "agent_type", "react"),
+                "memory_enabled": getattr(account, "memory_enabled", "false"),
                 "enable_rule_aware": getattr(account, "enable_rule_aware", "false") == "true",
                 "initial_capital": float(account.initial_capital),
                 "current_cash": float(account.current_cash),
@@ -101,7 +102,7 @@ async def get_specific_account_overview(account_id: int, db: Session = Depends(g
                 RuleEvaluationResult.account_id == account.id,
                 RuleEvaluationResult.llm_audit_score.isnot(None)  # Only include records with LLM audit
             ).first()
-            
+
             if audit_results and audit_results.count > 0:
                 llm_audit_stats = {
                     "count": audit_results.count,
@@ -111,7 +112,7 @@ async def get_specific_account_overview(account_id: int, db: Session = Depends(g
                 }
         except Exception as e:
             logger.warning(f"Failed to calculate LLM audit stats: {e}")
-        
+
         return {
             "account": {
                 "id": account.id,
@@ -192,7 +193,7 @@ async def create_new_account(payload: dict, db: Session = Depends(get_db)):
         
         # Log incoming payload for debugging
         logger.info(f"Creating account with payload: {payload}")
-        
+
         # Get the default user (or first user)
         user = db.query(User).filter(User.username == "default").first()
         if not user:
@@ -212,13 +213,14 @@ async def create_new_account(payload: dict, db: Session = Depends(get_db)):
         # Create new account
         enable_rule_aware_value = "true" if payload.get("enable_rule_aware") is True else "false"
         logger.info(f"Setting enable_rule_aware to: {enable_rule_aware_value} (from {payload.get('enable_rule_aware')})")
-        
+
         new_account = Account(
             user_id=user.id,
             version="v1",
             name=payload["name"],
             account_type=payload.get("account_type", "AI"),
             agent_type=payload.get("agent_type", "react"),
+            memory_enabled=payload.get("memory_enabled", "false"),
             enable_rule_aware=enable_rule_aware_value,
             model=model,
             base_url=base_url,
@@ -234,7 +236,7 @@ async def create_new_account(payload: dict, db: Session = Depends(get_db)):
         db.refresh(new_account)
         
         logger.info(f"Account created successfully: ID={new_account.id}, name={new_account.name}, enable_rule_aware={new_account.enable_rule_aware}")
-        
+
         # Reset auto trading job after creating new account
         try:
             from services.scheduler import reset_auto_trading_job
@@ -295,11 +297,15 @@ async def update_account_settings(account_id: int, payload: dict, db: Session = 
         if "agent_type" in payload:
             account.agent_type = payload["agent_type"]
             logger.info(f"Updated agent_type to: {account.agent_type}")
-        
+
+        if "memory_enabled" in payload:
+            account.memory_enabled = payload["memory_enabled"]
+            logger.info(f"Updated memory_enabled to: {account.memory_enabled}")
+
         if "enable_rule_aware" in payload:
             account.enable_rule_aware = "true" if payload["enable_rule_aware"] is True else "false"
             logger.info(f"Updated enable_rule_aware to: {account.enable_rule_aware}")
-        
+
         if "base_url" in payload:
             account.base_url = payload["base_url"]
             logger.info(f"Updated base_url to: {account.base_url}")
@@ -535,14 +541,14 @@ async def test_llm_connection(payload: dict):
         model = (payload.get("model") or "").strip()
         base_url = (payload.get("base_url") or "").strip()
         api_key = (payload.get("api_key") or "").strip()
-        
+
         logger.info(f"Testing LLM connection with payload: {payload}")
 
         if not model:
             return {"success": False, "message": "Model is required"}
         
         logger.info(f"LLM test params: model={model}, base_url={base_url}, api_key_length={len(api_key) if api_key else 0}")
-        
+
         if not api_key:
             logger.warning("LLM test failed: API key is required")
             return {"success": False, "message": "API key is required"}
@@ -550,18 +556,18 @@ async def test_llm_connection(payload: dict):
         if not base_url:
             logger.warning("LLM test failed: Base URL is required")
             return {"success": False, "message": "Base URL is required"}
-        
+
         # Clean up base_url - ensure it doesn't end with slash
         if base_url.endswith('/'):
             base_url = base_url.rstrip('/')
-        
+
         # Test the connection with a simple completion request
         try:
             headers = {
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {api_key}"
             }
-            
+
             # Use OpenAI-compatible chat completions format
             payload_data = {
                 "model": model,
@@ -572,12 +578,12 @@ async def test_llm_connection(payload: dict):
                 "max_tokens": 50,
                 "temperature": 0
             }
-            
+
             # Construct API endpoint URL
             api_endpoint = f"{base_url}/chat/completions"
-            
+
             logger.info(f"Sending LLM test request to: {api_endpoint}")
-            
+
             # Make the request
             response = requests.post(
                 api_endpoint,
@@ -586,43 +592,43 @@ async def test_llm_connection(payload: dict):
                 timeout=10.0,
                 verify=False  # Disable SSL verification for custom AI endpoints
             )
-            
+
             logger.info(f"LLM test response status: {response.status_code}")
-            
+
             # Check response status
             if response.status_code == 200:
                 result = response.json()
                 logger.info(f"LLM test response body: {result}")
-                
+
                 # Extract text from OpenAI-compatible response format
                 if "choices" in result and len(result["choices"]) > 0:
                     message = result["choices"][0].get("message", {})
                     content = message.get("content", "")
-                    
+
                     logger.info(f"LLM test extracted content: '{content}'")
-                    
+
                     if content:
                         logger.info(f"LLM test successful for model {model} at {base_url}")
                         return {
-                            "success": True, 
+                            "success": True,
                             "message": f"Connection successful! Model {model} responded correctly.",
                             "response": content
                         }
                     else:
                         logger.warning(f"LLM test: empty content. Full response: {result}")
                         return {
-                            "success": False, 
+                            "success": False,
                             "message": "LLM responded but with empty content",
                             "debug_response": result  # add debug info
                         }
                 else:
                     logger.warning(f"LLM test: unexpected format. Full response: {result}")
                     return {
-                        "success": False, 
+                        "success": False,
                         "message": "Unexpected response format from LLM",
                         "debug_response": result  # add debug info
                     }
-                    
+
             elif response.status_code == 401:
                 return {"success": False, "message": "Authentication failed. Please check your API key."}
             elif response.status_code == 403:

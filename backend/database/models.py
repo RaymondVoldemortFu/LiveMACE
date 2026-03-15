@@ -41,6 +41,7 @@ class Account(Base):
     name = Column(String(100), nullable=False)  # Display name (e.g., "GPT Trader", "Claude Analyst")
     account_type = Column(String(20), nullable=False, default="AI")  # "AI" or "MANUAL"
     agent_type = Column(String(20), nullable=False, default="react") # "react" or "multi_agent"
+    memory_enabled = Column(String(10), nullable=False, default="false")  # "true" or "false"
     enable_rule_aware = Column(String(10), nullable=False, default="false")  # "true" or "false" - Enable Rule-Aware Trading
     is_active = Column(String(10), nullable=False, default="true")
     
@@ -233,11 +234,14 @@ class AIDecisionLog(Base):
     reason = Column(String(1000), nullable=False)  # AI reasoning for the decision
     operation = Column(String(10), nullable=False)  # open/close/hold
     symbol = Column(String(20), nullable=True)  # symbol for buy/sell operations
+    direction = Column(String(10), nullable=True)  # long/short
     prev_portion = Column(DECIMAL(10, 6), nullable=False, default=0)  # previous balance portion
     target_portion = Column(DECIMAL(10, 6), nullable=False)  # target balance portion
     total_balance = Column(DECIMAL(18, 2), nullable=False)  # total balance at decision time
     executed = Column(String(10), nullable=False, default="false")  # whether the decision was executed
     order_id = Column(Integer, ForeignKey("orders.id"), nullable=True)  # linked order if executed
+    execution_price = Column(DECIMAL(18, 6), nullable=True)  # actual execution price
+    execution_quantity = Column(DECIMAL(18, 8), nullable=True)  # actual execution quantity
     leverage = Column(Integer, nullable=False, default=1)
     trace_id = Column(String(36), nullable=True)  # UUID for linking to detailed traces
     created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
@@ -297,26 +301,31 @@ class AgentPeriodCheckpoint(Base):
 
 
 class AgentMemory(Base):
-    """Memory storage for agents"""
+    """Memory storage for agents with local vector embeddings"""
     __tablename__ = "agent_memories"
 
     id = Column(Integer, primary_key=True, index=True)
-    memory_id = Column(String(36), unique=True, nullable=False, index=True)  # ID from Mem0 or UUID
+    memory_id = Column(String(36), unique=True, nullable=False, index=True)  # UUID
     account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False)
+    market = Column(String(10), nullable=False, default="CRYPTO", index=True)  # "CRYPTO" or "US"
     trace_id = Column(String(36), nullable=True, index=True)  # Linked conversation/trace ID
-    
+
     content = Column(Text, nullable=False)  # The actual memory text
     metadata_json = Column(JSON, nullable=True)  # Extra metadata (key-value)
-    
-    # Vector DB Info (optional, if we want to track it)
-    vector_id = Column(String(100), nullable=True)
-    
+
+    # Local vector embedding (stored as JSON array for similarity search)
+    embedding = Column(JSON, nullable=True)  # Vector embedding as JSON array [0.1, 0.2, ...]
+
+    # Usage tracking
+    retrieval_count = Column(Integer, default=0, nullable=False)  # Times this memory was retrieved
+    last_retrieved_at = Column(DateTime, nullable=True)  # Last retrieval timestamp
+
     created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
     updated_at = Column(TIMESTAMP, server_default=func.current_timestamp(), onupdate=func.current_timestamp())
-    
+
     # Expiration logic
     expires_at = Column(DateTime, nullable=True)
-    
+
     account = relationship("Account", back_populates="memories")
 
 
@@ -327,7 +336,7 @@ CRYPTO_MIN_ORDER_QUANTITY = 0.0001  # Minimum 0.0001 BTC (supports fractional cr
 CRYPTO_LOT_SIZE = 0.0001  # Lot size for crypto
 
 # Leverage trading constants (Hyperliquid-style)
-CRYPTO_TAKER_FEE_RATE = 0.0007  # 0.07% taker fee
+CRYPTO_TAKER_FEE_RATE = 0.00035  # 0.035% taker fee
 CRYPTO_INTEREST_RATE_HOURLY = 0.0000125  # 0.00125%/hour (0.03%/day)
 CRYPTO_MAX_LEVERAGE = 50  # Maximum leverage allowed
 CRYPTO_MAINTENANCE_MARGIN_RATIO = 0.5  # 50% of initial margin
@@ -335,7 +344,7 @@ CRYPTO_MAINTENANCE_MARGIN_RATIO = 0.5  # 50% of initial margin
 
 class AccountSnapshot(Base):
     """
-    Account Snapshot - Historical account state for calculating metrics like 
+    Account Snapshot - Historical account state for calculating metrics like
     drawdown, volatility, average cash ratio, and turnover denominator
     """
     __tablename__ = "account_snapshots"
@@ -343,17 +352,17 @@ class AccountSnapshot(Base):
     id = Column(Integer, primary_key=True, index=True)
     account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False, index=True)
     ts = Column(DateTime, nullable=False, index=True)  # Snapshot timestamp (UTC)
-    
+
     # Account state at this timestamp
     total_equity = Column(DECIMAL(18, 2), nullable=False)  # Total account value (cash + positions)
     cash = Column(DECIMAL(18, 2), nullable=False)  # Available cash
     positions_value = Column(DECIMAL(18, 2), nullable=False)  # Market value of all positions
-    
+
     created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
-    
+
     # Relationships
     account = relationship("Account")
-    
+
     __table_args__ = (
         # Ensure unique snapshot per account per timestamp
         UniqueConstraint('account_id', 'ts', name='uix_account_snapshot_time'),
@@ -370,12 +379,12 @@ class AssetMetadata(Base):
     symbol = Column(String(20), primary_key=True)  # e.g., BTC, ETH, DOGE
     sector = Column(String(100), nullable=True)  # Sector/theme: DeFi, Layer1, AI, Meme, etc.
     is_meme = Column(String(10), nullable=False, default="false")  # "true" or "false"
-    
+
     # Optional additional metadata (for future extensions)
     market_cap_usd = Column(DECIMAL(20, 2), nullable=True)  # Market cap in USD
     instrument_type = Column(String(20), nullable=True)  # spot, futures, perp, etc.
     liquidity_score = Column(Float, nullable=True)  # Custom liquidity rating
-    
+
     created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
     updated_at = Column(TIMESTAMP, server_default=func.current_timestamp(), onupdate=func.current_timestamp())
 
@@ -391,27 +400,27 @@ class RuleEvaluationResult(Base):
     trace_id = Column(String(36), nullable=True, index=True)  # Links to AgentTrace
     account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False, index=True)
     ts = Column(DateTime, nullable=False, index=True)  # Evaluation timestamp
-    
+
     # Gate(R0, R1) - Hard rule pass/fail
     gate_pass = Column(String(10), nullable=False, default="false")  # "true" or "false"
-    
+
     # Violation details (JSON format)
     r0_violations_json = Column(Text, nullable=True)  # R0 (System Hard) violations
     r1_violations_json = Column(Text, nullable=True)  # R1 (Client Hard) violations
     r2_scores_json = Column(Text, nullable=True)  # R2 (Client Soft) individual scores
-    
+
     # Compliance scores
     s_rule_sat = Column(Float, nullable=True)  # S_rule_sat: weighted soft rule score
     s_audit = Column(Float, nullable=True)  # S_audit: audit/awareness score (LLM-based)
     final_score = Column(Float, nullable=True)  # Final compliance score
-    
+
     # LLM Audit Details (per-decision)
     llm_audit_score = Column(Float, nullable=True)  # Overall audit score (1.0-5.0)
     llm_audit_coverage = Column(Float, nullable=True)  # Coverage score (1.0-5.0)
     llm_audit_conflict = Column(Float, nullable=True)  # Conflict score (1.0-5.0)
     llm_audit_json = Column(Text, nullable=True)  # Full LLM audit response (JSON)
-    
+
     created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
-    
+
     # Relationships
     account = relationship("Account")

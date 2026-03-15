@@ -13,7 +13,7 @@ from services.time_source import now_utc
 
 def _calc_crypto_fee(notional: Decimal, leverage: int = 1) -> Decimal:
     """Calculate taker fee for CRYPTO market"""
-    return notional * Decimal(str(CRYPTO_TAKER_FEE_RATE))
+    return notional * Decimal(str(CRYPTO_TAKER_FEE_RATE)) * 2  # Entry + exit
 
 
 def _calculate_position_interest(position: Position) -> Decimal:
@@ -177,7 +177,7 @@ def place_and_execute_crypto(
             pos.avg_cost = float(exec_price)
             pos.leverage = leverage
             pos.side = side.upper()
-        
+
         # Update interest timestamp
         pos.last_interest_time = now_utc()
     

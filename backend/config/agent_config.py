@@ -32,17 +32,14 @@ class AgentConfig:
     ALPACA_USE_IEX_FEED = os.getenv("ALPACA_USE_IEX_FEED", "true").strip().lower() in {"1", "true", "yes", "on"}
 
     # Memory Configuration
-    MEMORY_ENABLED = False
-    MEMORY_PROVIDER = "mem0"
-    MEMORY_VECTOR_PROVIDER = "aliyun"
-    MEMORY_EMBEDDING_MODEL = "text-embedding-v3" # Example model name, update as needed
-    MEMORY_COLLECTION_NAME = "agent_memories"
-    
-    # Custom Extraction LLM Configuration
-    MEMORY_LLM_PROVIDER = "openai" # or custom
-    MEMORY_LLM_MODEL = "gpt-4o"
-    MEMORY_LLM_API_KEY = os.getenv("MEMORY_LLM_API_KEY", os.getenv("API_KEY"))
-    MEMORY_LLM_BASE_URL = os.getenv("MEMORY_LLM_BASE_URL", os.getenv("BASE_URL"))
+    # Note: Memory is now controlled per-account via account.memory_enabled field
+    # Lightweight embedding model (384 dimensions)
+    MEMORY_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+    # Memory backend: "local" (SQLite) or "chroma" (vector database)
+    MEMORY_BACKEND = "chroma"  # Options: "local", "chroma"
+    CHROMA_PERSIST_DIR = "./chroma_db"  # Directory for Chroma persistence
+    # Similarity threshold for counting as effective retrieval (0.0-1.0)
+    MEMORY_RETRIEVAL_THRESHOLD = 0.6
 
 
 class LLMConfig:

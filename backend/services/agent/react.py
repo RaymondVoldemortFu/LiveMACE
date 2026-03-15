@@ -7,9 +7,8 @@ from typing import Dict, Any, List, Callable, Optional
 from .llm_client import LLMClient
 from .tools import ToolRegistry
 from config.agent_config import AgentConfig
-from services.agent.prompts.system_prompts import TRADE_AGENT_PROMPT
+from services.agent.prompts.system_prompts import get_trade_agent_prompt
 from .base import BaseAgent
-from .memory import get_memory_service
 from services.time_source import now_in_tz
 
 # Define loggers
@@ -17,14 +16,14 @@ logger = logging.getLogger(__name__)
 llm_logger = logging.getLogger("llm_trace")
 agent_logger = logging.getLogger("agent_decision")
 
-SYSTEM_PROMPT = TRADE_AGENT_PROMPT
+SYSTEM_PROMPT = None
 
 class ReActAgent(BaseAgent):
     def __init__(self, llm: LLMClient, tools: ToolRegistry, max_steps: int = AgentConfig.MAX_STEPS, user_id: str = None):
         super().__init__(llm, tools)
         self.max_steps = max_steps
         self.user_id = user_id
-        self.memory = get_memory_service()
+        # Memory tools are now registered in env_wrapper.register_default_tools()
 
     def _missing_required_args(self, func: Callable, args: Dict[str, Any]) -> List[str]:
         """Return missing required callable parameters."""
@@ -62,43 +61,16 @@ class ReActAgent(BaseAgent):
         agent_logger.info(f"Portfolio: {json.dumps(portfolio, ensure_ascii=False)}")
         agent_logger.info(f"Prices: {json.dumps(prices, ensure_ascii=False)}")
 
+        # Check if memory tools are available
+        has_memory = any(tool.name in ['memory_add', 'memory_search'] for tool in self.tools.tools.values())
+        system_prompt = get_trade_agent_prompt(memory_enabled=has_memory)
+
         # Get current UTC+8 time
         tz_utc_8 = timezone(timedelta(hours=8))
         current_time = now_in_tz(tz_utc_8).strftime("%Y-%m-%d %H:%M:%S")
         
         # Add time context to system prompt
-        system_prompt_with_time = f"{SYSTEM_PROMPT}\n\nCurrent Time (UTC+8): {current_time}"
-
-        # 0. Retrieve Memory
-        if self.memory and self.user_id:
-            try:
-                # Construct query from portfolio summary or recent context
-                query = f"Trading context: {len(portfolio.get('positions', {}))} positions. Market: {list(prices.keys())}"
-                retrieved_memories = self.memory.search(query, user_id=self.user_id)
-                
-                if retrieved_memories:
-                    # Depending on Mem0 version, structure might vary. Assuming dict with 'memory' or 'text'
-                    memory_texts = []
-                    for m in retrieved_memories:
-                         text = m.get('memory') or m.get('text') or m.get('content')
-                         if text:
-                             memory_texts.append(f"- {text}")
-                    
-                    if memory_texts:
-                        memory_block = "\n".join(memory_texts)
-                        system_prompt_with_time += f"\n\nRelevant Memories:\n{memory_block}"
-                        agent_logger.info(f"Retrieved memories: {memory_block}")
-                        
-                        # Notify step for UI
-                        if on_step:
-                            on_step({
-                                "role": "memory",
-                                "content": f"Retrieved Memories:\n{memory_block}",
-                                "metadata": {"type": "memory"}
-                            })
-
-            except Exception as e:
-                logger.error(f"Failed to retrieve memory: {e}")
+        system_prompt_with_time = f"{system_prompt}\n\nCurrent Time (UTC+8): {current_time}"
 
         messages: List[Dict[str, Any]] = [
             {"role": "system", "content": system_prompt_with_time},
@@ -116,188 +88,171 @@ class ReActAgent(BaseAgent):
 
         decision = None
 
-        try:
-            for step in range(self.max_steps):
-                # Check if we need to remind the agent about remaining steps
-                remaining_steps = self.max_steps - step
-                request_messages = list(messages)
-                
-                if remaining_steps < AgentConfig.STEP_REMINDER_THRESHOLD:
-                    logger.info(f"Adding step reminder (Remaining: {remaining_steps})")
-                    request_messages.append({
-                        "role": "user", 
-                        "content": f"Reminder: You have {remaining_steps} steps remaining. You must output <FINAL_JSON> before running out of steps."
-                    })
+        for step in range(self.max_steps):
+            # Check if we need to remind the agent about remaining steps
+            remaining_steps = self.max_steps - step
+            request_messages = list(messages)
 
-                # Requirement 1: Log raw LLM request
-                llm_logger.info(f"--- Step {step+1}/{self.max_steps} Request ---")
-                llm_logger.info(json.dumps(request_messages, ensure_ascii=False, indent=2))
-                
-                logger.info(f"Initiating LLM request (Step {step+1})")
+            if remaining_steps < AgentConfig.STEP_REMINDER_THRESHOLD:
+                logger.info(f"Adding step reminder (Remaining: {remaining_steps})")
+                request_messages.append({
+                    "role": "user",
+                    "content": f"Reminder: You have {remaining_steps} steps remaining. You must output <FINAL_JSON> before running out of steps."
+                })
 
-                resp = self.llm.call(request_messages, tools=self.tools.openai_tools)
-                
-                # Convert to dict for consistent handling and logging
-                if hasattr(resp, "model_dump"):
-                    resp_dict = resp.model_dump()
-                else:
-                    resp_dict = resp.dict()
+            # Requirement 1: Log raw LLM request
+            llm_logger.info(f"--- Step {step+1}/{self.max_steps} Request ---")
+            llm_logger.info(json.dumps(request_messages, ensure_ascii=False, indent=2))
 
-                # Requirement 1: Log raw LLM response
-                llm_logger.info(f"--- Step {step+1}/{self.max_steps} Response ---")
-                llm_logger.info(json.dumps(resp_dict, ensure_ascii=False, indent=2))
+            logger.info(f"Initiating LLM request (Step {step+1})")
 
-                # Important: Add assistant response to history
-                messages.append(resp_dict)
-                if on_step:
-                    on_step(resp_dict)
+            resp = self.llm.call(request_messages, tools=self.tools.openai_tools)
 
-                tool_calls = resp.tool_calls
-                content = resp.content
+            # Convert to dict for consistent handling and logging
+            if hasattr(resp, "model_dump"):
+                resp_dict = resp.model_dump()
+            else:
+                resp_dict = resp.dict()
 
-                # Requirement 2: Log LLM output content and tool calls
-                agent_logger.info(f"--- Step {step+1} LLM Output ---")
-                agent_logger.info(f"Content: {content}")
-                if tool_calls:
-                    agent_logger.info(f"Tool Calls: {json.dumps([t.model_dump() if hasattr(t, 'model_dump') else str(t) for t in tool_calls], ensure_ascii=False)}")
+            # Requirement 1: Log raw LLM response
+            llm_logger.info(f"--- Step {step+1}/{self.max_steps} Response ---")
+            llm_logger.info(json.dumps(resp_dict, ensure_ascii=False, indent=2))
 
-                # 1) 有工具调用：执行工具并把结果回传给模型
-                if tool_calls:
-                    logger.info(f"LLM requested {len(tool_calls)} tool calls")
-                    for tc in tool_calls:
-                        name = tc.function.name
-                        args_str = tc.function.arguments or "{}"
-                        parse_error = None
-                        try:
-                            args = json.loads(args_str)
-                        except json.JSONDecodeError as e:
-                            parse_error = str(e)
-                            args = None
-                        
-                        # Console output (Simple)
-                        logger.info(f"Executing tool: {name}")
-                        
-                        # File output (Detailed)
-                        agent_logger.info(f"Executing tool '{name}' with args: {args_str}")
+            # Important: Add assistant response to history
+            messages.append(resp_dict)
+            if on_step:
+                on_step(resp_dict)
 
-                        if parse_error:
-                            logger.warning(f"Invalid tool arguments for {name}: {parse_error}; raw={args_str!r}")
-                            result = {
-                                "error": f"Invalid tool arguments JSON for '{name}': {parse_error}. Please retry with valid JSON arguments."
-                            }
-                        elif not isinstance(args, dict):
-                            result = {
-                                "error": f"Invalid tool arguments for '{name}': expected object, got {type(args).__name__}."
-                            }
-                        else:
-                            try:
-                                tool = self.tools.get(name)
-                                missing = self._missing_required_args(tool, args)
-                                if missing:
-                                    result = {
-                                        "error": (
-                                            f"Missing required arguments for '{name}': {', '.join(missing)}. "
-                                            "Please retry with all required fields."
-                                        )
-                                    }
-                                else:
-                                    result = tool(**args)
-                            except Exception as tool_err:
-                                # Never abort the whole run because one tool call fails.
-                                logger.error(f"Tool execution failed for {name}: {tool_err}")
-                                result = {"error": f"Tool execution failed: {str(tool_err)}"}
-                        
-                        # Log tool result
-                        agent_logger.info(f"Tool '{name}' result: {json.dumps(result, ensure_ascii=False)}")
+            tool_calls = resp.tool_calls
+            content = resp.content
 
-                        tool_msg = {
-                            "role": "tool",
-                            "tool_call_id": tc.id,
-                            "name": name,
-                            "content": json.dumps(result, ensure_ascii=False),
+            # Requirement 2: Log LLM output content and tool calls
+            agent_logger.info(f"--- Step {step+1} LLM Output ---")
+            agent_logger.info(f"Content: {content}")
+            if tool_calls:
+                agent_logger.info(f"Tool Calls: {json.dumps([t.model_dump() if hasattr(t, 'model_dump') else str(t) for t in tool_calls], ensure_ascii=False)}")
+
+            # 1) 有工具调用：执行工具并把结果回传给模型
+            if tool_calls:
+                logger.info(f"LLM requested {len(tool_calls)} tool calls")
+                for tc in tool_calls:
+                    name = tc.function.name
+                    args_str = tc.function.arguments or "{}"
+                    parse_error = None
+                    try:
+                        args = json.loads(args_str)
+                    except json.JSONDecodeError as e:
+                        parse_error = str(e)
+                        args = None
+
+                    # Console output (Simple)
+                    logger.info(f"Executing tool: {name}")
+
+                    # File output (Detailed)
+                    agent_logger.info(f"Executing tool '{name}' with args: {args_str}")
+
+                    if parse_error:
+                        logger.warning(f"Invalid tool arguments for {name}: {parse_error}; raw={args_str!r}")
+                        result = {
+                            "error": f"Invalid tool arguments JSON for '{name}': {parse_error}. Please retry with valid JSON arguments."
                         }
-                        messages.append(tool_msg)
-                        if on_step:
-                            on_step(tool_msg)
-                    continue
-
-                # 2) 没有工具调用，视为最终决策，尝试解析 JSON
-                # 优先检查是否有 <FINAL_JSON> 标签
-                if content:
-                    match = re.search(r"<FINAL_JSON>(.*?)</FINAL_JSON>", content, re.DOTALL)
-                    if match:
-                        json_str = match.group(1).strip()
+                    elif not isinstance(args, dict):
+                        result = {
+                            "error": f"Invalid tool arguments for '{name}': expected object, got {type(args).__name__}."
+                        }
+                    else:
                         try:
-                            decision = json.loads(json_str)
-                            
-                            # Log final decision
-                            logger.info(f"Agent reached final decision: {decision.get('operation')} {decision.get('symbol', '')}")
-                            agent_logger.info(f"Final Decision Parsed: {json.dumps(decision, ensure_ascii=False)}")
-
-                            # 简单做一下字段兜底，保持与旧逻辑兼容
-                            if "leverage" not in decision or not decision["leverage"]:
-                                decision["leverage"] = 1
-                            if "direction" not in decision or not decision["direction"]:
-                                decision["direction"] = "long"
+                            tool = self.tools.get(name)
+                            missing = self._missing_required_args(tool, args)
+                            if missing:
+                                result = {
+                                    "error": (
+                                        f"Missing required arguments for '{name}': {', '.join(missing)}. "
+                                        "Please retry with all required fields."
+                                    )
+                                }
                             else:
-                                decision["direction"] = decision["direction"].lower()
-                            
-                            break # Decision found, exit loop
-                        except json.JSONDecodeError as e:
-                            # 如果解析失败，使用默认 (Fallback HOLD)
-                            logger.error(f"Failed to parse decision JSON within <FINAL_JSON>: {e}. Returning fallback HOLD.")
-                            agent_logger.error(f"JSON Parse Error in <FINAL_JSON>: {e}. Content: {json_str}")
-                            # Return fallback directly
-                            decision = {
-                                "operation": "hold",
-                                "symbol": "",
-                                "direction": "long",
-                                "target_portion_of_balance": 0.0,
-                                "leverage": 1,
-                                "reason": "JSON Parse Error in <FINAL_JSON>, fallback hold",
-                            }
-                            break
+                                result = tool(**args)
+                        except Exception as tool_err:
+                            # Never abort the whole run because one tool call fails.
+                            logger.error(f"Tool execution failed for {name}: {tool_err}")
+                            result = {"error": f"Tool execution failed: {str(tool_err)}"}
 
-                # 如果没有工具调用，且没有 <FINAL_JSON>，且没有内容 -> 异常
-                if not tool_calls and not content:
-                    error_msg = "LLM returned empty content and no tool calls"
-                    logger.error(error_msg)
-                    agent_logger.error(error_msg)
-                    raise ValueError(error_msg)
+                    # Log tool result
+                    agent_logger.info(f"Tool '{name}' result: {json.dumps(result, ensure_ascii=False)}")
 
-                # 如果没有工具调用，且没有 <FINAL_JSON>，但有内容 -> 视为中间思考过程，继续循环
-                if not tool_calls:
-                    logger.info("No tool calls and no <FINAL_JSON> found. Continuing conversation (thought step).")
-                    continue
-            
-            # If loop finished without break (max steps reached)
-            if decision is None:
-                # 超过 max_steps 还没给出最终决策，保守 hold
-                logger.warning("Agent exceeded max steps, fallback to HOLD")
-                agent_logger.warning("Exceeded max steps, returning fallback HOLD decision")
-                decision = {
-                    "operation": "hold",
-                    "symbol": "",
-                    "direction": "long",
-                    "target_portion_of_balance": 0.0,
-                    "leverage": 1,
-                    "reason": "max_steps reached, fallback hold",
-                }
+                    tool_msg = {
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "name": name,
+                        "content": json.dumps(result, ensure_ascii=False),
+                    }
+                    messages.append(tool_msg)
+                    if on_step:
+                        on_step(tool_msg)
+                continue
 
-        finally:
-            # Save Memory
-            if self.memory and self.user_id:
-                try:
-                    conversation_text = ""
-                    for msg in messages:
-                        role = msg.get('role', 'unknown')
-                        content = msg.get('content', '')
-                        if role != "system" and content:
-                             conversation_text += f"{role}: {content}\n"
-                    
-                    if conversation_text:
-                        self.memory.add(conversation_text, user_id=self.user_id, metadata={"trace_id": trace_id} if trace_id else {})
-                except Exception as e:
-                    logger.error(f"Failed to save conversation to memory: {e}")
+            # 2) 没有工具调用，视为最终决策，尝试解析 JSON
+            # 优先检查是否有 <FINAL_JSON> 标签
+            if content:
+                match = re.search(r"<FINAL_JSON>(.*?)</FINAL_JSON>", content, re.DOTALL)
+                if match:
+                    json_str = match.group(1).strip()
+                    try:
+                        decision = json.loads(json_str)
+
+                        # Log final decision
+                        logger.info(f"Agent reached final decision: {decision.get('operation')} {decision.get('symbol', '')}")
+                        agent_logger.info(f"Final Decision Parsed: {json.dumps(decision, ensure_ascii=False)}")
+
+                        # 简单做一下字段兜底，保持与旧逻辑兼容
+                        if "leverage" not in decision or not decision["leverage"]:
+                            decision["leverage"] = 1
+                        if "direction" not in decision or not decision["direction"]:
+                            decision["direction"] = "long"
+                        else:
+                            decision["direction"] = decision["direction"].lower()
+
+                        break # Decision found, exit loop
+                    except json.JSONDecodeError as e:
+                        # 如果解析失败，使用默认 (Fallback HOLD)
+                        logger.error(f"Failed to parse decision JSON within <FINAL_JSON>: {e}. Returning fallback HOLD.")
+                        agent_logger.error(f"JSON Parse Error in <FINAL_JSON>: {e}. Content: {json_str}")
+                        # Return fallback directly
+                        decision = {
+                            "operation": "hold",
+                            "symbol": "",
+                            "direction": "long",
+                            "target_portion_of_balance": 0.0,
+                            "leverage": 1,
+                            "reason": "JSON Parse Error in <FINAL_JSON>, fallback hold",
+                        }
+                        break
+
+            # 如果没有工具调用，且没有 <FINAL_JSON>，且没有内容 -> 异常
+            if not tool_calls and not content:
+                error_msg = "LLM returned empty content and no tool calls"
+                logger.error(error_msg)
+                agent_logger.error(error_msg)
+                raise ValueError(error_msg)
+
+            # 如果没有工具调用，且没有 <FINAL_JSON>，但有内容 -> 视为中间思考过程，继续循环
+            if not tool_calls:
+                logger.info("No tool calls and no <FINAL_JSON> found. Continuing conversation (thought step).")
+                continue
+
+        # If loop finished without break (max steps reached)
+        if decision is None:
+            # 超过 max_steps 还没给出最终决策，保守 hold
+            logger.warning("Agent exceeded max steps, fallback to HOLD")
+            agent_logger.warning("Exceeded max steps, returning fallback HOLD decision")
+            decision = {
+                "operation": "hold",
+                "symbol": "",
+                "direction": "long",
+                "target_portion_of_balance": 0.0,
+                "leverage": 1,
+                "reason": "max_steps reached, fallback hold",
+            }
 
         return decision

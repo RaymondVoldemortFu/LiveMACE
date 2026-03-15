@@ -1,7 +1,6 @@
 import { useState } from 'react'
-import { PieChart, Settings, TrendingUp, BarChart3, Bot, Shield } from 'lucide-react'
+import { PieChart, Settings, TrendingUp, BarChart3, Bot, Brain, Shield } from 'lucide-react'
 import SettingsDialog from './SettingsDialog'
-import { type TradingAccount } from '@/lib/api'
 
 interface SidebarProps {
   currentPage?: string
@@ -51,6 +50,18 @@ export default function Sidebar({ currentPage = 'comprehensive', onPageChange, o
             title="Agent Status"
           >
             <Bot className="w-5 h-5" />
+          </button>
+
+          <button
+            className={`flex items-center justify-center w-10 h-10 rounded-lg transition-colors ${
+              currentPage === 'memory'
+                ? 'bg-secondary/80 text-secondary-foreground'
+                : 'hover:bg-muted text-muted-foreground'
+            }`}
+            onClick={() => onPageChange?.('memory')}
+            title="Memory"
+          >
+            <Brain className="w-5 h-5" />
           </button>
 
           <button
@@ -114,6 +125,18 @@ export default function Sidebar({ currentPage = 'comprehensive', onPageChange, o
           </button>
           <button
             className={`flex flex-col items-center justify-center w-12 h-12 rounded-lg transition-colors ${
+              currentPage === 'memory'
+                ? 'bg-secondary/80 text-secondary-foreground'
+                : 'hover:bg-muted text-muted-foreground'
+            }`}
+            onClick={() => onPageChange?.('memory')}
+            title="Memory"
+          >
+            <Brain className="w-5 h-5" />
+            <span className="text-xs mt-1">Memory</span>
+          </button>
+          <button
+            className={`flex flex-col items-center justify-center w-12 h-12 rounded-lg transition-colors ${
               currentPage === 'asset-curve'
                 ? 'bg-secondary/80 text-secondary-foreground'
                 : 'hover:bg-muted text-muted-foreground'
@@ -124,7 +147,7 @@ export default function Sidebar({ currentPage = 'comprehensive', onPageChange, o
             <TrendingUp className="w-5 h-5" />
             <span className="text-xs mt-1">Curve</span>
           </button>
-          
+
           <button
             className={`flex flex-col items-center justify-center w-12 h-12 rounded-lg transition-colors ${
               currentPage === 'compliance'
@@ -137,7 +160,7 @@ export default function Sidebar({ currentPage = 'comprehensive', onPageChange, o
             <Shield className="w-5 h-5" />
             <span className="text-xs mt-1">Rules</span>
           </button>
-          
+
           <button
             className="flex flex-col items-center justify-center w-12 h-12 rounded-lg hover:bg-muted transition-colors text-muted-foreground"
             onClick={() => setSettingsOpen(true)}

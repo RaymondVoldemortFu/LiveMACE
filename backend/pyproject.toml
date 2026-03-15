@@ -21,6 +21,8 @@ dependencies = [
     "docker>=7.1.0",
     "mem0ai>=1.0.1",
     "alpaca-py>=0.43.2",
+    "sentence-transformers",
+    "chromadb",
 ]
 
 [dependency-groups]

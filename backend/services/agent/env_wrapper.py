@@ -7,6 +7,8 @@ from repositories.account_repo import get_account
 from services.order_executor_leverage import place_and_execute_crypto
 from services.agent.sub_agents.search_agent import SearchSubAgent
 from services.container_service import ContainerService
+from config.agent_config import AgentConfig
+from .memory_tools import create_memory_tools
 
 
 def map_operation_side(operation: str, direction: str):
@@ -23,7 +25,7 @@ def map_operation_side(operation: str, direction: str):
     return None
 
 
-def register_default_tools(registry, db: Session, account_id: int):
+def register_default_tools(registry, db: Session, account_id: int, trace_id: str = None):
     # === 行情工具 ===
     registry.register(
         Tool(
@@ -204,6 +206,13 @@ def register_default_tools(registry, db: Session, account_id: int):
             func=lambda script_content: _run_python_helper(container_service, account_id, script_content)
         )
     )
+
+    # === Memory tools (if enabled for this account) ===
+    account = get_account(db, account_id)
+    if account and account.memory_enabled == "true":
+        memory_add_tool, memory_search_tool = create_memory_tools(db, trace_id=trace_id)
+        registry.register(memory_add_tool)
+        registry.register(memory_search_tool)
 
 
 def _run_python_helper(service, account_id, content):

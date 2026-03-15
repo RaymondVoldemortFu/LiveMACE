@@ -262,16 +262,16 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
                 if not account:
                     logger.warning(f"Account {account_id} not found, skipping")
                     continue
-                
+
                 # Extract account info
                 account_name = account.name
                 account_current_cash = float(account.current_cash)
-                
+
                 logger.info(f"Processing AI trading for account: {account_name}")
-                
+
                 # Get portfolio data for this account
                 portfolio = _get_portfolio_data(db, account)
-                
+
                 if portfolio['total_assets'] <= 0:
                     logger.debug(f"Account {account_name} has non-positive total assets, skipping")
                     continue
@@ -304,7 +304,7 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
                     _log_trade_execution(operation, symbol, target_portion, price, leverage, False, f"Invalid operation: {operation}")
                     save_ai_decision(db, account.id, decision, portfolio, executed=False)
                     continue
-                
+
                 if operation == "hold":
                     logger.info(f"AI decided to HOLD for {account.name}")
                     _log_trade_execution(operation, symbol, target_portion, price, leverage, True, reason)
@@ -330,7 +330,7 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
                         _log_trade_execution(operation, symbol, target_portion, price, leverage, False, "US market closed")
                         save_ai_decision(db, account_id, decision, portfolio, executed=False)
                         continue
-                
+
                 if direction not in ["long", "short"]:
                     logger.warning(f"Invalid direction '{direction}' from AI for {account.name}, skipping")
                     _log_trade_execution(operation, symbol, target_portion, price, leverage, False, f"Invalid direction: {direction}")
@@ -364,7 +364,7 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
                         _log_trade_execution(operation, symbol, target_portion, price, leverage, False, f"Position exists: {existing_position.side}")
                         save_ai_decision(db, account.id, decision, portfolio, executed=False)
                         continue
-                    
+
                     # Open a new position - calculate quantity based on available cash and target portion
                     available_cash = float(account.current_cash)
                     order_value = available_cash * target_portion
@@ -381,7 +381,7 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
                         _log_trade_execution(operation, symbol, target_portion, price, leverage, False, "Calculated quantity <= 0")
                         save_ai_decision(db, account.id, decision, portfolio, executed=False)
                         continue
-                    
+
                     # Set side based on direction
                     if market == "US":
                         side = "BUY" if direction == "long" else "SELL"
@@ -401,7 +401,7 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
                         _log_trade_execution(operation, symbol, target_portion, price, leverage, False, "No position to close")
                         save_ai_decision(db, account.id, decision, portfolio, executed=False)
                         continue
-                    
+
                     # Validate that direction matches the position side
                     position_side = (position.side or "LONG").lower()
                     if position_side != direction:
@@ -409,13 +409,13 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
                         _log_trade_execution(operation, symbol, target_portion, price, leverage, False, f"Direction mismatch: {direction} vs {position_side}")
                         save_ai_decision(db, account.id, decision, portfolio, executed=False)
                         continue
-                    
+
                     # For leveraged positions, use total quantity; for spot, use available_quantity
                     if position.leverage > 1:
                         position_quantity = float(position.quantity)
                     else:
                         position_quantity = float(position.available_quantity)
-                    
+
                     # Calculate quantity to close
                     # If target_portion is 0.0, it means CLOSE EVERYTHING (Target is 0%)
                     if target_portion == 0.0:
@@ -425,7 +425,7 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
                         # This is a temporary behavior to support partial closes until full target-balance logic is implemented
                         # TODO: Implement full target-balance logic for partial closes
                         quantity = position_quantity * target_portion
-                    
+
                     # Round to reasonable precision (6 decimal places for crypto)
                     if market == "US":
                         quantity = int(quantity)
@@ -434,13 +434,13 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
                     
                     if quantity > position_quantity:
                         quantity = position_quantity
-                    
+
                     if quantity <= 0:
                         logger.info(f"Calculated close quantity <= 0 for {symbol} for {account.name}, skipping")
                         _log_trade_execution(operation, symbol, target_portion, price, leverage, False, "Calculated quantity <= 0")
                         save_ai_decision(db, account.id, decision, portfolio, executed=False)
                         continue
-                    
+
                     # Set side to close the position: SELL closes LONG, BUY closes SHORT
                     if market == "US":
                         side = "SELL" if direction == "long" else "BUY"
@@ -489,7 +489,7 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
                         )
                     
                     logger.info(
-                        f"✅ AI order executed: account={account.name} {operation.upper()} {direction.upper()} {side} {symbol} {order.order_no} quantity={quantity} leverage={leverage}x market={market} reason='{reason}'"
+                        f"AI order executed: account={account.name} {operation.upper()} {direction.upper()} {side} {symbol} {order.order_no} quantity={quantity} leverage={leverage}x market={market} reason='{reason}'"
                     )
                     executed = True
                     _log_trade_execution(operation, symbol, target_portion, price, leverage, True, reason)
@@ -499,10 +499,12 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
                     executed = False
                     fail_reason = str(e)
                     _log_trade_execution(operation, symbol, target_portion, price, leverage, False, f"Execution failed: {fail_reason}")
-                
+
                 # Save decision with final execution status (only called once)
                 order_id = order.id if order else None
-                save_ai_decision(db, account.id, decision, portfolio, executed=executed, order_id=order_id)
+                exec_price = float(order.price) if order and order.price else None
+                exec_quantity = float(order.filled_quantity) if order and order.filled_quantity else None
+                save_ai_decision(db, account.id, decision, portfolio, executed=executed, order_id=order_id, execution_price=exec_price, execution_quantity=exec_quantity)
 
             except Exception as account_err:
                 logger.error(f"AI-driven order placement failed for account {account.name}: {account_err}", exc_info=True)

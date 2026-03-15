@@ -9,6 +9,8 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Switch } from '@/components/ui/switch'
+import { Label } from '@/components/ui/label'
 import {
   Select,
   SelectContent,
@@ -17,7 +19,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Plus, Pencil } from 'lucide-react'
-import { 
+import {
   getAccounts as getAccounts,
   createAccount as createAccount,
   updateAccount as updateAccount,
@@ -73,6 +75,7 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
     api_key: '',
     enable_rule_aware: false,
     agent_type: 'react',
+    memory_enabled: 'false',
   })
   const [editAccount, setEditAccount] = useState<AIAccountCreate>({
     name: '',
@@ -80,6 +83,7 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
     base_url: '',
     api_key: '',
     agent_type: 'react',
+    memory_enabled: 'false',
   })
 
   const loadAccounts = async () => {
@@ -132,20 +136,20 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
       // If AI fields are provided, test LLM connection first
       if (hasAllLLMFields) {
         setTestResult('Testing LLM connection...')
-        
+
         console.log('[SettingsDialog] Starting LLM test')
         console.log('[SettingsDialog] newAccount:', newAccount)
         console.log('[SettingsDialog] enable_rule_aware:', newAccount.enable_rule_aware, typeof newAccount.enable_rule_aware)
-        
+
         try {
           const testResponse = await testLLMConnection({
             model: newAccount.model,
             base_url: newAccount.base_url,
             api_key: newAccount.api_key,
           })
-          
+
           console.log('[SettingsDialog] LLM test response:', testResponse)
-          
+
           if (!testResponse.success) {
             const message = testResponse.message || 'LLM connection test failed'
             setError(`LLM Test Failed: ${message}`)
@@ -277,6 +281,7 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
       base_url: account.base_url || '',
       api_key: account.api_key || '',
       agent_type: account.agent_type || 'react',
+      memory_enabled: account.memory_enabled || 'false',
       enable_rule_aware: account.enable_rule_aware || false,
     })
   }
@@ -349,7 +354,7 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
                             </SelectContent>
                           </Select>
                         </div>
-                        
+
                         {/* Rule-Aware Toggle for Edit */}
                         <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
                           <div className="flex items-center gap-2">
@@ -372,7 +377,7 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
                             <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-primary/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
                           </label>
                         </div>
-                        
+
                         <Input
                             placeholder="Model"
                             value={editAccount.model || ''}
@@ -389,6 +394,14 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
                           value={editAccount.api_key || ''}
                           onChange={(e) => setEditAccount({ ...editAccount, api_key: e.target.value })}
                         />
+                        <div className="flex items-center space-x-2">
+                          <Switch
+                            id="memory-enabled-edit"
+                            checked={editAccount.memory_enabled === 'true'}
+                            onCheckedChange={(checked) => setEditAccount({ ...editAccount, memory_enabled: checked ? 'true' : 'false' })}
+                          />
+                          <Label htmlFor="memory-enabled-edit">Enable Memory System</Label>
+                        </div>
                         {testResult && (
                           <div className={`text-xs p-2 rounded ${
                             testResult.includes('❌') 
@@ -413,6 +426,7 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
                           <div className="font-medium">{account.name}</div>
                           <div className="text-xs text-muted-foreground">
                             {account.model ? `Model: ${account.model}` : 'No model configured'} • {getAgentTypeLabel(account.agent_type)}
+                            {account.memory_enabled === 'true' && ' • 🧠 Memory'}
                           </div>
                           {account.base_url && (
                             <div className="text-xs text-muted-foreground truncate">
@@ -472,7 +486,7 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
                     </SelectContent>
                   </Select>
                 </div>
-                
+
                 {/* Rule-Aware Toggle */}
                 <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
                   <div className="flex items-center gap-2">
@@ -495,7 +509,7 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
                     <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-primary/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
                   </label>
                 </div>
-                
+
                 <Input
                     placeholder="Model (e.g., gpt-4)"
                     value={newAccount.model || ''}
@@ -512,6 +526,14 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
                   value={newAccount.api_key || ''}
                   onChange={(e) => setNewAccount({ ...newAccount, api_key: e.target.value })}
                 />
+                <div className="flex items-center space-x-2">
+                  <Switch
+                    id="memory-enabled-new"
+                    checked={newAccount.memory_enabled === 'true'}
+                    onCheckedChange={(checked) => setNewAccount({ ...newAccount, memory_enabled: checked ? 'true' : 'false' })}
+                  />
+                  <Label htmlFor="memory-enabled-new">Enable Memory System</Label>
+                </div>
                 <div className="flex gap-2">
                   <Button onClick={handleCreateAccount} disabled={loading}>
                     Test and Create
