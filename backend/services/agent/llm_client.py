@@ -59,7 +59,7 @@ class LLMClient:
             messages=messages,
             tools=tools,
             temperature=0.4,
-            max_tokens=800,
+            max_tokens=4000,  # Increased from 800 to allow longer responses
         )
 
         return response.choices[0].message

@@ -1,0 +1,76 @@
+You are evaluating how a multi-agent trading system handles conflicting viewpoints during decision-making.
+
+Based ONLY on the execution trace, assess whether conflicts between agents are identified, discussed, and managed in a coherent way.
+
+Conflicts are expected in financial multi-agent systems.
+The goal is NOT to avoid disagreement, but to manage it effectively.
+
+Do NOT judge whether any agent is correct.
+Do NOT infer hidden intentions or private reasoning.
+Only evaluate what is explicitly visible in the execution trace.
+
+Judge based on the following observable aspects (cumulatively):
+
+1. Conflict emergence and visibility
+- Whether agents express differing, opposing, or incompatible viewpoints.
+- Whether conflicts relate to direction (long vs short), risk level, timing, confidence, or market interpretation.
+- Whether conflicts are explicitly stated or clearly implied through incompatible recommendations.
+
+2. Conflict acknowledgment and discussion
+- Whether the Manager or other agents explicitly recognize the presence of conflict.
+- Whether conflicting views are summarized, contrasted, or framed as trade-offs.
+- Whether concerns or critiques are responded to rather than ignored.
+
+3. Conflict resolution and integration
+- Whether the final decision reflects a weighing or synthesis of conflicting inputs.
+- Whether one viewpoint is chosen with justification, or multiple views are integrated into a coherent stance.
+- Penalize cases where conflicting actions coexist without reconciliation (e.g., opposing recommendations left unresolved).
+
+4. Operational consistency
+- Whether the final decision avoids internally contradictory operations.
+- Penalize cases involving:
+  - Simultaneous or sequential actions that cancel each other out (e.g., opening both long and short without explicit hedging intent).
+  - Implicit hedging or offsetting behavior without explanation.
+
+Scoring notes:
+- If no conflicting viewpoints are explicitly present, score must be 0 (no evidence of conflict management).
+- If conflicts exist but are not explicitly acknowledged, cap at 1.
+
+Scoring principles:
+- Determinism: use only explicit trace evidence.
+- Consistency: apply the same thresholds across traces.
+- Tie-breaker: if between two scores, choose the lower one unless higher criteria are fully met.
+
+Score from 0 to 4:
+
+0: Unmanaged or ignored conflict  
+- Conflicting viewpoints appear but are not acknowledged or addressed.  
+- Opposing recommendations coexist without reconciliation.  
+- The final decision exhibits internal inconsistency or unresolved contradiction.
+
+1: Minimal conflict handling  
+- Conflicts are visible and at least partially acknowledged.  
+- Some discussion or preference is expressed, but trade-offs are weakly justified.  
+- Resolution is incomplete, implicit, or leaves ambiguity in the final decision.
+
+2: Moderate conflict management  
+- Conflicts are identified and discussed at least once.  
+- Some trade-off reasoning exists but is shallow or incomplete.  
+- Final decision is consistent but synthesis is limited.
+
+3: Clear and coherent conflict management  
+- Conflicts are explicitly identified and discussed.  
+- Trade-offs are weighed, and a clear rationale is provided for resolving them.  
+- The final decision is internally consistent and reflects a deliberate synthesis or choice.
+
+4: Robust conflict management  
+- Multiple conflicts or tensions are acknowledged and systematically resolved.  
+- The Manager explicitly contrasts alternatives and explains why one view is favored.  
+- The final decision shows strong, explicit integration of the conflicting inputs.
+
+Only use evidence explicitly present in the execution trace.
+Cite specific agent messages or decision steps when justifying your assessment.
+
+Provide a step-by-step justification.
+End your response with:
+"The score is [score]."

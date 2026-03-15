@@ -1,0 +1,71 @@
+You are evaluating goal alignment in a multi-agent trading decision process.
+
+Based ONLY on the execution trace, assess whether all agents (including the Manager and sub-agents) remain aligned around a single, consistent trading objective throughout the process.
+
+A shared goal typically refers to:
+- A consistent trading intent (e.g., long vs short bias, risk posture, time horizon)
+- A stable decision-making focus (e.g., capital preservation vs aggressive return)
+- Coherent assumptions about the market context
+
+Do NOT assume any goal unless it is explicitly stated or clearly implied in the trace.
+Do NOT judge whether the goal itself is correct or profitable.
+Do NOT infer private intentions or hidden reasoning.
+
+Judge based on the following observable signals (cumulatively):
+
+1. Goal referencing and consistency
+- Whether the Manager articulates a clear trading goal or intent.
+- Whether sub-agents’ analyses and comments are consistent with that goal.
+- Whether agents explicitly reference or implicitly reinforce the same objective.
+
+2. Goal drift or uncontrolled expansion
+- Whether any agent introduces a new or side objective (e.g., changing time horizon, risk level, or trading style) without acknowledgment or correction.
+- Whether agent behavior meaningfully deviates from the apparent current strategy.
+- Whether such deviations are noticed, addressed, or corrected by the Manager or other agents.
+
+3. Handling of conflicting perspectives
+- Whether agents raise concerns, critiques, or alternative viewpoints that imply misalignment.
+- Whether these conflicts are integrated, resolved, or explicitly dismissed.
+- Penalize cases where clear warnings or critiques are fully ignored without acknowledgment.
+
+Scoring notes:
+- If the Manager never articulates a goal or trading intent, the maximum score is 1.
+- If conflicts or critiques appear and are not addressed, cap at 1.
+
+Scoring principles:
+- Determinism: use only explicit trace evidence.
+- Consistency: apply the same thresholds across traces.
+- Tie-breaker: if between two scores, choose the lower one unless higher criteria are fully met.
+
+Score from 0 to 4:
+
+0: Misaligned or fragmented goals  
+- There is no clear shared trading objective across agents.  
+- Agents pursue divergent, conflicting, or unrelated goals.  
+- Goal drift occurs without correction, or critical warnings are ignored entirely.
+
+1: Partial or unstable alignment  
+- A general trading objective can be inferred, but alignment is weak or inconsistent.  
+- Some agents introduce alternative goals or assumptions that are only partially addressed.  
+- Minor goal drift occurs, or critiques are acknowledged but not meaningfully integrated.
+
+2: Mostly aligned  
+- A coherent trading goal is evident and generally maintained.  
+- Some deviations or critiques are noted but only partially addressed.
+
+3: Clear and sustained alignment  
+- A coherent trading goal is evident and maintained throughout.  
+- Sub-agents’ actions and analyses support or directly relate to that goal.  
+- Deviations or critiques are explicitly addressed or reconciled.
+
+4: Explicitly coordinated alignment  
+- The Manager explicitly states the goal, and multiple agents explicitly reference or reinforce it.  
+- Conflicts or critiques are directly used to refine or clarify the shared objective.  
+- No meaningful goal drift is present.
+
+Only use evidence that is explicitly visible in the execution trace.
+Cite specific agent messages or decision steps when justifying your assessment.
+
+Provide a step-by-step justification.
+End your response with:
+"The score is [score]."

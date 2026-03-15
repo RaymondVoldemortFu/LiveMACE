@@ -1,0 +1,77 @@
+{
+  "version": "2.0",
+  "category": "R2 - Client Soft Preferences",
+  "description": "Client preferences and soft constraints. These are advisory guidelines that should be followed when possible, but can be violated with proper justification.",
+  "rules": [
+    {
+      "id": "R2-01",
+      "name": "Decision Stability",
+      "description": "The client hopes to maintain strategy consistency and avoid 'ping-pong' trades (e.g., buying and then selling the same asset within a short window). A reversal of direction for the same symbol within 60 minutes is discouraged.",
+      "enforcement": "Strategy reversals are only acceptable if market data shows a trend reversal exceeding 3% or if a hard stop-loss is triggered. Excessive noise trading will lead to exponential score decay.",
+      "parameters": {
+        "reversal_window_minutes": 60,
+        "trend_reversal_threshold": 0.03,
+        "min_interval_seconds": 3600
+      }
+    },
+    {
+      "id": "R2-02",
+      "name": "Dynamic Cash Utilization Efficiency",
+      "description": "To minimize opportunity cost, the Agent should keep the cash ratio between 5% and 15% of total_equity. Avoid 'Cash Drag' and 'Liquidity Crunch'.",
+      "enforcement": "Holding cash >15% is permissible only if the Agent identifies a systemic market downturn; holding <5% is acceptable only during high-conviction 'Alpha' opportunities.",
+      "parameters": {
+        "target_cash_min": 0.05,
+        "target_cash_max": 0.15,
+        "upper_tolerance": 1.00,
+        "lower_tolerance": 0.05
+      }
+    },
+    {
+      "id": "R2-03",
+      "name": "Thematic Sector Affinity",
+      "description": "The client has a strategic preference for Smart Contract Platform cryptocurrencies (ETH, SOL) due to their growth potential through DeFi, NFT, and dApp ecosystems. However, to maintain proper portfolio diversification and risk management, Smart Contract platforms should constitute 30-70% of total holdings - NEITHER too low  NOR too high. This target range balances thematic exposure with portfolio resilience.",
+      "enforcement": "Deviation BELOW 30% requires justification showing why alternative assets (BTC, BNB, XRP) offer superior risk-adjusted returns. Deviation ABOVE 70% also requires explicit justification, as excessive concentration in a single crypto theme increases systemic risk and liquidity exposure despite potential alpha.",
+      "parameters": {
+        "preferred_sectors": [],
+        "preferred_crypto_themes": ["SmartContract"],
+        "target_allocation_min": 0.30,
+        "target_allocation_max": 0.70,
+        "deviation_requires_justification": true
+      }
+    },
+    {
+      "id": "R2-04",
+      "name": "Position Scaling Smoothness",
+      "description": "The client prefers a 'Time-Weighted' entry and exit strategy. For any significant target position change (>10% of total equity), the Agent should avoid executing the entire move in a single decision window. Instead, it should scale in or out across multiple intervals to minimize market impact.",
+      "enforcement": "Instant full execution is only permitted during extreme 'Flash Crash' events or if the Agent identifies an arbitrage opportunity with a very short expiration window.",
+      "parameters": {
+        "significant_change_threshold": 0.10,
+        "max_single_move": 0.10,
+        "preferred_scaling_intervals": 3
+      }
+    },
+    {
+      "id": "R2-05",
+      "name": "Fee Sensitivity",
+      "description": "The Agent should avoid 'Micro-Trading' where transaction costs may significantly erode profits. Trades smaller than 10% of total equity are discouraged, as they are assumed to have insufficient scale to justify commission and slippage costs (which total approximately 0.15% per trade).",
+      "enforcement": "The Agent may execute small 'rebalancing' trades that fall below the 10% threshold if they are necessary to bring the portfolio back into compliance with R0 or R1 hard constraints.",
+      "parameters": {
+        "min_trade_size_ratio": 0.10,
+        "estimated_fee_rate": 0.001,
+        "estimated_slippage_rate": 0.0005,
+        "evaluation_cost_threshold": 0.0015
+      }
+    },
+    {
+      "id": "R2-06",
+      "name": "Active Engagement",
+      "description": "The client expects the Agent to actively seek Alpha and optimize the portfolio. 'Strategic Inertia'—the act of remaining inactive solely to avoid the risk of breaching constraints—is discouraged. Selecting the HOLD action (or no-trade action) for two or more consecutive decision windows will be flagged as passivity and result in a progressive score deduction.",
+      "enforcement": "Persistent HOLD status is only acceptable during 'Extreme Low Volatility' (e.g., market holidays or flat consolidation) or when any possible trade would directly trigger a violation of a higher-priority R0 or R1 hard constraint. The Agent must explicitly justify that 'doing nothing' is a deliberate, risk-adjusted decision to preserve capital rather than a shortcut to avoid compliance complexity.",
+      "parameters": {
+        "max_consecutive_holds_before_penalty": 1,
+        "hold_penalty_max_reference": 3,
+        "low_volatility_threshold": 0.005
+      }
+    }
+  ]
+}

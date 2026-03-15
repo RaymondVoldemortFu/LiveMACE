@@ -19,6 +19,7 @@ import Portfolio from '@/components/portfolio/Portfolio'
 import ComprehensiveView from '@/components/portfolio/ComprehensiveView'
 import AgentStatusView from '@/components/agent/AgentStatusView'
 import { MemoryView } from '@/components/memory/MemoryView'
+import ComplianceDashboard from '@/components/compliance/ComplianceDashboard'
 import { AIDecision, getAccounts } from '@/lib/api'
 
 interface User {
@@ -34,6 +35,8 @@ interface Account {
   initial_capital: number
   current_cash: number
   frozen_cash: number
+  is_active: boolean
+  enable_rule_aware?: boolean  // Add support for rule-aware flag
 }
 
 interface Overview {
@@ -59,6 +62,7 @@ const PAGE_TITLES: Record<string, string> = {
   portfolio: 'Crypto Paper Trading',
   comprehensive: '同花顺Bench',
   memory: 'Memory System',
+  compliance: 'Rule Compliance',
 }
 
 function App() {
@@ -319,6 +323,10 @@ function App() {
 
         {currentPage === 'memory' && (
           <MemoryView account={account} accounts={accounts} />
+        )}
+
+        {currentPage === 'compliance' && (
+          <ComplianceDashboard accounts={accounts} />
         )}
       </main>
     )

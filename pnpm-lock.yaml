@@ -12,7 +12,7 @@ importers:
         specifier: ^4.5.1
         version: 4.5.1
       pnpm:
-        specifier: 10.22.0
+        specifier: ^10.22.0
         version: 10.22.0
     devDependencies:
       concurrently:
@@ -54,6 +54,9 @@ importers:
       lucide-react:
         specifier: ^0.536.0
         version: 0.536.0(react@18.3.1)
+      pnpm:
+        specifier: ^10.28.0
+        version: 10.28.0
       react:
         specifier: ^18.2.0
         version: 18.3.1
@@ -1069,7 +1072,7 @@ packages:
     resolution: {integrity: sha512-TfySrs/5nm8fQJDcBDuUng3VOUKsd7S+zqvbOTiGXHfxX4wK31ard+hoNuvkicM/2YFzlpDgABOevKSsB4G/FA==}
     engines: {node: '>= 6'}
 
-  pnpm@10.22.0:
+  /pnpm@10.22.0:
     resolution: {integrity: sha512-vwSe/plbKPUn/StBrgR0zikYb37cs79UUIe9Yfu+uyv3U2LRMH/aCcLSiOHkmXh6wS1Py2F6l0cYpgUfLu50HA==}
     engines: {node: '>=18.12'}
     hasBin: true

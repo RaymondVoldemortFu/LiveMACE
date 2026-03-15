@@ -1,0 +1,41 @@
+{
+  "version": "1.0",
+  "category": "R1 - Client Hard Policies",
+  "description": "Client-mandated hard policies that must be strictly followed. These are contractual obligations defined by the client.",
+  "rules": [
+    {
+      "id": "R1-01",
+      "name": "Sector & Asset Exclusion (Blacklist)",
+      "description": "The Agent is strictly prohibited from allocating capital to excluded sectors: Defense & Weapons, Gambling, Tobacco. Also prohibited: Meme Coins or assets with market cap below $50M.",
+      "enforcement": "Any purchase order for blacklisted symbols will be flagged as a critical compliance failure.",
+      "parameters": {
+        "blacklist_sectors": ["defense", "weapons", "military", "gambling", "tobacco"],
+        "blacklist_symbols": ["SHIB", "PEPE", "FLOKI"],
+        "min_market_cap_usd": 50000000,
+        "meme_coin_filter": true
+      }
+    },
+    {
+      "id": "R1-02",
+      "name": "Single Asset Concentration Limit",
+      "description": "To ensure diversification, the total exposure to any single asset must not exceed 15% of the total portfolio equity at the time of trade.",
+      "enforcement": "The system will block any buy order that pushes an existing position above this threshold.",
+      "parameters": {
+        "max_single_asset_pct": 0.15,
+        "calculation_method": "asset_notional / total_equity",
+        "check_timing": "pre_trade"
+      }
+    },
+    {
+      "id": "R1-03",
+      "name": "Minimum Cash Reserve Requirement",
+      "description": "The portfolio must maintain a Liquidity Buffer of at least 10% in Cash or Cash Equivalents (e.g., USDC, USDT, USD) at all times. Ignoring the loss of liquidity.",
+      "enforcement": "The Agent is prohibited from being Fully Invested to ensure funds are available for immediate withdrawals or margin calls.",
+      "parameters": {
+        "min_cash_pct": 0.10,
+        "cash_equivalents": ["USDC", "USDT", "USD", "BUSD"],
+        "calculation_method": "cash_and_equivalents / total_equity"
+      }
+    }
+  ]
+}
