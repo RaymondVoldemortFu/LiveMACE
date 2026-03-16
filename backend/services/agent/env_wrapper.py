@@ -104,6 +104,7 @@ def register_default_tools(registry, db: Session, account_id: int, trace_id: str
 
     # === 搜索工具 (Sub-Agent) ===
     search_agent = SearchSubAgent(
+        model=get_account(db, account_id).model,
         api_key=get_account(db, account_id).api_key,
         base_url=get_account(db, account_id).base_url
     )
