@@ -21,9 +21,18 @@ dependencies = [
     "docker>=7.1.0",
     "mem0ai>=1.0.1",
     "alpaca-py>=0.43.2",
+    "torch",
     "sentence-transformers",
     "chromadb",
 ]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
 
 [dependency-groups]
 dev = [
