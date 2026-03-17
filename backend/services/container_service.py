@@ -48,21 +48,78 @@ class ContainerService:
             atexit.register(self.shutdown)
             self._shutdown_registered = True
 
-    def _build_image_if_needed(self):
+    def _parse_image_reference(self, image_ref: str) -> Tuple[str, str]:
+        """Split image reference into (repository, tag)."""
+        value = (image_ref or "").strip()
+        if not value:
+            return "", "latest"
+        if "@" in value:
+            repository, digest = value.split("@", 1)
+            return repository, digest
+
+        last_slash = value.rfind("/")
+        last_colon = value.rfind(":")
+        if last_colon > last_slash:
+            return value[:last_colon], value[last_colon + 1:]
+        return value, "latest"
+
+    def _normalize_repo_name(self, repository: str) -> str:
+        repo = (repository or "").strip().lower()
+        if repo.startswith("docker.io/"):
+            repo = repo[len("docker.io/"):]
+        if repo and "/" not in repo:
+            repo = f"library/{repo}"
+        return repo
+
+    def _is_image_present(self, image_ref: str) -> bool:
+        """
+        Return True when a local image exists for the requested reference.
+        Use a fallback strategy to avoid false negatives from direct `get`.
+        """
         try:
-            self.client.images.get(AgentConfig.DOCKER_IMAGE_NAME)
+            self.client.images.get(image_ref)
+            return True
         except docker.errors.ImageNotFound:
-            logger.info(f"Image {AgentConfig.DOCKER_IMAGE_NAME} not found. Building...")
-            dockerfile_path = AgentConfig.DOCKERFILE_PATH
-            if os.path.exists(dockerfile_path):
-                self.client.images.build(
-                    path=dockerfile_path,
-                    tag=AgentConfig.DOCKER_IMAGE_NAME,
-                    rm=True
-                )
-                logger.info("Image built successfully.")
-            else:
-                logger.error(f"Dockerfile path not found: {dockerfile_path}")
+            pass
+        except Exception as e:
+            logger.warning(f"Direct image lookup failed for {image_ref}: {e}")
+
+        repository, expected_tag = self._parse_image_reference(image_ref)
+        if not repository:
+            return False
+
+        try:
+            candidates = self.client.images.list(name=repository)
+        except Exception as e:
+            logger.warning(f"Image list fallback failed for {image_ref}: {e}")
+            return False
+
+        normalized_expected_repo = self._normalize_repo_name(repository)
+        expected_tag = (expected_tag or "latest").strip().lower()
+        for image in candidates:
+            for repo_tag in image.tags or []:
+                found_repo, found_tag = self._parse_image_reference(repo_tag)
+                if (found_tag or "").strip().lower() != expected_tag:
+                    continue
+                if self._normalize_repo_name(found_repo) == normalized_expected_repo:
+                    return True
+        return False
+
+    def _build_image_if_needed(self):
+        if self._is_image_present(AgentConfig.DOCKER_IMAGE_NAME):
+            return
+
+        logger.info(f"Image {AgentConfig.DOCKER_IMAGE_NAME} not found. Building...")
+        dockerfile_path = AgentConfig.DOCKERFILE_PATH
+        if os.path.exists(dockerfile_path):
+            self.client.images.build(
+                path=dockerfile_path,
+                tag=AgentConfig.DOCKER_IMAGE_NAME,
+                rm=True
+            )
+            logger.info("Image built successfully.")
+        else:
+            logger.error(f"Dockerfile path not found: {dockerfile_path}")
 
     def _pool_capacity(self) -> int:
         base = self._desired_base_pool_size()
