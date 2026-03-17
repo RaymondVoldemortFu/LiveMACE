@@ -256,34 +256,17 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
 
             portfolio = payload["portfolio"]
             decision = payload["decision"]
-            try:
-                # Re-query account from database for each iteration to get fresh, attached object
-                account = db.query(Account).filter(Account.id == account_id).first()
-                if not account:
-                    logger.warning(f"Account {account_id} not found, skipping")
-                    continue
 
+            if not decision or not isinstance(decision, dict):
+                logger.warning(f"Invalid decision payload for account {account.name}, skipping")
+                continue
+
+            try:
                 # Extract account info
                 account_name = account.name
                 account_current_cash = float(account.current_cash)
 
                 logger.info(f"Processing AI trading for account: {account_name}")
-
-                # Get portfolio data for this account
-                portfolio = _get_portfolio_data(db, account)
-
-                if portfolio['total_assets'] <= 0:
-                    logger.debug(f"Account {account_name} has non-positive total assets, skipping")
-                    continue
-
-                # Call AI for trading decision
-                if AgentConfig.USE_AGENT:
-                    decision = call_agent_for_decision(account, portfolio, prices, db)
-                else:
-                    decision = call_ai_for_decision(account, portfolio, prices)
-                if not decision or not isinstance(decision, dict):
-                    logger.warning(f"Failed to get AI decision for {account_name}, skipping")
-                    continue
 
                 operation = decision.get("operation", "").lower() if decision.get("operation") else ""
                 symbol = decision.get("symbol", "").upper() if decision.get("symbol") else ""
