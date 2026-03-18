@@ -249,7 +249,7 @@ class LocalMemory(MemoryInterface):
 def get_memory_service() -> Optional[MemoryInterface]:
     """
     Get the memory service instance based on configuration.
-    Returns ChromaMemory or LocalMemory, None if dependencies unavailable.
+    Returns PineconeMemory, ChromaMemory, or LocalMemory based on config.
     """
     if not SENTENCE_TRANSFORMERS_AVAILABLE:
         logger.warning("sentence-transformers is not installed.")
@@ -259,7 +259,27 @@ def get_memory_service() -> Optional[MemoryInterface]:
     # Choose backend based on configuration
     backend = getattr(AgentConfig, 'MEMORY_BACKEND', 'local')
 
-    if backend == 'chroma':
+    if backend == 'pinecone':
+        try:
+            from .memory_pinecone import PineconeMemory, PINECONE_AVAILABLE
+            if PINECONE_AVAILABLE:
+                api_key = AgentConfig.PINECONE_API_KEY
+                if not api_key:
+                    logger.warning("PINECONE_API_KEY not set. Falling back to LocalMemory.")
+                    return LocalMemory()
+
+                index_name = AgentConfig.PINECONE_INDEX_NAME
+                environment = AgentConfig.PINECONE_ENVIRONMENT
+                logger.info(f"Using Pinecone memory backend (index: {index_name})")
+                return PineconeMemory(api_key=api_key, index_name=index_name, environment=environment)
+            else:
+                logger.warning("Pinecone backend selected but pinecone-client not installed. Falling back to LocalMemory.")
+                logger.warning("Install with: pip install pinecone-client")
+                return LocalMemory()
+        except Exception as e:
+            logger.error(f"Failed to initialize Pinecone backend: {e}. Falling back to LocalMemory.")
+            return LocalMemory()
+    elif backend == 'chroma':
         try:
             from .memory_chroma import ChromaMemory, CHROMA_AVAILABLE
             if CHROMA_AVAILABLE:

@@ -40,9 +40,13 @@ class AgentConfig:
     # Note: Memory is now controlled per-account via account.memory_enabled field
     # Lightweight embedding model (384 dimensions)
     MEMORY_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
-    # Memory backend: "local" (SQLite) or "chroma" (vector database)
-    MEMORY_BACKEND = "chroma"  # Options: "local", "chroma"
+    # Memory backend: "local" (SQLite), "chroma" (vector database), or "pinecone" (cloud)
+    MEMORY_BACKEND = "pinecone"  # Options: "local", "chroma", "pinecone"
     CHROMA_PERSIST_DIR = "./chroma_db"  # Directory for Chroma persistence
+    # Pinecone Configuration
+    PINECONE_API_KEY = os.getenv("PINECONE_API_KEY", "")
+    PINECONE_INDEX_NAME = "agent-memories"
+    PINECONE_ENVIRONMENT = "us-east-1"  # Free tier region
     # Similarity threshold for counting as effective retrieval (0.0-1.0)
     MEMORY_RETRIEVAL_THRESHOLD = 0.6
 
