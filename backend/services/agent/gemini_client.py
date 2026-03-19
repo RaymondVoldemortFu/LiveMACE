@@ -110,10 +110,15 @@ class GeminiClient:
 
                     for idx, tc in enumerate(tool_calls):
                         func = tc.get("function", {})
+                        try:
+                            args = json.loads(func.get("arguments", "{}"))
+                        except json.JSONDecodeError:
+                            logger.debug(f"Failed to parse tool arguments for {func.get('name')}, using empty args")
+                            args = {}
                         part = {
                             "functionCall": {
                                 "name": func.get("name"),
-                                "args": json.loads(func.get("arguments", "{}"))
+                                "args": args
                             }
                         }
                         ts = tc.get("_thought_signature") or (msg_signatures[idx] if idx < len(msg_signatures) else None)
@@ -175,21 +180,25 @@ class GeminiClient:
         else:
             headers["Authorization"] = f"Bearer {self.api_key}"
 
-        # Log request for debugging
-        logger.debug(f"Gemini API request to {url}")
+        # Log request for debugging (redact API key)
+        safe_url = f"{self.base_url}/models/{self.model}:generateContent"
+        logger.debug(f"Gemini API request to {safe_url}")
         logger.debug(f"Gemini request payload: {json.dumps(payload, ensure_ascii=False, indent=2)}")
 
         response = requests.post(url, headers=headers, json=payload, timeout=30)
 
-        # Log error details for debugging
+        # Log error details for debugging (redact URL to avoid leaking API key)
         if response.status_code != 200:
             logger.error(f"Gemini API error {response.status_code}: {response.text}")
 
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except Exception:
+            raise Exception(f"Gemini API error {response.status_code}: {response.text}") from None
         result = response.json()
 
         # Parse response
-        content = ""
+        text_parts = []
         tool_calls = []
         thought_signatures = []
 
@@ -198,7 +207,7 @@ class GeminiClient:
             if "content" in candidate and "parts" in candidate["content"]:
                 for part in candidate["content"]["parts"]:
                     if "text" in part:
-                        content = part["text"]
+                        text_parts.append(part["text"])
                     elif "functionCall" in part:
                         fc = part["functionCall"]
                         thought_sig = part.get("thoughtSignature")
@@ -212,7 +221,7 @@ class GeminiClient:
                         if thought_sig:
                             thought_signatures.append(thought_sig)
 
-        return GeminiMessage(content, tool_calls, thought_signatures)
+        return GeminiMessage("\n".join(text_parts), tool_calls, thought_signatures)
 
     @staticmethod
     def extract_text_content(message: Any) -> str:

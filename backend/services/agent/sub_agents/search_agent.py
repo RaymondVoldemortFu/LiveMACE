@@ -3,8 +3,6 @@ import logging
 import re
 from typing import Dict, Any, List, Optional
 
-from openai import OpenAI
-
 from config.tool_config import ToolConfig
 from services.agent.prompts.sub_agent_prompts import SUB_AGENT_SYSTEM_PROMPT
 from services.agent.llm_client import LLMClient

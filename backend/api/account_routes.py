@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 from datetime import datetime, timezone
 import logging
+import re
 import requests
 
 from database.connection import SessionLocal
@@ -565,7 +566,10 @@ async def test_llm_connection(payload: dict):
             }
         except Exception as e:
             error_msg = str(e)
-            logger.error(f"LLM test failed: {error_msg}")
+            # Redact potential API key from error message before logging/returning
+            safe_error = re.sub(r'key=[^&\s]+', 'key=***', error_msg)
+            safe_error = re.sub(r'Bearer [^\s]+', 'Bearer ***', safe_error)
+            logger.error(f"LLM test failed: {safe_error}")
 
             if "401" in error_msg or "authentication" in error_msg.lower():
                 return {"success": False, "message": "Authentication failed. Please check your API key."}
@@ -574,7 +578,7 @@ async def test_llm_connection(payload: dict):
             elif "timeout" in error_msg.lower():
                 return {"success": False, "message": "Request timed out. The LLM service may be unavailable."}
             else:
-                return {"success": False, "message": f"Connection test failed: {error_msg}"}
+                return {"success": False, "message": f"Connection test failed: {safe_error}"}
 
     except Exception as e:
         logger.error(f"Failed to test LLM connection: {e}", exc_info=True)
