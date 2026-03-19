@@ -7,6 +7,8 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 from datetime import datetime, timezone
 import logging
+import re
+import requests
 from openai import (
     APIConnectionError,
     APITimeoutError,
@@ -16,6 +18,7 @@ from openai import (
     RateLimitError,
     BadRequestError,
 )
+
 
 from database.connection import SessionLocal
 from database.models import Account, Position, Trade
@@ -550,6 +553,9 @@ async def test_llm_connection(payload: dict):
         model = (payload.get("model") or "").strip()
         base_url = (payload.get("base_url") or "").strip()
         api_key = (payload.get("api_key") or "").strip()
+        
+        logger.info(f"Testing LLM connection: model={model}, base_url={base_url}")
+
         timeout_seconds_raw = payload.get("timeout_seconds", 15)
         
         # Keep logs safe: never print full api key
@@ -561,17 +567,16 @@ async def test_llm_connection(payload: dict):
             timeout_seconds_raw,
         )
 
+
         if not model:
             return {"success": False, "message": "Model is required"}
         if not api_key:
-            logger.warning("LLM test failed: API key is required")
             return {"success": False, "message": "API key is required"}
-        
         if not base_url:
-            logger.warning("LLM test failed: Base URL is required")
             return {"success": False, "message": "Base URL is required"}
 
         # Use the same client path as real agent runtime.
+        # LLMClient is expected to handle both OpenAI-compatible endpoints and Gemini.
         # This also normalizes base_url formats like:
         # - https://host/v1
         # - https://host/v1/
@@ -590,19 +595,26 @@ async def test_llm_connection(payload: dict):
         try:
             client = LLMClient(model=model, api_key=api_key, base_url=base_url)
             content = client.test_connection(timeout_seconds=timeout_seconds)
+
             if content:
-                logger.info("LLM test successful for model=%s base_url=%s", model, normalized_base_url)
+                logger.info(
+                    "LLM test successful for model=%s base_url=%s",
+                    model,
+                    normalized_base_url,
+                )
                 return {
                     "success": True,
                     "message": f"Connection successful! Model {model} responded correctly.",
                     "response": content,
                     "normalized_base_url": normalized_base_url,
                 }
+
             return {
                 "success": False,
                 "message": "LLM responded but returned empty content.",
                 "normalized_base_url": normalized_base_url,
             }
+
         except APITimeoutError:
             return {
                 "success": False,
@@ -613,15 +625,35 @@ async def test_llm_connection(payload: dict):
                 "normalized_base_url": normalized_base_url,
             }
         except AuthenticationError:
-            return {"success": False, "message": "Authentication failed. Please check your API key."}
+            return {
+                "success": False,
+                "message": "Authentication failed. Please check your API key.",
+                "normalized_base_url": normalized_base_url,
+            }
         except PermissionDeniedError:
-            return {"success": False, "message": "Permission denied. API key may not access this model."}
+            return {
+                "success": False,
+                "message": "Permission denied. API key may not access this model.",
+                "normalized_base_url": normalized_base_url,
+            }
         except NotFoundError:
-            return {"success": False, "message": f"Model '{model}' not found or endpoint unavailable."}
+            return {
+                "success": False,
+                "message": f"Model '{model}' not found or endpoint unavailable.",
+                "normalized_base_url": normalized_base_url,
+            }
         except RateLimitError:
-            return {"success": False, "message": "Rate limit exceeded. Please try again later."}
+            return {
+                "success": False,
+                "message": "Rate limit exceeded. Please try again later.",
+                "normalized_base_url": normalized_base_url,
+            }
         except BadRequestError as e:
-            return {"success": False, "message": f"Invalid request: {str(e)}"}
+            return {
+                "success": False,
+                "message": f"Invalid request: {str(e)}",
+                "normalized_base_url": normalized_base_url,
+            }
         except APIConnectionError as e:
             return {
                 "success": False,
@@ -629,12 +661,13 @@ async def test_llm_connection(payload: dict):
                 "normalized_base_url": normalized_base_url,
             }
         except Exception as e:
+            logger.error(f"LLM test failed: {str(e)}", exc_info=True)
             return {
                 "success": False,
                 "message": f"Connection test failed: {str(e)}",
                 "normalized_base_url": normalized_base_url,
             }
-
+          
     except Exception as e:
         logger.error(f"Failed to test LLM connection: {e}", exc_info=True)
         return {"success": False, "message": f"Failed to test LLM connection: {str(e)}"}
