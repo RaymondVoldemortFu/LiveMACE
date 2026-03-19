@@ -36,7 +36,7 @@ MODEL_LIST = [
     "qwen3-max",
 ]
 
-DEFAULT_AGENT_TYPE = "react"
+DEFAULT_AGENT_TYPE = "advanced_multi_agent"
 DEFAULT_INITIAL_CAPITAL = Decimal("10000")
 
 

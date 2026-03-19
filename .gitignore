@@ -319,3 +319,6 @@ clear_*
 print_*
 toolenv
 data.db-journal
+chroma_db
+*.sqlite3
+
