@@ -218,7 +218,7 @@ class ReActAgent(BaseAgent):
             # 2) 没有工具调用，按协议处理最终输出
             text_content = content or ""
             if decision_protocol == "tool":
-                if text_content and termination_token in text_content:
+                if text_content and text_content.strip() == termination_token:
                     decision = {
                         "operation": "hold",
                         "symbol": "",

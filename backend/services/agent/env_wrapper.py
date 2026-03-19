@@ -252,7 +252,7 @@ def register_default_tools(registry, db: Session, account_id: int, trace_id: str
                     },
                     "size_mode": {
                         "type": "string",
-                        "enum": ["portion", "usd", "all_in", "close_all"],
+                        "enum": ["portion", "usd", "all_in"],
                         "default": "portion",
                         "description": "仓位计算方式"
                     },

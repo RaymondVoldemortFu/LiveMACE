@@ -73,6 +73,16 @@ def execute_trade_tool(
         if operation not in {"open", "close"}:
             return {"executed": False, "error": f"Unsupported operation: {operation}"}
 
+        if size_mode not in {"portion", "usd", "all_in", "close_all"}:
+            return {"executed": False, "error": f"Unsupported size_mode: {size_mode}"}
+
+        # close_all is a close-only sizing intent; reject ambiguous open calls explicitly.
+        if operation == "open" and size_mode == "close_all":
+            return {
+                "executed": False,
+                "error": "size_mode=close_all is only valid for closing positions",
+            }
+
         if direction not in {"long", "short"}:
             return {"executed": False, "error": "direction must be long or short"}
 
@@ -99,6 +109,48 @@ def execute_trade_tool(
             return {"executed": False, "error": f"Invalid price for {symbol}"}
 
         if operation == "open":
+            if market == "CRYPTO":
+                existing_position = (
+                    db.query(Position)
+                    .filter(
+                        Position.account_id == account.id,
+                        Position.symbol == symbol,
+                        Position.market == market,
+                    )
+                    .first()
+                )
+                if existing_position and float(existing_position.quantity or 0) > 0:
+                    existing_side = (existing_position.side or "").strip().upper()
+                    requested_side = "LONG" if direction == "long" else "SHORT"
+
+                    if not existing_side:
+                        return {
+                            "executed": False,
+                            "error": (
+                                f"Existing position for {symbol} has no side metadata. "
+                                "Please close it first before opening a new directional position."
+                            ),
+                        }
+
+                    if existing_side != requested_side:
+                        return {
+                            "executed": False,
+                            "error": (
+                                f"Cannot open {requested_side} while holding {existing_side} "
+                                f"on {symbol}. Please close the existing position first."
+                            ),
+                        }
+
+                    existing_leverage = int(getattr(existing_position, "leverage", 1) or 1)
+                    if existing_leverage != leverage:
+                        return {
+                            "executed": False,
+                            "error": (
+                                "Cannot add to position with different leverage. "
+                                f"Existing: {existing_leverage}x, requested: {leverage}x"
+                            ),
+                        }
+
             quantity, notional = _calc_open_size(
                 account=account,
                 price=price,
