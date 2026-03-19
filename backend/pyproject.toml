@@ -24,7 +24,7 @@ dependencies = [
     "torch",
     "sentence-transformers",
     "chromadb",
-    "pinecone-client",
+    "pinecone",
 ]
 
 [[tool.uv.index]]
