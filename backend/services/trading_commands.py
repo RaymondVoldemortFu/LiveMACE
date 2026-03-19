@@ -362,6 +362,22 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
                     )
                     
                     if existing_position and float(existing_position.quantity) > 0:
+                        if existing_position.side is None:
+                            logger.warning(
+                                f"Cannot open {direction} position on {symbol} - existing spot position has side=None."
+                            )
+                            _log_trade_execution(
+                                operation,
+                                symbol,
+                                target_portion,
+                                price,
+                                leverage,
+                                False,
+                                "Existing CRYPTO spot position (side=None); blocking additional open to avoid overwrite",
+                            )
+                            save_ai_decision(db, account.id, decision, portfolio, executed=False)
+                            continue
+
                         existing_side = (existing_position.side or "LONG").lower()
                         if existing_side != direction:
                             logger.warning(
