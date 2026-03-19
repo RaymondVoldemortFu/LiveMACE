@@ -9,6 +9,7 @@ from services.agent.sub_agents.search_agent import SearchSubAgent
 from services.container_service import ContainerService
 from config.agent_config import AgentConfig
 from .memory_tools import create_memory_tools
+from services.agent.trade_execution_tool import execute_trade_tool
 
 
 def map_operation_side(operation: str, direction: str):
@@ -214,6 +215,76 @@ def register_default_tools(registry, db: Session, account_id: int, trace_id: str
         memory_add_tool, memory_search_tool = create_memory_tools(db, trace_id=trace_id)
         registry.register(memory_add_tool)
         registry.register(memory_search_tool)
+
+    registry.register(
+        Tool(
+            name="execute_trade",
+            description=(
+                "执行真实交易（会立即下单）。支持多种决策模式："
+                "1) size_mode=portion + target_portion_of_balance（按比例）；"
+                "2) size_mode=usd + usd_amount（按美元）；"
+                "3) operation=all_in（全仓买入/做空）；"
+                "4) operation=close_all（清仓）。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "operation": {
+                        "type": "string",
+                        "enum": ["open", "close", "hold", "all_in", "close_all"],
+                        "description": "交易操作"
+                    },
+                    "symbol": {
+                        "type": "string",
+                        "description": "交易标的，close_all 且清全部时可省略"
+                    },
+                    "market": {
+                        "type": "string",
+                        "enum": ["CRYPTO", "US"],
+                        "default": "CRYPTO",
+                        "description": "市场类型"
+                    },
+                    "direction": {
+                        "type": "string",
+                        "enum": ["long", "short"],
+                        "default": "long",
+                        "description": "方向"
+                    },
+                    "size_mode": {
+                        "type": "string",
+                        "enum": ["portion", "usd", "all_in", "close_all"],
+                        "default": "portion",
+                        "description": "仓位计算方式"
+                    },
+                    "target_portion_of_balance": {
+                        "type": "number",
+                        "description": "比例模式下的仓位比例 [0,1]"
+                    },
+                    "usd_amount": {
+                        "type": "number",
+                        "description": "美元模式下的交易金额"
+                    },
+                    "close_ratio": {
+                        "type": "number",
+                        "description": "平仓比例 [0,1]，用于 close + portion"
+                    },
+                    "leverage": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 10,
+                        "default": 1,
+                        "description": "杠杆倍数（US 市场会自动使用 1）"
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "本次执行原因（用于日志）"
+                    }
+                },
+                "required": ["operation"]
+            },
+            func=lambda **kwargs: execute_trade_tool(db=db, account_id=account_id, **kwargs)
+        )
+    )
 
 
 def _run_python_helper(service, account_id, content):

@@ -261,7 +261,26 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
                 logger.warning(f"Invalid decision payload for account {account.name}, skipping")
                 continue
 
+            # New protocol: when decision comes from tool-mode, trades are already executed
+            # inside the agent via execute_trade. Avoid duplicate execution.
+            decision_protocol = str(decision.get("protocol", "")).strip().lower()
+            if decision_protocol == "tool" or "executed_trades" in decision:
+                executed_trades = decision.get("executed_trades", [])
+                logger.info(
+                    f"Tool-mode decision received for account={account.name}, executed_trade_calls={len(executed_trades)}"
+                )
+                # Persist a summary decision row so trace history can surface this session.
+                # Trades may already be logged by execute_trade, but those rows don't carry trace_id.
+                try:
+                    save_ai_decision(db, account.id, decision, portfolio, executed=True)
+                except Exception as save_err:
+                    logger.warning(
+                        f"Failed to save tool-mode summary decision for account={account.name}: {save_err}"
+                    )
+                continue
+
             try:
+                account_id = account.id
                 # Extract account info
                 account_name = account.name
                 account_current_cash = float(account.current_cash)
@@ -335,7 +354,7 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
 
                 # Calculate quantity based on operation
                 if operation == "open":
-                    # Check if there's already a position on this coin (ONE position per coin rule)
+                    # Legacy mode fix: allow adding to same-side position, block only opposite side.
                     existing_position = (
                         db.query(Position)
                         .filter(Position.account_id == account.id, Position.symbol == symbol, Position.market == "CRYPTO")
@@ -343,10 +362,33 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
                     )
                     
                     if existing_position and float(existing_position.quantity) > 0:
-                        logger.warning(f"Cannot open {direction} position on {symbol} - already have a {existing_position.side} position. Only ONE position per coin allowed. Close existing position first.")
-                        _log_trade_execution(operation, symbol, target_portion, price, leverage, False, f"Position exists: {existing_position.side}")
-                        save_ai_decision(db, account.id, decision, portfolio, executed=False)
-                        continue
+                        if existing_position.side is None:
+                            logger.warning(
+                                f"Cannot open {direction} position on {symbol} - existing spot position has side=None."
+                            )
+                            _log_trade_execution(
+                                operation,
+                                symbol,
+                                target_portion,
+                                price,
+                                leverage,
+                                False,
+                                "Existing CRYPTO spot position (side=None); blocking additional open to avoid overwrite",
+                            )
+                            save_ai_decision(db, account.id, decision, portfolio, executed=False)
+                            continue
+
+                        existing_side = (existing_position.side or "LONG").lower()
+                        if existing_side != direction:
+                            logger.warning(
+                                f"Cannot open {direction} position on {symbol} - already holding {existing_side}."
+                            )
+                            _log_trade_execution(
+                                operation, symbol, target_portion, price, leverage, False,
+                                f"Opposite position exists: {existing_position.side}"
+                            )
+                            save_ai_decision(db, account.id, decision, portfolio, executed=False)
+                            continue
 
                     # Open a new position - calculate quantity based on available cash and target portion
                     available_cash = float(account.current_cash)

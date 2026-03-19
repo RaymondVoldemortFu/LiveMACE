@@ -113,8 +113,25 @@ def place_and_execute_crypto(
     
     # Handle different order sides
     if side.upper() in ("LONG", "SHORT"):
-        # Opening a leveraged position
-        is_long = side.upper() == "LONG"
+        # Opening or adding to an existing position
+        side_upper = side.upper()
+        has_active_position = bool(pos and pos.side and Decimal(str(pos.quantity or 0)) > 0)
+
+        if has_active_position:
+            if pos.side != side_upper:
+                raise ValueError(
+                    f"Cannot open {side_upper} position while holding {pos.side} position. Close existing position first."
+                )
+
+            existing_leverage = int(pos.leverage or 1)
+            if existing_leverage != leverage:
+                raise ValueError(
+                    f"Cannot add to position with different leverage. Existing: {existing_leverage}x, requested: {leverage}x"
+                )
+
+            # For leveraged positions, settle accumulated interest before adding.
+            if existing_leverage > 1:
+                interest_charged = _calculate_position_interest(pos)
         
         # Calculate margin required
         initial_margin = notional / Decimal(leverage)
@@ -122,38 +139,30 @@ def place_and_execute_crypto(
         
         # Check if enough cash
         available_cash = Decimal(str(account.current_cash))
-        if available_cash < total_cost:
-            raise ValueError(f"Insufficient cash. Need {total_cost}, have {available_cash}")
+        required_cash = total_cost + interest_charged
+        if available_cash < required_cash:
+            raise ValueError(f"Insufficient cash. Need {required_cash}, have {available_cash}")
         
-        # Deduct margin and fee from cash
-        account.current_cash = float(available_cash - total_cost)
+        if interest_charged > 0:
+            pos.accumulated_interest = float(Decimal(str(pos.accumulated_interest)) + interest_charged)
+
+        # Deduct margin, fee and (if any) interest from cash
+        account.current_cash = float(available_cash - required_cash)
         
         # Only track margin for leveraged positions (leverage > 1)
         if leverage > 1:
             account.margin_used = float(Decimal(str(account.margin_used)) + initial_margin)
         
-        if pos and pos.leverage > 1 and pos.side:
-            # Has existing leveraged position - calculate interest before modifying
-            interest_charged = _calculate_position_interest(pos)
-            if interest_charged > 0:
-                pos.accumulated_interest = float(Decimal(str(pos.accumulated_interest)) + interest_charged)
-                # Deduct interest from cash
-                if Decimal(str(account.current_cash)) < interest_charged:
-                    raise ValueError(f"Insufficient cash for interest payment: {interest_charged}")
-                account.current_cash = float(Decimal(str(account.current_cash)) - interest_charged)
-            
-            # Check if adding to same side
-            if pos.side == side.upper():
-                # Adding to existing position - calculate new weighted average
-                old_notional = Decimal(str(pos.quantity)) * Decimal(str(pos.avg_cost))
-                new_qty = Decimal(str(pos.quantity)) + Decimal(str(quantity))
-                new_cost = (old_notional + notional) / new_qty
-                pos.quantity = float(new_qty)
-                pos.avg_cost = float(new_cost)
-                # Weighted average leverage
-                pos.leverage = int((old_notional * pos.leverage + notional * leverage) / (old_notional + notional))
-            else:
-                raise ValueError(f"Cannot open {side} position while holding {pos.side} position. Close existing position first.")
+        if has_active_position:
+            # Adding to existing same-side/same-leverage position - weighted avg cost + quantity increment.
+            old_notional = Decimal(str(pos.quantity)) * Decimal(str(pos.avg_cost))
+            new_qty = Decimal(str(pos.quantity)) + Decimal(str(quantity))
+            new_cost = (old_notional + notional) / new_qty
+            pos.quantity = float(new_qty)
+            pos.available_quantity = float(Decimal(str(pos.available_quantity or 0)) + Decimal(str(quantity)))
+            pos.avg_cost = float(new_cost)
+            pos.leverage = leverage
+            pos.side = side_upper
         else:
             # Create new position or convert spot to leveraged
             if not pos:
@@ -176,7 +185,7 @@ def place_and_execute_crypto(
             pos.available_quantity = quantity
             pos.avg_cost = float(exec_price)
             pos.leverage = leverage
-            pos.side = side.upper()
+            pos.side = side_upper
 
         # Update interest timestamp
         pos.last_interest_time = now_utc()
