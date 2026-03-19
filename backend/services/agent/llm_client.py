@@ -1,5 +1,5 @@
 # services/agent/llm_client.py
-from typing import Any
+from typing import Any, Optional
 
 from openai import OpenAI
 from services.agent.gemini_client import GeminiClient
@@ -52,7 +52,7 @@ class LLMClient:
                 self.client = OpenAI(api_key=api_key)
             self.is_gemini = False
 
-    def call(self, messages, tools=None):
+    def call(self, messages, tools=None, timeout: Optional[float] = None):
         """
         统一的 LLM 调用入口，支持 tools（函数调用）
         直接返回 OpenAI 的 ChatCompletionMessage 对象，便于后续追加到 messages 历史中。
@@ -60,13 +60,18 @@ class LLMClient:
         if self.is_gemini:
             # Gemini 客户端返回 GeminiMessage，已兼容 OpenAI 格式
             return self.client.call(messages, tools)
+        kwargs = {
+            "model": self.model,
+            "messages": messages,
+            "tools": tools,
+            "temperature": 0.4,
+            "max_tokens": 4000,  # Increased from 800 to allow longer responses
+        }
+        if timeout is not None:
+            kwargs["timeout"] = timeout
 
         response = self.client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-            tools=tools,
-            temperature=0.4,
-            max_tokens=4000,  # Increased from 800 to allow longer responses
+            **kwargs
         )
 
         return response.choices[0].message
@@ -103,7 +108,7 @@ class LLMClient:
 
         return str(content).strip() if content is not None else ""
 
-    def test_connection(self) -> str:
+    def test_connection(self, timeout_seconds: Optional[float] = 15.0) -> str:
         """
         使用与运行时一致的 OpenAI SDK 调用测试模型连通性。
         返回模型响应文本，调用失败时直接抛出异常。
@@ -115,6 +120,7 @@ class LLMClient:
             messages=[
                 {"role": "system", "content": "You are a helpful assistant."},
                 {"role": "user", "content": "Reply exactly with: Connection test successful"},
-            ]
+            ],
+            timeout=timeout_seconds,
         )
         return self.extract_text_content(message)

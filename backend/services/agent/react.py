@@ -16,8 +16,6 @@ logger = logging.getLogger(__name__)
 llm_logger = logging.getLogger("llm_trace")
 agent_logger = logging.getLogger("agent_decision")
 
-SYSTEM_PROMPT = None
-
 class ReActAgent(BaseAgent):
     def __init__(self, llm: LLMClient, tools: ToolRegistry, max_steps: int = AgentConfig.MAX_STEPS, user_id: str = None):
         super().__init__(llm, tools)
@@ -68,9 +66,25 @@ class ReActAgent(BaseAgent):
         # Get current UTC+8 time
         tz_utc_8 = timezone(timedelta(hours=8))
         current_time = now_in_tz(tz_utc_8).strftime("%Y-%m-%d %H:%M:%S")
-        
-        # Add time context to system prompt
+
+        decision_protocol = (getattr(AgentConfig, "TRADE_DECISION_PROTOCOL", "tool") or "tool").strip().lower()
+        termination_token = getattr(AgentConfig, "AGENT_TRADE_TERMINATION_TOKEN", "<TRADE_DONE>")
+
+        # Add time context and runtime protocol to system prompt
         system_prompt_with_time = f"{system_prompt}\n\nCurrent Time (UTC+8): {current_time}"
+        if decision_protocol == "tool":
+            system_prompt_with_time += (
+                "\n\nRuntime Protocol: TOOL MODE (default)\n"
+                "You MUST execute real trading actions via the execute_trade tool.\n"
+                "You may call execute_trade multiple times.\n"
+                f"When done, output ONLY this exact token: {termination_token}\n"
+                "Do NOT output <FINAL_JSON> in TOOL MODE.\n"
+            )
+        else:
+            system_prompt_with_time += (
+                "\n\nRuntime Protocol: LEGACY FINAL_JSON MODE\n"
+                "You must output final decision wrapped by <FINAL_JSON>...</FINAL_JSON>.\n"
+            )
 
         messages: List[Dict[str, Any]] = [
             {"role": "system", "content": system_prompt_with_time},
@@ -87,6 +101,7 @@ class ReActAgent(BaseAgent):
         ]
 
         decision = None
+        executed_trades: List[Dict[str, Any]] = []
 
         for step in range(self.max_steps):
             # Check if we need to remind the agent about remaining steps
@@ -95,9 +110,15 @@ class ReActAgent(BaseAgent):
 
             if remaining_steps < AgentConfig.STEP_REMINDER_THRESHOLD:
                 logger.info(f"Adding step reminder (Remaining: {remaining_steps})")
+                reminder_text = (
+                    f"Reminder: You have {remaining_steps} steps remaining. "
+                    f"You must output {termination_token} before running out of steps."
+                    if decision_protocol == "tool"
+                    else f"Reminder: You have {remaining_steps} steps remaining. You must output <FINAL_JSON> before running out of steps."
+                )
                 request_messages.append({
                     "role": "user",
-                    "content": f"Reminder: You have {remaining_steps} steps remaining. You must output <FINAL_JSON> before running out of steps."
+                    "content": reminder_text,
                 })
 
             # Requirement 1: Log raw LLM request
@@ -180,6 +201,8 @@ class ReActAgent(BaseAgent):
 
                     # Log tool result
                     agent_logger.info(f"Tool '{name}' result: {json.dumps(result, ensure_ascii=False)}")
+                    if name == "execute_trade":
+                        executed_trades.append(result if isinstance(result, dict) else {"raw_result": str(result)})
 
                     tool_msg = {
                         "role": "tool",
@@ -192,33 +215,57 @@ class ReActAgent(BaseAgent):
                         on_step(tool_msg)
                 continue
 
-            # 2) 没有工具调用，视为最终决策，尝试解析 JSON
-            # 优先检查是否有 <FINAL_JSON> 标签
-            if content:
-                match = re.search(r"<FINAL_JSON>(.*?)</FINAL_JSON>", content, re.DOTALL)
+            # 2) 没有工具调用，按协议处理最终输出
+            text_content = content or ""
+            if decision_protocol == "tool":
+                if text_content and text_content.strip() == termination_token:
+                    decision = {
+                        "operation": "hold",
+                        "symbol": "",
+                        "direction": "long",
+                        "target_portion_of_balance": 0.0,
+                        "leverage": 1,
+                        "reason": f"Tool-mode terminated by token {termination_token}",
+                        "protocol": "tool",
+                        "executed_trades": executed_trades,
+                    }
+                    logger.info(
+                        f"Agent terminated tool-mode loop with token. executed_trade_calls={len(executed_trades)}"
+                    )
+                    agent_logger.info(f"Tool-mode final summary: {json.dumps(decision, ensure_ascii=False)}")
+                    break
+
+                if not text_content:
+                    error_msg = "LLM returned empty content and no tool calls in tool mode"
+                    logger.error(error_msg)
+                    agent_logger.error(error_msg)
+                    raise ValueError(error_msg)
+
+                logger.info("Tool mode: waiting for termination token, continue next step.")
+                continue
+
+            # Legacy FINAL_JSON mode
+            if text_content:
+                match = re.search(r"<FINAL_JSON>(.*?)</FINAL_JSON>", text_content, re.DOTALL)
                 if match:
                     json_str = match.group(1).strip()
                     try:
                         decision = json.loads(json_str)
 
-                        # Log final decision
                         logger.info(f"Agent reached final decision: {decision.get('operation')} {decision.get('symbol', '')}")
                         agent_logger.info(f"Final Decision Parsed: {json.dumps(decision, ensure_ascii=False)}")
 
-                        # 简单做一下字段兜底，保持与旧逻辑兼容
+                        # Keep compatibility with previous decision handling
                         if "leverage" not in decision or not decision["leverage"]:
                             decision["leverage"] = 1
                         if "direction" not in decision or not decision["direction"]:
                             decision["direction"] = "long"
                         else:
                             decision["direction"] = decision["direction"].lower()
-
-                        break # Decision found, exit loop
+                        break
                     except json.JSONDecodeError as e:
-                        # 如果解析失败，使用默认 (Fallback HOLD)
                         logger.error(f"Failed to parse decision JSON within <FINAL_JSON>: {e}. Returning fallback HOLD.")
                         agent_logger.error(f"JSON Parse Error in <FINAL_JSON>: {e}. Content: {json_str}")
-                        # Return fallback directly
                         decision = {
                             "operation": "hold",
                             "symbol": "",
@@ -228,18 +275,14 @@ class ReActAgent(BaseAgent):
                             "reason": "JSON Parse Error in <FINAL_JSON>, fallback hold",
                         }
                         break
-
-            # 如果没有工具调用，且没有 <FINAL_JSON>，且没有内容 -> 异常
-            if not tool_calls and not content:
+            else:
                 error_msg = "LLM returned empty content and no tool calls"
                 logger.error(error_msg)
                 agent_logger.error(error_msg)
                 raise ValueError(error_msg)
 
-            # 如果没有工具调用，且没有 <FINAL_JSON>，但有内容 -> 视为中间思考过程，继续循环
-            if not tool_calls:
-                logger.info("No tool calls and no <FINAL_JSON> found. Continuing conversation (thought step).")
-                continue
+            logger.info("No tool calls and no <FINAL_JSON> found. Continuing conversation (thought step).")
+            continue
 
         # If loop finished without break (max steps reached)
         if decision is None:
@@ -254,5 +297,8 @@ class ReActAgent(BaseAgent):
                 "leverage": 1,
                 "reason": "max_steps reached, fallback hold",
             }
+            if decision_protocol == "tool":
+                decision["protocol"] = "tool"
+                decision["executed_trades"] = executed_trades
 
         return decision

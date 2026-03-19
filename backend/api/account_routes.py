@@ -9,6 +9,16 @@ from datetime import datetime, timezone
 import logging
 import re
 import requests
+from openai import (
+    APIConnectionError,
+    APITimeoutError,
+    AuthenticationError,
+    PermissionDeniedError,
+    NotFoundError,
+    RateLimitError,
+    BadRequestError,
+)
+
 
 from database.connection import SessionLocal
 from database.models import Account, Position, Trade
@@ -543,8 +553,20 @@ async def test_llm_connection(payload: dict):
         model = (payload.get("model") or "").strip()
         base_url = (payload.get("base_url") or "").strip()
         api_key = (payload.get("api_key") or "").strip()
-
+        
         logger.info(f"Testing LLM connection: model={model}, base_url={base_url}")
+
+        timeout_seconds_raw = payload.get("timeout_seconds", 15)
+        
+        # Keep logs safe: never print full api key
+        logger.info(
+            "Testing LLM connection with payload keys: model=%s base_url=%s api_key_length=%s timeout_seconds=%s",
+            model,
+            base_url,
+            len(api_key) if api_key else 0,
+            timeout_seconds_raw,
+        )
+
 
         if not model:
             return {"success": False, "message": "Model is required"}
@@ -553,33 +575,99 @@ async def test_llm_connection(payload: dict):
         if not base_url:
             return {"success": False, "message": "Base URL is required"}
 
-        # Use LLMClient which handles both OpenAI and Gemini
-        try:
-            llm = LLMClient(model=model, api_key=api_key, base_url=base_url)
-            response_text = llm.test_connection()
+        # Use the same client path as real agent runtime.
+        # LLMClient is expected to handle both OpenAI-compatible endpoints and Gemini.
+        # This also normalizes base_url formats like:
+        # - https://host/v1
+        # - https://host/v1/
+        # - https://host/v1/chat/completions
+        normalized_base_url = LLMClient.normalize_base_url(base_url)
+        timeout_seconds = float(timeout_seconds_raw) if timeout_seconds_raw is not None else 15.0
+        timeout_seconds = max(3.0, min(timeout_seconds, 120.0))
 
-            logger.info(f"LLM test successful for model {model}")
+        logger.info(
+            "LLM test params: model=%s normalized_base_url=%s timeout=%ss",
+            model,
+            normalized_base_url,
+            timeout_seconds,
+        )
+
+        try:
+            client = LLMClient(model=model, api_key=api_key, base_url=base_url)
+            content = client.test_connection(timeout_seconds=timeout_seconds)
+
+            if content:
+                logger.info(
+                    "LLM test successful for model=%s base_url=%s",
+                    model,
+                    normalized_base_url,
+                )
+                return {
+                    "success": True,
+                    "message": f"Connection successful! Model {model} responded correctly.",
+                    "response": content,
+                    "normalized_base_url": normalized_base_url,
+                }
+
             return {
-                "success": True,
-                "message": f"Connection successful! Model {model} responded correctly.",
-                "response": response_text
+                "success": False,
+                "message": "LLM responded but returned empty content.",
+                "normalized_base_url": normalized_base_url,
+            }
+
+        except APITimeoutError:
+            return {
+                "success": False,
+                "message": (
+                    f"Request timed out after {timeout_seconds:.0f}s. "
+                    "Please verify endpoint responsiveness or increase timeout_seconds."
+                ),
+                "normalized_base_url": normalized_base_url,
+            }
+        except AuthenticationError:
+            return {
+                "success": False,
+                "message": "Authentication failed. Please check your API key.",
+                "normalized_base_url": normalized_base_url,
+            }
+        except PermissionDeniedError:
+            return {
+                "success": False,
+                "message": "Permission denied. API key may not access this model.",
+                "normalized_base_url": normalized_base_url,
+            }
+        except NotFoundError:
+            return {
+                "success": False,
+                "message": f"Model '{model}' not found or endpoint unavailable.",
+                "normalized_base_url": normalized_base_url,
+            }
+        except RateLimitError:
+            return {
+                "success": False,
+                "message": "Rate limit exceeded. Please try again later.",
+                "normalized_base_url": normalized_base_url,
+            }
+        except BadRequestError as e:
+            return {
+                "success": False,
+                "message": f"Invalid request: {str(e)}",
+                "normalized_base_url": normalized_base_url,
+            }
+        except APIConnectionError as e:
+            return {
+                "success": False,
+                "message": f"Failed to connect to {normalized_base_url}. Error: {str(e)}",
+                "normalized_base_url": normalized_base_url,
             }
         except Exception as e:
-            error_msg = str(e)
-            # Redact potential API key from error message before logging/returning
-            safe_error = re.sub(r'key=[^&\s]+', 'key=***', error_msg)
-            safe_error = re.sub(r'Bearer [^\s]+', 'Bearer ***', safe_error)
-            logger.error(f"LLM test failed: {safe_error}")
-
-            if "401" in error_msg or "authentication" in error_msg.lower():
-                return {"success": False, "message": "Authentication failed. Please check your API key."}
-            elif "404" in error_msg:
-                return {"success": False, "message": f"Model '{model}' not found or endpoint not available."}
-            elif "timeout" in error_msg.lower():
-                return {"success": False, "message": "Request timed out. The LLM service may be unavailable."}
-            else:
-                return {"success": False, "message": f"Connection test failed: {safe_error}"}
-
+            logger.error(f"LLM test failed: {str(e)}", exc_info=True)
+            return {
+                "success": False,
+                "message": f"Connection test failed: {str(e)}",
+                "normalized_base_url": normalized_base_url,
+            }
+          
     except Exception as e:
         logger.error(f"Failed to test LLM connection: {e}", exc_info=True)
         return {"success": False, "message": f"Failed to test LLM connection: {str(e)}"}
