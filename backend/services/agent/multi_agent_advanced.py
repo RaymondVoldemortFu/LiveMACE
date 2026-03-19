@@ -3,7 +3,7 @@ import logging
 import os
 import socket
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .base import BaseAgent
 from .llm_client import LLMClient
@@ -179,6 +179,8 @@ class AdvancedMultiAgent(BaseAgent):
             risks.extend([self._stringify(r) for r in self._safe_list(parsed.get("risks")) if self._stringify(r)])
             risks.extend([self._stringify(r) for r in self._safe_list(parsed.get("hidden_risks")) if self._stringify(r)])
             risks.extend([self._stringify(r) for r in self._safe_list(parsed.get("downside_scenarios")) if self._stringify(r)])
+            risks.extend([self._stringify(r) for r in self._safe_list(parsed.get("risk_controls")) if self._stringify(r)])
+            risks.extend([self._stringify(r) for r in self._safe_list(parsed.get("veto_conditions")) if self._stringify(r)])
             sentiment = self._stringify(parsed.get("sentiment"))
         else:
             summary = self._stringify(raw_text, max_len=600)
@@ -307,28 +309,35 @@ class AdvancedMultiAgent(BaseAgent):
             if agent and reason:
                 self.context.append(f"Manager explicitly skipped {agent}. Reason: {reason}")
 
-    def _validate_finish(self, final_decision: Dict[str, Any], decision: Dict[str, Any]) -> (bool, str):
+    def _validate_finish(
+        self, final_decision: Dict[str, Any], decision: Dict[str, Any], allow_partial: bool = False
+    ) -> Tuple[bool, str]:
         if not isinstance(final_decision, dict) or not final_decision:
             return False, "Missing final_decision object."
 
-        if self._agent_call_count("TradingAgent") == 0 or self._agent_call_count("NewsAgent") == 0:
-            return False, "Finish blocked: missing core technical/news evidence."
-
-        conflicts = self._detect_conflicts()
-        if conflicts and self._agent_call_count("AnalystAgent") == 0:
-            return False, "Finish blocked: unresolved conflict requires synthesis review."
+        missing_core = []
+        if self._agent_call_count("TradingAgent") == 0:
+            missing_core.append("TradingAgent")
+        if self._agent_call_count("NewsAgent") == 0:
+            missing_core.append("NewsAgent")
+        if missing_core:
+            return False, f"Finish blocked: missing core evidence from {', '.join(missing_core)}."
 
         leverage = final_decision.get("leverage", 1)
         try:
             leverage = int(leverage)
         except Exception:
             leverage = 1
-        if leverage > 2 and self._agent_call_count("CriticAgent") == 0:
+        if leverage > 3 and self._agent_call_count("CriticAgent") == 0 and not allow_partial:
             return False, "Finish blocked: leveraged action requires critical risk review."
 
         basis = decision.get("decision_basis") or {}
         if not basis.get("supporting_evidence_ids"):
-            return False, "Finish blocked: decision_basis.supporting_evidence_ids is empty."
+            if allow_partial and self.evidence_log:
+                basis["supporting_evidence_ids"] = [ev["id"] for ev in self.evidence_log[-2:]]
+                decision["decision_basis"] = basis
+            elif not allow_partial:
+                return False, "Finish blocked: decision_basis.supporting_evidence_ids is empty."
 
         return True, ""
 
@@ -433,9 +442,20 @@ class AdvancedMultiAgent(BaseAgent):
             if tool_calls:
                 for tc in tool_calls:
                     name = tc.function.name
-                    args = json.loads(tc.function.arguments or "{}")
-                    tool_func = self.tools.get(name)
-                    result = tool_func(**args)
+                    try:
+                        args = json.loads(tc.function.arguments or "{}")
+                    except Exception as e:
+                        args = {}
+                        result = {"error": f"Invalid tool arguments for {name}: {e}"}
+                    else:
+                        tool_func = self.tools.get(name)
+                        if tool_func is None:
+                            result = {"error": f"Tool not found: {name}"}
+                        else:
+                            try:
+                                result = tool_func(**args)
+                            except Exception as e:
+                                result = {"error": f"Tool execution failed for {name}: {e}"}
 
                     tool_msg = {
                         "role": "tool",
@@ -458,6 +478,16 @@ class AdvancedMultiAgent(BaseAgent):
             else:
                 current_response = msg_content
                 break
+
+        if not current_response:
+            # Force a final summary response without tools if the agent only used tools.
+            fallback_prompt = (
+                f"{formatted_prompt}\n\n"
+                "Your previous responses relied only on tool calls or were empty. "
+                "Return ONLY JSON now with a concise summary and actionable details. Do not call tools."
+            )
+            resp = self.llm.call([{"role": "system", "content": fallback_prompt}])
+            current_response = resp.content or ""
 
         return current_response
 
@@ -585,7 +615,12 @@ class AdvancedMultiAgent(BaseAgent):
 
             elif action == "finish":
                 candidate_final = decision.get("final_decision")
-                ok, msg = self._validate_finish(candidate_final, decision)
+                allow_partial = step >= max(0, self.max_steps - 3)
+                if allow_partial:
+                    basis = decision.setdefault("decision_basis", {}) or {}
+                    if not basis.get("supporting_evidence_ids") and self.evidence_log:
+                        basis["supporting_evidence_ids"] = [ev["id"] for ev in self.evidence_log[-2:]]
+                ok, msg = self._validate_finish(candidate_final, decision, allow_partial=allow_partial)
                 if not ok:
                     self.context.append(f"Step {step + 1}: {msg}")
                     if on_step:

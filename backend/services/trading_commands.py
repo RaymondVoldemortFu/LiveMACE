@@ -42,6 +42,7 @@ _buy_hold_baseline = BuyHoldBaseline()
 _grid_baseline = GridBaseline()
 
 US_TRADING_SYMBOLS = list(US_TRADING_SYMBOLS)
+AGENT_DECISION_TYPES = {"react", "multi_agent", "advanced_multi_agent"}
 
 
 def _infer_market(symbol: str, decision_market: Optional[str]) -> str:
@@ -206,7 +207,7 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
 
         agent_accounts = [
             a for a in accounts
-            if (getattr(a, "agent_type", "react") in {"react", "multi_agent"})
+            if str(getattr(a, "agent_type", "react") or "react").strip().lower() in AGENT_DECISION_TYPES
         ]
         if agent_accounts:
             with ThreadPoolExecutor(max_workers=min(concurrency, len(agent_accounts))) as executor:
@@ -250,7 +251,7 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
                 continue
 
             account_agent_type = str(getattr(account, "agent_type", "react") or "react").strip().lower()
-            if account_agent_type not in {"react", "multi_agent"}:
+            if account_agent_type not in AGENT_DECISION_TYPES:
                 # Baselines are handled above.
                 continue
 

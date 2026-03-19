@@ -47,17 +47,18 @@ interface AIAccountCreate extends TradingAccountCreate {
   enable_rule_aware?: boolean
 }
 
-const AGENT_TYPE_LABELS: Record<string, string> = {
-  multi_agent: 'Multi-Agent',
-  advanced_multi_agent: 'Advanced Multi-Agent System',
-  buy_hold: 'Baseline: Buy & Hold',
-  grid: 'Baseline: Grid Trading',
-  react: 'ReAct',
-}
+const AGENT_TYPE_OPTIONS = [
+  { value: 'react', label: 'ReAct Agent' },
+  { value: 'multi_agent', label: 'Multi-Agent System' },
+  { value: 'advanced_multi_agent', label: 'Advanced Multi-Agent System' },
+  { value: 'buy_hold', label: 'Baseline: Buy & Hold' },
+  { value: 'grid', label: 'Baseline: Grid Trading' },
+]
 
 const getAgentTypeLabel = (agentType?: string) => {
-  const key = (agentType || 'react').toLowerCase()
-  return AGENT_TYPE_LABELS[key] || AGENT_TYPE_LABELS.react
+  const normalizedAgentType = (agentType || '').trim().toLowerCase()
+  const matched = AGENT_TYPE_OPTIONS.find((option) => option.value === normalizedAgentType)
+  return matched?.label || 'ReAct Agent'
 }
 
 export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }: SettingsDialogProps) {
@@ -346,11 +347,11 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
                               <SelectValue placeholder="Agent Type" />
                             </SelectTrigger>
                             <SelectContent>
-                              <SelectItem value="react">ReAct Agent</SelectItem>
-                              <SelectItem value="multi_agent">Multi-Agent System</SelectItem>
-                              <SelectItem value="advanced_multi_agent">Advanced Multi-Agent System</SelectItem>
-                              <SelectItem value="buy_hold">Baseline: Buy & Hold</SelectItem>
-                              <SelectItem value="grid">Baseline: Grid Trading</SelectItem>
+                              {AGENT_TYPE_OPTIONS.map((option) => (
+                                <SelectItem key={option.value} value={option.value}>
+                                  {option.label}
+                                </SelectItem>
+                              ))}
                             </SelectContent>
                           </Select>
                         </div>
@@ -478,11 +479,11 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
                       <SelectValue placeholder="Agent Type" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="react">ReAct Agent</SelectItem>
-                      <SelectItem value="multi_agent">Multi-Agent System</SelectItem>
-                      <SelectItem value="advanced_multi_agent">Advanced Multi-Agent System</SelectItem>
-                      <SelectItem value="buy_hold">Baseline: Buy & Hold</SelectItem>
-                      <SelectItem value="grid">Baseline: Grid Trading</SelectItem>
+                      {AGENT_TYPE_OPTIONS.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                 </div>

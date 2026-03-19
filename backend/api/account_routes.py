@@ -545,6 +545,13 @@ async def get_asset_curve_by_timeframe(
         logger.error(f"Failed to get asset curve for timeframe: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to get asset curve for timeframe: {str(e)}")
 
+def _map_status_code_to_message(status_code, model):
+    return {
+        401: "Authentication failed. Please check your API key.",
+        403: f"Permission denied for model '{model}'.",
+        404: f"Model '{model}' not found or endpoint not available.",
+        429: "Rate limit exceeded. Please try again later."
+    }.get(status_code, f"HTTP {status_code} error")
 
 @router.post("/test-llm")
 async def test_llm_connection(payload: dict):
@@ -627,25 +634,25 @@ async def test_llm_connection(payload: dict):
         except AuthenticationError:
             return {
                 "success": False,
-                "message": "Authentication failed. Please check your API key.",
+                "message": _map_status_code_to_message(401, model),
                 "normalized_base_url": normalized_base_url,
             }
         except PermissionDeniedError:
             return {
                 "success": False,
-                "message": "Permission denied. API key may not access this model.",
+                "message": _map_status_code_to_message(403, model),
                 "normalized_base_url": normalized_base_url,
             }
         except NotFoundError:
             return {
                 "success": False,
-                "message": f"Model '{model}' not found or endpoint unavailable.",
+                "message": _map_status_code_to_message(404, model),
                 "normalized_base_url": normalized_base_url,
             }
         except RateLimitError:
             return {
                 "success": False,
-                "message": "Rate limit exceeded. Please try again later.",
+                "message": _map_status_code_to_message(429, model),
                 "normalized_base_url": normalized_base_url,
             }
         except BadRequestError as e:
