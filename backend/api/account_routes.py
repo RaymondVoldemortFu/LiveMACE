@@ -12,6 +12,7 @@ import requests
 from database.connection import SessionLocal
 from database.models import Account, Position, Trade
 from services.time_source import now_utc
+from services.agent.llm_client import LLMClient
 
 logger = logging.getLogger(__name__)
 
@@ -542,112 +543,38 @@ async def test_llm_connection(payload: dict):
         base_url = (payload.get("base_url") or "").strip()
         api_key = (payload.get("api_key") or "").strip()
 
-        logger.info(f"Testing LLM connection with payload: {payload}")
+        logger.info(f"Testing LLM connection: model={model}, base_url={base_url}")
 
         if not model:
             return {"success": False, "message": "Model is required"}
-        
-        logger.info(f"LLM test params: model={model}, base_url={base_url}, api_key_length={len(api_key) if api_key else 0}")
-
         if not api_key:
-            logger.warning("LLM test failed: API key is required")
             return {"success": False, "message": "API key is required"}
-        
         if not base_url:
-            logger.warning("LLM test failed: Base URL is required")
             return {"success": False, "message": "Base URL is required"}
 
-        # Clean up base_url - ensure it doesn't end with slash
-        if base_url.endswith('/'):
-            base_url = base_url.rstrip('/')
-
-        # Test the connection with a simple completion request
+        # Use LLMClient which handles both OpenAI and Gemini
         try:
-            headers = {
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {api_key}"
+            llm = LLMClient(model=model, api_key=api_key, base_url=base_url)
+            response_text = llm.test_connection()
+
+            logger.info(f"LLM test successful for model {model}")
+            return {
+                "success": True,
+                "message": f"Connection successful! Model {model} responded correctly.",
+                "response": response_text
             }
+        except Exception as e:
+            error_msg = str(e)
+            logger.error(f"LLM test failed: {error_msg}")
 
-            # Use OpenAI-compatible chat completions format
-            payload_data = {
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": "You are a helpful assistant."},
-                    {"role": "user", "content": "Say 'Connection test successful' if you can read this."}
-                ],
-                "max_tokens": 50,
-                "temperature": 0
-            }
-
-            # Construct API endpoint URL
-            api_endpoint = f"{base_url}/chat/completions"
-
-            logger.info(f"Sending LLM test request to: {api_endpoint}")
-
-            # Make the request
-            response = requests.post(
-                api_endpoint,
-                headers=headers,
-                json=payload_data,
-                timeout=10.0,
-                verify=False  # Disable SSL verification for custom AI endpoints
-            )
-
-            logger.info(f"LLM test response status: {response.status_code}")
-
-            # Check response status
-            if response.status_code == 200:
-                result = response.json()
-                logger.info(f"LLM test response body: {result}")
-
-                # Extract text from OpenAI-compatible response format
-                if "choices" in result and len(result["choices"]) > 0:
-                    message = result["choices"][0].get("message", {})
-                    content = message.get("content", "")
-
-                    logger.info(f"LLM test extracted content: '{content}'")
-
-                    if content:
-                        logger.info(f"LLM test successful for model {model} at {base_url}")
-                        return {
-                            "success": True,
-                            "message": f"Connection successful! Model {model} responded correctly.",
-                            "response": content
-                        }
-                    else:
-                        logger.warning(f"LLM test: empty content. Full response: {result}")
-                        return {
-                            "success": False,
-                            "message": "LLM responded but with empty content",
-                            "debug_response": result  # add debug info
-                        }
-                else:
-                    logger.warning(f"LLM test: unexpected format. Full response: {result}")
-                    return {
-                        "success": False,
-                        "message": "Unexpected response format from LLM",
-                        "debug_response": result  # add debug info
-                    }
-
-            elif response.status_code == 401:
+            if "401" in error_msg or "authentication" in error_msg.lower():
                 return {"success": False, "message": "Authentication failed. Please check your API key."}
-            elif response.status_code == 403:
-                return {"success": False, "message": "Permission denied. Your API key may not have access to this model."}
-            elif response.status_code == 404:
+            elif "404" in error_msg:
                 return {"success": False, "message": f"Model '{model}' not found or endpoint not available."}
-            elif response.status_code == 429:
-                return {"success": False, "message": "Rate limit exceeded. Please try again later."}
+            elif "timeout" in error_msg.lower():
+                return {"success": False, "message": "Request timed out. The LLM service may be unavailable."}
             else:
-                error_message = f"HTTP {response.status_code}: {response.text[:200]}"
-                return {"success": False, "message": f"Connection test failed: {error_message}"}
-
-        except requests.exceptions.Timeout:
-            return {"success": False, "message": "Request timed out. The LLM service may be unavailable."}
-        except requests.exceptions.ConnectionError:
-            return {"success": False, "message": f"Failed to connect to {base_url}. Please check the base URL."}
-        except requests.exceptions.RequestException as e:
-            error_message = str(e)
-            return {"success": False, "message": f"Connection test failed: {error_message}"}
+                return {"success": False, "message": f"Connection test failed: {error_msg}"}
 
     except Exception as e:
         logger.error(f"Failed to test LLM connection: {e}", exc_info=True)

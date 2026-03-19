@@ -7,6 +7,7 @@ from openai import OpenAI
 
 from config.tool_config import ToolConfig
 from services.agent.prompts.sub_agent_prompts import SUB_AGENT_SYSTEM_PROMPT
+from services.agent.llm_client import LLMClient
 
 logger = logging.getLogger(__name__)
 llm_logger = logging.getLogger("llm_trace")
@@ -36,7 +37,10 @@ class SearchSubAgent:
             logger.warning("TAVILY_API_KEY not found in environment variables.")
 
         # LLM client for sub-agent reasoning
-        self.llm_client = OpenAI(api_key=api_key, base_url=base_url) if api_key else None
+        self.llm_client = LLMClient(model=model,
+            api_key=api_key,
+            base_url=base_url,
+        ) if api_key else None
         self.model = model
         self.max_steps = ToolConfig.MAX_SEARCH_STEPS
         self.max_context_tokens = ToolConfig.MAX_CONTEXT_TOKENS
@@ -156,15 +160,9 @@ class SearchSubAgent:
                 {"role": "system", "content": "You are a summarization assistant. Summarize the following search conversation history concisely, preserving key information and search results."},
                 {"role": "user", "content": summary_content}
             ]
-            
-            response = self.llm_client.chat.completions.create(
-                model=self.model,
-                messages=summary_request,
-                temperature=0.3,
-                max_tokens=1000
-            )
-            
-            summarized_text = response.choices[0].message.content
+
+            msg = self.llm_client.call(summary_request)
+            summarized_text = LLMClient.extract_text_content(msg)
             agent_logger.info(f"Summarized {len(middle_msgs)} messages into summary")
             
             # Return: system + summary + recent messages
@@ -250,41 +248,40 @@ class SearchSubAgent:
                 llm_logger.info(f"--- Sub-Agent Step {step+1} Request ---")
                 llm_logger.info(json.dumps(messages, ensure_ascii=False, indent=2))
 
-                response = self.llm_client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    tools=tools,
-                    temperature=0.4
-                )
-                
-                msg = response.choices[0].message
-                
+                msg = self.llm_client.call(messages, tools)
+
                 # Handle message object for logging/history
-                msg_dict = msg.model_dump()
-                messages.append(msg_dict) # Use dict for history consistency if needed, but SDK objects work too. 
-                                          # Wait, previous core.py used dict. Let's stick to object if SDK supports it 
-                                          # or convert. OpenAI SDK usually wants objects or dicts. 
-                                          # Let's use dict for logging and appending to keep it clean.
-                
+                msg_dict = msg.model_dump() if hasattr(msg, 'model_dump') else msg
+                messages.append(msg_dict)
+
                 # Log Response
                 llm_logger.info(f"--- Sub-Agent Step {step+1} Response ---")
                 llm_logger.info(json.dumps(msg_dict, ensure_ascii=False, indent=2))
-                
-                agent_logger.info(f"Sub-Agent Content: {msg.content}")
+
+                agent_logger.info(f"Sub-Agent Content: {LLMClient.extract_text_content(msg)}")
 
                 # Check for tool calls
-                if msg.tool_calls:
-                    agent_logger.info(f"Sub-Agent requested {len(msg.tool_calls)} tools")
-                    for tc in msg.tool_calls:
-                        func_name = tc.function.name
+                tool_calls = msg.tool_calls if hasattr(msg, 'tool_calls') else (msg_dict.get('tool_calls') or [])
+                if tool_calls:
+                    agent_logger.info(f"Sub-Agent requested {len(tool_calls)} tools")
+                    for tc in tool_calls:
+                        # Support both object and dict formats
+                        if isinstance(tc, dict):
+                            func_name = tc.get('function', {}).get('name')
+                            tc_id = tc.get('id')
+                            tc_arguments = tc.get('function', {}).get('arguments', '{}')
+                        else:
+                            func_name = tc.function.name
+                            tc_id = tc.id
+                            tc_arguments = tc.function.arguments
                         try:
-                            args = json.loads(tc.function.arguments or "{}")
+                            args = json.loads(tc_arguments or "{}")
                         except json.JSONDecodeError as e:
                             logger.warning(
-                                f"Invalid sub-agent tool arguments for {func_name}: {e}; raw={tc.function.arguments!r}"
+                                f"Invalid sub-agent tool arguments for {func_name}: {e}; raw={tc_arguments!r}"
                             )
                             args = {}
-                        agent_logger.info(f"Executing {func_name} with args: {tc.function.arguments}")
+                        agent_logger.info(f"Executing {func_name} with args: {tc_arguments}")
                         
                         result = None
                         if func_name == "search_tool":
@@ -318,13 +315,13 @@ class SearchSubAgent:
                         
                         messages.append({
                             "role": "tool",
-                            "tool_call_id": tc.id,
+                            "tool_call_id": tc_id,
                             "name": func_name,
                             "content": json.dumps(result, ensure_ascii=False)
                         })
                 else:
                     # No tool calls, check for final response in content
-                    content = msg.content or ""
+                    content = LLMClient.extract_text_content(msg)
                     match = re.search(r"<FINAL_RESPONSE>(.*?)</FINAL_RESPONSE>", content, re.DOTALL)
                     if match:
                         try:

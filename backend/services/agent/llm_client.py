@@ -2,6 +2,7 @@
 from typing import Any
 
 from openai import OpenAI
+from services.agent.gemini_client import GeminiClient
 
 class LLMClient:
     """
@@ -32,27 +33,33 @@ class LLMClient:
 
     def __init__(self, model: str, api_key: str, base_url: str = None):
         """
-        model: 比如 "gpt-4.1" / "gpt-4o-mini" / "qwen2.5-72b"（你的中转平台 Model 名）
+        model: 比如 "gpt-4.1" / "gpt-4o-mini" / "qwen2.5-72b" / "gemini-2.0-flash-exp"
         api_key: 账户自己的 key
         base_url: 如果你用自己的 API gateway，例如 vllm / OpenAI compatible endpoint
                   直接传入，比如 "https://your-endpoint/v1"
         """
         self.model = model
 
-        normalized_base_url = self.normalize_base_url(base_url)
-
-        if normalized_base_url:
-            # 使用自定义 endpoint（OpenAI-compatible）
-            self.client = OpenAI(api_key=api_key, base_url=normalized_base_url)
+        # 检测是否为 Gemini 模型
+        if "gemini" in model.lower():
+            self.client = GeminiClient(model=model, api_key=api_key, base_url=base_url)
+            self.is_gemini = True
         else:
-            # 使用 OpenAI 官方 endpoint
-            self.client = OpenAI(api_key=api_key)
+            normalized_base_url = self.normalize_base_url(base_url)
+            if normalized_base_url:
+                self.client = OpenAI(api_key=api_key, base_url=normalized_base_url)
+            else:
+                self.client = OpenAI(api_key=api_key)
+            self.is_gemini = False
 
     def call(self, messages, tools=None):
         """
         统一的 LLM 调用入口，支持 tools（函数调用）
         直接返回 OpenAI 的 ChatCompletionMessage 对象，便于后续追加到 messages 历史中。
         """
+        if self.is_gemini:
+            # Gemini 客户端返回 GeminiMessage，已兼容 OpenAI 格式
+            return self.client.call(messages, tools)
 
         response = self.client.chat.completions.create(
             model=self.model,
@@ -71,6 +78,10 @@ class LLMClient:
         """
         if message is None:
             return ""
+
+        # 处理 GeminiMessage
+        if hasattr(message, '__class__') and message.__class__.__name__ == 'GeminiMessage':
+            return GeminiClient.extract_text_content(message)
 
         content = getattr(message, "content", "")
 
@@ -97,6 +108,9 @@ class LLMClient:
         使用与运行时一致的 OpenAI SDK 调用测试模型连通性。
         返回模型响应文本，调用失败时直接抛出异常。
         """
+        if self.is_gemini:
+            return self.client.test_connection()
+
         message = self.call(
             messages=[
                 {"role": "system", "content": "You are a helpful assistant."},
