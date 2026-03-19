@@ -252,3 +252,56 @@ class PineconeMemory(MemoryInterface):
                 db.close()
         except Exception as e:
             logger.error(f"Error deleting memory: {e}")
+
+    def clear_account_memories(self, account_id: str) -> int:
+        """Delete all memories for a given account from both Pinecone and SQLite"""
+        try:
+            # Get all memory IDs for this account from SQLite
+            from database.connection import SessionLocal
+            db = SessionLocal()
+            try:
+                memories = db.query(AgentMemory).filter(AgentMemory.account_id == int(account_id)).all()
+                ids = [m.memory_id for m in memories]
+
+                # Delete from Pinecone
+                if self.index and ids:
+                    self.index.delete(ids=ids)
+
+                # Delete from SQLite
+                db.query(AgentMemory).filter(AgentMemory.account_id == int(account_id)).delete()
+                db.commit()
+                logger.info(f"Cleared {len(ids)} memories for account {account_id}")
+                return len(ids)
+            except Exception as e:
+                logger.error(f"Failed to clear memories: {e}")
+                db.rollback()
+                return 0
+            finally:
+                db.close()
+        except Exception as e:
+            logger.error(f"Error clearing account memories: {e}")
+            return 0
+
+    def reset(self, db: Session = None):
+        """Reset all memories from both Pinecone and SQLite"""
+        try:
+            from database.connection import SessionLocal
+            session = db or SessionLocal()
+            try:
+                memories = session.query(AgentMemory).all()
+                ids = [m.memory_id for m in memories]
+
+                if self.index and ids:
+                    self.index.delete(ids=ids)
+
+                session.query(AgentMemory).delete()
+                session.commit()
+                logger.info(f"Reset all memories: {len(ids)} deleted from Pinecone and SQLite")
+            except Exception as e:
+                logger.error(f"Failed to reset memories: {e}")
+                session.rollback()
+            finally:
+                if not db:
+                    session.close()
+        except Exception as e:
+            logger.error(f"Error resetting memories: {e}")

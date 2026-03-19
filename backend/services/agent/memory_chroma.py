@@ -289,6 +289,36 @@ class ChromaMemory(MemoryInterface):
         except Exception as e:
             logger.error(f"Error deleting memory from Chroma: {e}")
 
+    def clear_account_memories(self, account_id: str) -> int:
+        """Delete all memories for an account from both Chroma and SQLite"""
+        try:
+            from database.connection import SessionLocal
+            db = SessionLocal()
+            try:
+                # Get all memory IDs for this account
+                memories = db.query(AgentMemory).filter(AgentMemory.account_id == int(account_id)).all()
+                ids = [m.memory_id for m in memories]
+
+                # Delete from Chroma
+                if self.collection and ids:
+                    self.collection.delete(ids=ids)
+
+                # Delete from SQLite
+                db.query(AgentMemory).filter(AgentMemory.account_id == int(account_id)).delete()
+                db.commit()
+                logger.info(f"Cleared {len(ids)} memories for account {account_id}")
+                return len(ids)
+            except Exception as e:
+                logger.error(f"Failed to clear memories: {e}")
+                db.rollback()
+                return 0
+            finally:
+                db.close()
+        except Exception as e:
+            logger.error(f"Error clearing account memories: {e}")
+            return 0
+
+
     def reset(self, db: Session = None):
         """Reset/clear all memories from both Chroma and SQLite (useful for testing)"""
         if not self.client:

@@ -49,6 +49,16 @@ class MemoryInterface(ABC):
         """Delete a specific memory."""
         pass
 
+    @abstractmethod
+    def clear_account_memories(self, account_id: str) -> int:
+        """Delete all memories for an account. Returns count deleted."""
+        pass
+
+    @abstractmethod
+    def reset(self, db: Session = None):
+        """Reset/clear ALL memories across all accounts."""
+        pass
+
 
 class LocalMemory(MemoryInterface):
     """
@@ -245,6 +255,43 @@ class LocalMemory(MemoryInterface):
         except Exception as e:
             logger.error(f"Error deleting memory: {e}")
 
+    def clear_account_memories(self, account_id: str) -> int:
+        """Delete all memories for an account from SQLite"""
+        try:
+            db: Session = SessionLocal()
+            try:
+                count = db.query(AgentMemory).filter(AgentMemory.account_id == int(account_id)).count()
+                db.query(AgentMemory).filter(AgentMemory.account_id == int(account_id)).delete()
+                db.commit()
+                logger.info(f"Cleared {count} memories for account {account_id}")
+                return count
+            except Exception as e:
+                logger.error(f"Failed to clear memories: {e}")
+                db.rollback()
+                return 0
+            finally:
+                db.close()
+        except Exception as e:
+            logger.error(f"Error clearing account memories: {e}")
+            return 0
+
+    def reset(self, db: Session = None):
+        """Reset all memories from SQLite"""
+        try:
+            session = db or SessionLocal()
+            try:
+                session.query(AgentMemory).delete()
+                session.commit()
+                logger.info("All memories cleared from SQLite")
+            except Exception as e:
+                logger.error(f"Failed to reset memories: {e}")
+                session.rollback()
+            finally:
+                if not db:
+                    session.close()
+        except Exception as e:
+            logger.error(f"Error resetting memories: {e}")
+
 
 def get_memory_service() -> Optional[MemoryInterface]:
     """
@@ -296,4 +343,3 @@ def get_memory_service() -> Optional[MemoryInterface]:
     else:
         logger.info("Using LocalMemory backend (SQLite)")
         return LocalMemory()
-
