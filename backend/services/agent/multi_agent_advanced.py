@@ -504,7 +504,7 @@ class AdvancedMultiAgent(BaseAgent):
         if self.memory and self.user_id:
             try:
                 query = f"Trading context: {len(portfolio.get('positions', {}))} positions. Market: {list(prices.keys())}"
-                memories = self.memory.search(query, user_id=self.user_id)
+                memories = self.memory.search(query, account_id=self.user_id)
                 if memories:
                     texts = [m.get("memory") or m.get("text") or m.get("content") for m in memories]
                     memory_content = "\n".join([f"- {t}" for t in texts if t])
@@ -656,7 +656,7 @@ class AdvancedMultiAgent(BaseAgent):
                 session_summary = "\n".join(self.context)
                 self.memory.add(
                     session_summary,
-                    user_id=self.user_id,
+                    account_id=self.user_id,
                     metadata={"trace_id": trace_id} if trace_id else {},
                 )
             except Exception as e:
