@@ -2,9 +2,8 @@ import json
 import logging
 import os
 import socket
-import threading
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .base import BaseAgent
 from .llm_client import LLMClient
@@ -26,8 +25,6 @@ class AdvancedMultiAgent(BaseAgent):
     """Manager-driven multi-agent architecture for a single trading decision."""
 
     VALID_AGENTS = {"TradingAgent", "NewsAgent", "CoderAgent", "AnalystAgent", "CriticAgent"}
-    _trade_once_lock = threading.Lock()
-    _traded_accounts: Set[str] = set()
 
     def __init__(self, llm: LLMClient, tools: ToolRegistry, max_steps: int = 15, user_id: str = None):
         super().__init__(llm, tools)
@@ -76,25 +73,6 @@ class AdvancedMultiAgent(BaseAgent):
             logger.warning("Failed to notify evaluator: %s", e)
         finally:
             sock.close()
-
-    def _account_id_key(self) -> str:
-        if self.user_id is None:
-            return ""
-        return str(self.user_id)
-
-    def _has_traded_once(self) -> bool:
-        account_key = self._account_id_key()
-        if not account_key:
-            return False
-        with self._trade_once_lock:
-            return account_key in self._traded_accounts
-
-    def _mark_traded_once(self) -> None:
-        account_key = self._account_id_key()
-        if not account_key:
-            return
-        with self._trade_once_lock:
-            self._traded_accounts.add(account_key)
 
     def _extract_json_dict(self, text: str) -> Optional[Dict[str, Any]]:
         if not text:
@@ -333,7 +311,7 @@ class AdvancedMultiAgent(BaseAgent):
 
     def _validate_finish(
         self, final_decision: Dict[str, Any], decision: Dict[str, Any], allow_partial: bool = False
-    ) -> (bool, str):
+    ) -> Tuple[bool, str]:
         if not isinstance(final_decision, dict) or not final_decision:
             return False, "Missing final_decision object."
 
@@ -354,10 +332,12 @@ class AdvancedMultiAgent(BaseAgent):
             return False, "Finish blocked: leveraged action requires critical risk review."
 
         basis = decision.get("decision_basis") or {}
-        if not basis.get("supporting_evidence_ids") and self.evidence_log:
-            return True, ""
-        if not basis.get("supporting_evidence_ids") and not allow_partial:
-            return False, "Finish blocked: decision_basis.supporting_evidence_ids is empty."
+        if not basis.get("supporting_evidence_ids"):
+            if allow_partial and self.evidence_log:
+                basis["supporting_evidence_ids"] = [ev["id"] for ev in self.evidence_log[-2:]]
+                decision["decision_basis"] = basis
+            elif not allow_partial:
+                return False, "Finish blocked: decision_basis.supporting_evidence_ids is empty."
 
         return True, ""
 
@@ -433,7 +413,6 @@ class AdvancedMultiAgent(BaseAgent):
         agent_tools = [t for t in self.tools.openai_tools if t["function"]["name"] in valid_tools]
 
         current_response = ""
-        tool_call_count = 0
         for _ in range(sub_agent_steps):
             resp = self.llm.call(messages, tools=agent_tools if agent_tools else None)
 
@@ -461,7 +440,6 @@ class AdvancedMultiAgent(BaseAgent):
                 )
 
             if tool_calls:
-                tool_call_count += len(tool_calls)
                 for tc in tool_calls:
                     name = tc.function.name
                     try:
@@ -520,15 +498,6 @@ class AdvancedMultiAgent(BaseAgent):
         on_step: Optional[Callable[[Dict], None]] = None,
         trace_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        if self._has_traded_once():
-            return {
-                "operation": "hold",
-                "symbol": "",
-                "direction": "long",
-                "target_portion_of_balance": 0.0,
-                "leverage": 1,
-                "reason": "AdvancedMultiAgent trade limit reached (one trade per account).",
-            }
         logger.info("Starting Advanced Multi-Agent decision process")
 
         memory_content = ""
@@ -681,8 +650,6 @@ class AdvancedMultiAgent(BaseAgent):
                 "leverage": 1,
                 "reason": "MultiAgent Manager did not reach a conclusion within max steps.",
             }
-        elif str(final_decision.get("operation", "")).lower() in {"open", "close"}:
-            self._mark_traded_once()
 
         if self.memory and self.user_id:
             try:

@@ -56,7 +56,8 @@ const AGENT_TYPE_OPTIONS = [
 ]
 
 const getAgentTypeLabel = (agentType?: string) => {
-  const matched = AGENT_TYPE_OPTIONS.find((option) => option.value === agentType)
+  const normalizedAgentType = (agentType || '').trim().toLowerCase()
+  const matched = AGENT_TYPE_OPTIONS.find((option) => option.value === normalizedAgentType)
   return matched?.label || 'ReAct Agent'
 }
 
