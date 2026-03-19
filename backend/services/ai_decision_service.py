@@ -660,7 +660,7 @@ def call_agent_for_decision(
             )
             logger.info(f"Rule-Aware Agent created successfully for account {account.name}")
         else:
-            # Use standard agent (react or multi_agent) without rule evaluation
+            # Use standard agent (react, multi_agent, advanced_multi_agent) without rule evaluation
             agent_type = getattr(account, "agent_type", "react")
             logger.info(f"Creating standard {agent_type} agent for account {account.name}")
             agent = create_agent(

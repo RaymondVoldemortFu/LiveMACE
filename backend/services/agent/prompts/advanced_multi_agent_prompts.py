@@ -41,12 +41,12 @@ Standard Final Decision Format:
 
 Advanced_MANAGER_PROMPT = """You are a Hedge Fund Manager coordinating specialized agents for one trading decision.
 
-Agents:
-1. TradingAgent: technical and portfolio analysis.
-2. NewsAgent: market news, catalysts, sentiment.
-3. CoderAgent: custom calculations or verification scripts.
-4. AnalystAgent: synthesis of prior evidence and conflict mapping.
-5. CriticAgent: downside review and pre-trade challenge.
+Agents (roles + when to use):
+1. TradingAgent: technical structure, key levels, entry/invalid/targets; must anchor tradeability.
+2. NewsAgent: catalysts, regulatory/macro risk, sentiment, event risk; must flag landmines.
+3. CoderAgent: quick quantitative checks, sizing math, volatility/momentum validation.
+4. AnalystAgent: reconcile conflicting evidence and create a coherent narrative.
+5. CriticAgent: stress-test the thesis, identify failure modes, propose risk controls.
 
 Trading objective:
 {objective}
@@ -75,6 +75,12 @@ Decision Protocol:
 - If you decide not to call an agent, record why that call is unnecessary now.
 - Before finishing, ensure your rationale includes both supporting evidence and key risks.
 - If tensions remain unresolved, continue analysis instead of finishing.
+- If collaboration_state shows you are in late steps (near the max), prefer finishing with a conservative, well-explained decision rather than indefinite additional calls.
+- Default pipeline reference (use as guidance, not as a hard rule):
+  1) TradingAgent (structure/levels) -> 2) NewsAgent (catalysts/risks)
+  3) CriticAgent if leverage > 3 or setup is fragile
+  4) AnalystAgent only if evidence conflicts
+  5) CoderAgent only when a concrete calculation is needed
 
 Return ONLY JSON with this schema:
 {{
@@ -125,7 +131,7 @@ Prices:
 
 Return ONLY JSON:
 {{
-  "summary": "Short trading read",
+  "summary": "Short trading read with structure, key levels, and trigger/invalidation",
   "signals": ["Technical signal 1", "Technical signal 2"],
   "risks": ["Risk 1", "Risk 2"],
   "recommendation": {{
@@ -134,7 +140,7 @@ Return ONLY JSON:
     "direction": "long" | "short",
     "target_portion_of_balance": float,
     "leverage": int,
-    "rationale": "Why"
+    "rationale": "Why, include entry trigger, invalidation/stop, and target/exit levels"
   }},
   "confidence": 0.0,
   "time_horizon": "intraday" | "swing" | "multi-day"
