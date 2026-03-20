@@ -68,23 +68,10 @@ class ReActAgent(BaseAgent):
         current_time = now_in_tz(tz_utc_8).strftime("%Y-%m-%d %H:%M:%S")
 
         decision_protocol = (getattr(AgentConfig, "TRADE_DECISION_PROTOCOL", "tool") or "tool").strip().lower()
-        termination_token = getattr(AgentConfig, "AGENT_TRADE_TERMINATION_TOKEN", "<TRADE_DONE>")
+        termination_token = "<TRADE_DONE>" if decision_protocol == "tool" else "<FINAL_JSON>"
 
-        # Add time context and runtime protocol to system prompt
+        # Only inject time context. Runtime protocol is now rendered in get_trade_agent_prompt().
         system_prompt_with_time = f"{system_prompt}\n\nCurrent Time (UTC+8): {current_time}"
-        if decision_protocol == "tool":
-            system_prompt_with_time += (
-                "\n\nRuntime Protocol: TOOL MODE (default)\n"
-                "You MUST execute real trading actions via the execute_trade tool.\n"
-                "You may call execute_trade multiple times.\n"
-                f"When done, output ONLY this exact token: {termination_token}\n"
-                "Do NOT output <FINAL_JSON> in TOOL MODE.\n"
-            )
-        else:
-            system_prompt_with_time += (
-                "\n\nRuntime Protocol: LEGACY FINAL_JSON MODE\n"
-                "You must output final decision wrapped by <FINAL_JSON>...</FINAL_JSON>.\n"
-            )
 
         messages: List[Dict[str, Any]] = [
             {"role": "system", "content": system_prompt_with_time},
