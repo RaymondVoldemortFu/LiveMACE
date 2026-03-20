@@ -31,7 +31,7 @@ MODEL_LIST = [
     # google
     "gemini-3-pro-preview",
     # anthropic
-    "claude-opus-4-6",
+    "grok-420-agents-all",
     # qwen
     "qwen3-max",
 ]

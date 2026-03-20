@@ -138,7 +138,7 @@ class RuleAwareAgent(BaseAgent):
         if self.memory and self.user_id:
             try:
                 query = f"Trading context: {len(portfolio.get('positions', {}))} positions. Market: {list(prices.keys())}"
-                retrieved_memories = self.memory.search(query, user_id=self.user_id)
+                retrieved_memories = self.memory.search(query, account_id=self.user_id)
                 
                 if retrieved_memories:
                     memory_texts = []
@@ -390,7 +390,7 @@ class RuleAwareAgent(BaseAgent):
         if self.memory and self.user_id and decision:
             try:
                 memory_text = f"Decided to {decision['operation']} {decision.get('symbol', 'N/A')} at {current_time}. Reason: {decision.get('reason', 'N/A')}"
-                self.memory.add(memory_text, user_id=self.user_id)
+                self.memory.add(memory_text, account_id=self.user_id)
             except Exception as e:
                 logger.error(f"Failed to store memory: {e}")
         

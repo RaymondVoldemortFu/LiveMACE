@@ -240,6 +240,16 @@ export interface TradingAccountUpdate {
   enable_rule_aware?: boolean
 }
 
+export interface AccountSystemPromptResponse {
+  account_id: number
+  account_name: string
+  agent_type: string
+  memory_enabled: boolean
+  decision_protocol: string
+  termination_token: string
+  system_prompt: string
+}
+
 
 export async function loginUser(username: string, password: string): Promise<UserAuthResponse> {
   const response = await apiRequest('/users/login', {
@@ -337,6 +347,11 @@ export async function testLLMConnection(testData: {
     method: 'POST',
     body: JSON.stringify(testData)
   })
+  return response.json()
+}
+
+export async function getAccountSystemPrompt(accountId: number): Promise<AccountSystemPromptResponse> {
+  const response = await apiRequest(`/account/${accountId}/system-prompt`)
   return response.json()
 }
 
