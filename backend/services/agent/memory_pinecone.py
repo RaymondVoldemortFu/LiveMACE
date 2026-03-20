@@ -157,10 +157,11 @@ class PineconeMemory(MemoryInterface):
                 logger.error("Failed to compute query embedding")
                 return []
 
-            # Query Pinecone with metadata filter
+            # Query Pinecone: over-fetch for rerank
+            top_k = getattr(AgentConfig, 'MEMORY_RERANK_TOP_K', 20)
             results = self.index.query(
                 vector=query_embedding,
-                top_k=limit,
+                top_k=top_k,
                 filter={
                     "account_id": {"$eq": str(account_id)},
                     "market": {"$eq": market}
@@ -170,7 +171,6 @@ class PineconeMemory(MemoryInterface):
 
             # Format results
             formatted = []
-            high_quality_ids = []
 
             for match in results.matches:
                 similarity = match.score
@@ -182,10 +182,11 @@ class PineconeMemory(MemoryInterface):
                     "created_at": match.metadata.get("created_at")
                 })
 
-                if similarity >= AgentConfig.MEMORY_RETRIEVAL_THRESHOLD:
-                    high_quality_ids.append(match.id)
+            # Rerank with time decay
+            top_results = self.rerank(formatted, limit)
 
             # Update retrieval stats in SQLite for high-quality matches
+            high_quality_ids = [r["id"] for r in top_results if r.get("similarity", 0) >= AgentConfig.MEMORY_RETRIEVAL_THRESHOLD]
             if high_quality_ids:
                 try:
                     db.query(AgentMemory).filter(
@@ -202,8 +203,8 @@ class PineconeMemory(MemoryInterface):
                     logger.error(f"Failed to update retrieval count: {db_error}")
                     db.rollback()
 
-            logger.info(f"Found {len(formatted)} relevant memories from Pinecone for account {account_id}")
-            return formatted
+            logger.info(f"Found {len(top_results)} relevant memories from Pinecone for account {account_id}")
+            return top_results
 
         except Exception as e:
             logger.error(f"Error searching Pinecone: {e}")

@@ -49,6 +49,12 @@ class AgentConfig:
     PINECONE_ENVIRONMENT = "us-east-1"  # Free tier region
     # Similarity threshold for counting as effective retrieval (0.0-1.0)
     MEMORY_RETRIEVAL_THRESHOLD = 0.6
+    # Rerank: over-fetch top_k candidates, then rerank by score + time decay to get final limit
+    MEMORY_RERANK_TOP_K = 20
+    # Time decay half-life in days (memories older than this get 50% weight)
+    MEMORY_TIME_DECAY_HALF_LIFE_DAYS = 7
+    # Rerank formula: α × similarity + (1-α) × time_decay
+    MEMORY_RERANK_SIMILARITY_WEIGHT = 0.8
 
 
 class LLMConfig:

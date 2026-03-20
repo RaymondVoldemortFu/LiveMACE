@@ -179,10 +179,11 @@ class ChromaMemory(MemoryInterface):
                 logger.error("Failed to compute query embedding")
                 return []
 
-            # Search in Chroma with metadata filtering
+            # Search in Chroma: over-fetch for rerank
+            top_k = getattr(AgentConfig, 'MEMORY_RERANK_TOP_K', 20)
             results = self.collection.query(
                 query_embeddings=[query_embedding],
-                n_results=limit,
+                n_results=top_k,
                 where={"$and": [{"account_id": str(account_id)}, {"market": market}]},
                 include=["documents", "metadatas", "distances"]
             )
@@ -208,9 +209,12 @@ class ChromaMemory(MemoryInterface):
                         "created_at": metadata.get("created_at")
                     })
 
+            # Rerank with time decay
+            top_results = self.rerank(formatted_results, limit)
+
             # Update retrieval count only for high-quality matches
-            if formatted_results and db:
-                high_quality_ids = [r["id"] for r in formatted_results if r.get("similarity", 0) > AgentConfig.MEMORY_RETRIEVAL_THRESHOLD]
+            if top_results and db:
+                high_quality_ids = [r["id"] for r in top_results if r.get("similarity", 0) > AgentConfig.MEMORY_RETRIEVAL_THRESHOLD]
                 if high_quality_ids:
                     try:
                         db.query(AgentMemory).filter(
@@ -227,8 +231,8 @@ class ChromaMemory(MemoryInterface):
                         logger.error(f"Failed to update retrieval count: {db_error}")
                         db.rollback()
 
-            logger.info(f"Found {len(formatted_results)} relevant memories for account {account_id}")
-            return formatted_results
+            logger.info(f"Found {len(top_results)} relevant memories for account {account_id}")
+            return top_results
 
         except Exception as e:
             logger.error(f"Error searching memories in Chroma: {e}")

@@ -5,6 +5,7 @@ No external services required - all embeddings and storage are local.
 import logging
 import json
 import uuid
+import math
 import numpy as np
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional
@@ -58,6 +59,42 @@ class MemoryInterface(ABC):
     def reset(self, db: Session = None):
         """Reset/clear ALL memories across all accounts."""
         pass
+
+    @staticmethod
+    def rerank(results: List[Dict], limit: int) -> List[Dict]:
+        """Rerank search results by weighted combination of similarity and time decay.
+
+        final_score = α × similarity + (1 - α) × time_decay
+        where time_decay = 0.5 ^ (age_days / half_life_days)
+        """
+        if not results:
+            return []
+
+        half_life = getattr(AgentConfig, 'MEMORY_TIME_DECAY_HALF_LIFE_DAYS', 7)
+        alpha = getattr(AgentConfig, 'MEMORY_RERANK_SIMILARITY_WEIGHT', 0.8)
+        now = datetime.now()
+
+        for r in results:
+            # Parse created_at
+            created_at = r.get("created_at")
+            if isinstance(created_at, str):
+                try:
+                    created_at = datetime.fromisoformat(created_at)
+                except (ValueError, TypeError):
+                    created_at = None
+
+            if created_at:
+                age_days = max((now - created_at).total_seconds() / 86400, 0)
+                time_decay = math.pow(0.5, age_days / half_life)
+            else:
+                time_decay = 0.5  # Unknown age gets neutral weight
+
+            similarity = r.get("similarity", 0)
+            r["time_decay"] = round(time_decay, 4)
+            r["final_score"] = round(alpha * similarity + (1 - alpha) * time_decay, 4)
+
+        results.sort(key=lambda x: x["final_score"], reverse=True)
+        return results[:limit]
 
 
 class LocalMemory(MemoryInterface):
@@ -186,9 +223,13 @@ class LocalMemory(MemoryInterface):
                     "created_at": mem.created_at.isoformat() if mem.created_at else None
                 })
 
-            # Sort by similarity (descending) and return top results
+            # Sort by similarity (descending) and over-fetch for rerank
             results.sort(key=lambda x: x["similarity"], reverse=True)
-            top_results = results[:limit]
+            top_k = getattr(AgentConfig, 'MEMORY_RERANK_TOP_K', 20)
+            candidates = results[:top_k]
+
+            # Rerank with time decay
+            top_results = self.rerank(candidates, limit)
 
             # Update retrieval count only for high-quality matches
             if top_results:
