@@ -69,9 +69,26 @@ WORKFLOW_NO_MEMORY_BLOCK = """
 4. Finalize your decision following the active runtime protocol and output format.
 """
 
+TOOL_ROUTING_HIGH_LEVEL_WORKFLOW_BLOCK = """
+
+You should follow a high-level decision making workflow:
+1. PLAN
+   - Define the next information gap and success criteria for this step.
+   - Express the step objective in one concise operational plan.
+2. ROUTE
+   - Call `select_tools(task=...)` using the current step plan.
+   - Treat the routed tool set as the execution boundary for this step.
+3. EXECUTE
+   - Call one or more routed tools to collect evidence.
+   - If you think you have enough evidence to make a trade decision, call execute_trade to execute the trade, and consider other trade opportunities if necessary.
+4. RETURN TO PLAN OR STOP:
+   - If you think there are other trade opportunities, or need more information for decision making, return to step 1 with a new plan.
+   - If you think the trade decision is complete, stop and finalize with the runtime protocol and required output format.
+"""
+
 TOOL_ROUTING_ENABLED_BLOCK = """
 ========================
-TOOL ROUTING (ENABLED)
+TOOL ROUTING
 ========================
 The system uses dynamic tool routing.
 - Before each execution phase, produce a concise operational plan:
@@ -92,9 +109,8 @@ Tool domains:
 
 TOOL_ROUTING_DISABLED_BLOCK = """
 ========================
-TOOL ROUTING (DISABLED / LEGACY)
+DECISION PROTOCOL
 ========================
-Dynamic tool routing is disabled in this run.
 - Before each execution phase, produce a concise operational plan:
   - What information you intend to obtain
   - Which tools you will use
@@ -109,6 +125,24 @@ TOOL_SELECTOR_TOOL_HINT_BLOCK = """
 
 TOOL_SELECTOR_TOOL_DISABLED_HINT_BLOCK = """
 - Routing is disabled for this run; call tools directly from the default fixed tool set.
+"""
+
+AVAILABLE_TOOLS_BLOCK = """
+========================
+AVAILABLE TOOLS
+========================
+You can call tools to retrieve data, run code, and execute trades:
+- get_market_snapshot
+- get_kline_history
+- get_account_state
+- get_history_decisions
+- consult_search_agent (MUST call at least once per decision process)
+- execute_shell_command
+- read_file
+- write_file
+- run_python_script
+- execute_trade (can be called multiple times)
+{tool_selector_tool_hint}
 """
 
 MEMORY_SYSTEM_BLOCK = """
@@ -306,21 +340,7 @@ High-level workflow:
 
 {workflow_core_block}
 {workflow_memory_block}
-========================
-AVAILABLE TOOLS
-========================
-You can call tools to retrieve data, run code, and execute trades:
-- get_market_snapshot
-- get_kline_history
-- get_account_state
-- get_history_decisions
-- consult_search_agent (MUST call at least once per decision process)
-- execute_shell_command
-- read_file
-- write_file
-- run_python_script
-- execute_trade (can be called multiple times)
-{tool_selector_tool_hint}
+{available_tools_block}
 
 {memory_system_block}
 ========================
@@ -368,11 +388,24 @@ def get_trade_agent_prompt(memory_enabled: bool = False, tool_routing_enabled: b
         tool_routing_block=(
             TOOL_ROUTING_ENABLED_BLOCK if enable_tool_routing else TOOL_ROUTING_DISABLED_BLOCK
         ).strip(),
-        workflow_core_block=WORKFLOW_CORE_BLOCK.strip(),
         tool_selector_tool_hint=(
             TOOL_SELECTOR_TOOL_HINT_BLOCK if enable_tool_routing else TOOL_SELECTOR_TOOL_DISABLED_HINT_BLOCK
         ).strip(),
-        workflow_memory_block=(WORKFLOW_MEMORY_BLOCK if memory_enabled else WORKFLOW_NO_MEMORY_BLOCK).strip(),
+        available_tools_block=(
+            ""
+            if enable_tool_routing
+            else AVAILABLE_TOOLS_BLOCK.format(
+                tool_selector_tool_hint=TOOL_SELECTOR_TOOL_DISABLED_HINT_BLOCK.strip()
+            )
+        ).strip(),
+        workflow_core_block=(
+            TOOL_ROUTING_HIGH_LEVEL_WORKFLOW_BLOCK if enable_tool_routing else WORKFLOW_CORE_BLOCK
+        ).strip(),
+        workflow_memory_block=(
+            ""
+            if enable_tool_routing
+            else (WORKFLOW_MEMORY_BLOCK if memory_enabled else WORKFLOW_NO_MEMORY_BLOCK)
+        ).strip(),
         memory_system_block=(MEMORY_SYSTEM_BLOCK if memory_enabled else "").strip(),
         memory_checklist_block=(MEMORY_CHECKLIST_BLOCK if memory_enabled else "").strip(),
         runtime_protocol_block=(
