@@ -111,6 +111,8 @@ def create_memory_tools(db: Session, trace_id: str = None):
                 formatted_memories.append({
                     "id": memory.get("id", idx),
                     "content": content,
+                    "similarity": round(memory.get("similarity", 0), 4),
+                    "final_score": memory.get("final_score"),
                     "metadata": metadata
                 })
 
