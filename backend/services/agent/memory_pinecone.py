@@ -21,7 +21,7 @@ try:
     PINECONE_AVAILABLE = True
 except ImportError:
     PINECONE_AVAILABLE = False
-    logger.warning("pinecone-client not installed. Install with: pip install pinecone-client")
+    logger.warning("pinecone not installed. Install with: pip install pinecone")
 
 try:
     from sentence_transformers import SentenceTransformer
@@ -52,12 +52,18 @@ class PineconeMemory(MemoryInterface):
         self.embedding_dim = None
 
         if not PINECONE_AVAILABLE:
-            raise ImportError("pinecone-client not installed")
+            raise ImportError("pinecone not installed")
 
         if not SENTENCE_TRANSFORMERS_AVAILABLE:
             raise ImportError("sentence-transformers not installed")
 
         try:
+            # Load embedding model first to get actual dimension
+            model_name = AgentConfig.MEMORY_EMBEDDING_MODEL
+            logger.info(f"Loading embedding model: {model_name}")
+            self.model = SentenceTransformer(model_name)
+            self.embedding_dim = self.model.get_sentence_embedding_dimension()
+
             # Initialize Pinecone client
             pc = Pinecone(api_key=api_key)
 
@@ -66,18 +72,12 @@ class PineconeMemory(MemoryInterface):
                 logger.info(f"Creating Pinecone index: {index_name}")
                 pc.create_index(
                     name=index_name,
-                    dimension=384,  # all-MiniLM-L6-v2 dimension
+                    dimension=self.embedding_dim,
                     metric="cosine",
                     spec=ServerlessSpec(cloud="aws", region=environment)
                 )
 
             self.index = pc.Index(index_name)
-
-            # Load embedding model
-            model_name = AgentConfig.MEMORY_EMBEDDING_MODEL
-            logger.info(f"Loading embedding model: {model_name}")
-            self.model = SentenceTransformer(model_name)
-            self.embedding_dim = self.model.get_sentence_embedding_dimension()
 
             logger.info(f"Pinecone memory initialized successfully. Index: {index_name}, Dimension: {self.embedding_dim}")
 
