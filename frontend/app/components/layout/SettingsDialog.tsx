@@ -18,12 +18,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { Plus, Pencil } from 'lucide-react'
+import { Plus, Pencil, Eye } from 'lucide-react'
 import {
   getAccounts as getAccounts,
   createAccount as createAccount,
   updateAccount as updateAccount,
+  getAccountSystemPrompt,
   testLLMConnection,
+  type AccountSystemPromptResponse,
   type TradingAccount,
   type TradingAccountCreate,
 } from '@/lib/api'
@@ -69,6 +71,9 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
   const [error, setError] = useState<string | null>(null)
   const [testResult, setTestResult] = useState<string | null>(null)
   const [testing, setTesting] = useState(false)
+  const [viewingPromptAccountId, setViewingPromptAccountId] = useState<number | null>(null)
+  const [promptLoadingAccountId, setPromptLoadingAccountId] = useState<number | null>(null)
+  const [accountPrompts, setAccountPrompts] = useState<Record<number, AccountSystemPromptResponse>>({})
   const [newAccount, setNewAccount] = useState<AIAccountCreate>({
     name: '',
     model: '',
@@ -294,6 +299,32 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
     setError(null)
   }
 
+  const handleViewPrompt = async (account: AIAccount) => {
+    if (viewingPromptAccountId === account.id) {
+      setViewingPromptAccountId(null)
+      return
+    }
+
+    setViewingPromptAccountId(account.id)
+    setError(null)
+
+    if (accountPrompts[account.id]) {
+      return
+    }
+
+    try {
+      setPromptLoadingAccountId(account.id)
+      const promptData = await getAccountSystemPrompt(account.id)
+      setAccountPrompts((prev) => ({ ...prev, [account.id]: promptData }))
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Failed to load system prompt'
+      toast.error(errorMessage)
+      setViewingPromptAccountId(null)
+    } finally {
+      setPromptLoadingAccountId(null)
+    }
+  }
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-hidden flex flex-col">
@@ -445,6 +476,13 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
                         </div>
                         <div className="flex gap-2">
                           <Button
+                            onClick={() => handleViewPrompt(account)}
+                            variant="outline"
+                            size="sm"
+                          >
+                            <Eye className="h-4 w-4" />
+                          </Button>
+                          <Button
                             onClick={() => startEdit(account)}
                             variant="outline"
                             size="sm"
@@ -452,6 +490,22 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
                             <Pencil className="h-4 w-4" />
                           </Button>
                         </div>
+                      </div>
+                    )}
+                    {viewingPromptAccountId === account.id && (
+                      <div className="mt-3 rounded-md border bg-muted/30 p-3 space-y-2">
+                        <div className="text-xs text-muted-foreground">
+                          {promptLoadingAccountId === account.id
+                            ? 'Loading system prompt...'
+                            : accountPrompts[account.id]
+                              ? `Agent: ${accountPrompts[account.id].agent_type} • Protocol: ${accountPrompts[account.id].decision_protocol} • End Token: ${accountPrompts[account.id].termination_token}`
+                              : 'No prompt loaded'}
+                        </div>
+                        {accountPrompts[account.id]?.system_prompt && (
+                          <pre className="max-h-80 overflow-auto rounded bg-background p-3 text-xs whitespace-pre-wrap">
+                            {accountPrompts[account.id].system_prompt}
+                          </pre>
+                        )}
                       </div>
                     )}
                   </div>

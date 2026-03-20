@@ -12,7 +12,10 @@ class AgentConfig:
     # - "tool": default, agent executes trades via execute_trade tool and ends with termination token
     # - "final_json": legacy mode, agent returns one decision inside <FINAL_JSON>...</FINAL_JSON>
     TRADE_DECISION_PROTOCOL = os.getenv("TRADE_DECISION_PROTOCOL", "tool").strip().lower()
-    AGENT_TRADE_TERMINATION_TOKEN = os.getenv("AGENT_TRADE_TERMINATION_TOKEN", "<TRADE_DONE>")
+    # System prompt section switches:
+    # - True: include SIMULATION ENVIRONMENT NOTICE block
+    # - False: omit this block from trading system prompt
+    AGENT_INCLUDE_SIMULATION_NOTICE = os.getenv("AGENT_INCLUDE_SIMULATION_NOTICE", "false") == "true"
 
     # Docker Configuration
     DOCKER_IMAGE_NAME = "agent-sandbox:latest"
