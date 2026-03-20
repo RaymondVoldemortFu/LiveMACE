@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 _memory_service = None
 
 # Similarity threshold for deduplication
-DEDUP_SIMILARITY_THRESHOLD = 0.85
+DEDUP_SIMILARITY_THRESHOLD = 0.90
 
 def get_or_create_memory_service():
     """Get or create memory service singleton"""
