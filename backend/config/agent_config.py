@@ -39,7 +39,7 @@ class AgentConfig:
     # Memory Configuration
     # Note: Memory is now controlled per-account via account.memory_enabled field
     # Lightweight embedding model (384 dimensions)
-    MEMORY_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+    MEMORY_EMBEDDING_MODEL = "BAAI/bge-base-en-v1.5"
     # Memory backend: "local" (SQLite), "chroma" (vector database), or "pinecone" (cloud)
     MEMORY_BACKEND = "pinecone"  # Options: "local", "chroma", "pinecone"
     CHROMA_PERSIST_DIR = "./chroma_db"  # Directory for Chroma persistence
