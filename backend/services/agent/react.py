@@ -40,7 +40,7 @@ Use normal reasoning text. If you need a tool, append exactly one tool command b
 Rules:
 - Keep at most one <CALL_TOOL> block per response.
 - `tool_name` must exactly match one of the currently available tools.
-- Use `select_tools` whenever you need the router to update the available tool set.
+- If tool routing is enabled, use `select_tools` whenever you need the router to update the available tool set.
 - Final decision must still use <FINAL_JSON>...</FINAL_JSON>.
 """
 
@@ -316,29 +316,20 @@ class ReActAgent(BaseAgent):
         current_time = now_in_tz(tz_utc_8).strftime("%Y-%m-%d %H:%M:%S")
 
         decision_protocol = (getattr(AgentConfig, "TRADE_DECISION_PROTOCOL", "tool") or "tool").strip().lower()
-        termination_token = getattr(AgentConfig, "AGENT_TRADE_TERMINATION_TOKEN", "<TRADE_DONE>")
+        termination_token = "<TRADE_DONE>" if decision_protocol == "tool" else "<FINAL_JSON>"
 
-        # Add time context and runtime protocol to system prompt
+        # Only inject time context. Runtime protocol is now rendered in get_trade_agent_prompt().
         system_prompt_with_time = f"{system_prompt}\n\nCurrent Time (UTC+8): {current_time}"
-        if decision_protocol == "tool":
-            system_prompt_with_time += (
-                "\n\nRuntime Protocol: TOOL MODE (default)\n"
-                "You MUST execute real trading actions via the execute_trade tool.\n"
-                "You may call execute_trade multiple times.\n"
-                f"When done, output ONLY this exact token: {termination_token}\n"
-                "Do NOT output <FINAL_JSON> in TOOL MODE.\n"
-            )
-        else:
-            system_prompt_with_time += (
-                "\n\nRuntime Protocol: LEGACY FINAL_JSON MODE\n"
-                "You must output final decision wrapped by <FINAL_JSON>...</FINAL_JSON>.\n"
-            )
 
         # Only expose required tools + tool selector at the start
-        initial_tools = list(REQUIRED_TOOL_NAMES)
-        if META_TOOL_NAME not in initial_tools:
-            initial_tools.append(META_TOOL_NAME)
-        self.tools.set_active_tools(initial_tools)
+        if bool(getattr(AgentConfig, "AGENT_ENABLE_TOOL_ROUTING", True)):
+            initial_tools = list(REQUIRED_TOOL_NAMES)
+            if META_TOOL_NAME not in initial_tools:
+                initial_tools.append(META_TOOL_NAME)
+            self.tools.set_active_tools(initial_tools)
+        else:
+            # Legacy mode: expose all tools directly without routing.
+            self.tools.clear_active_tools()
 
         messages: List[Dict[str, Any]] = [
             {"role": "system", "content": system_prompt_with_time},

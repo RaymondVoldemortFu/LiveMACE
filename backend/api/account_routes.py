@@ -24,6 +24,10 @@ from database.connection import SessionLocal
 from database.models import Account, Position, Trade
 from services.time_source import now_utc
 from services.agent.llm_client import LLMClient
+from config.agent_config import AgentConfig
+from services.agent.prompts.system_prompts import get_trade_agent_prompt
+from services.agent.prompts.multi_agent_prompts import MANAGER_PROMPT as MULTI_AGENT_MANAGER_PROMPT
+from services.agent.prompts.advanced_multi_agent_prompts import Advanced_MANAGER_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +149,52 @@ async def get_specific_account_overview(account_id: int, db: Session = Depends(g
     except Exception as e:
         logger.error(f"Failed to get account {account_id} overview: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to get account overview: {str(e)}")
+
+
+@router.get("/{account_id}/system-prompt")
+async def get_account_system_prompt(account_id: int, db: Session = Depends(get_db)):
+    """Get rendered system prompt for a specific account."""
+    try:
+        account = db.query(Account).filter(
+            Account.id == account_id,
+            Account.is_active == "true"
+        ).first()
+        if not account:
+            raise HTTPException(status_code=404, detail="Account not found")
+
+        agent_type = (getattr(account, "agent_type", "react") or "react").strip().lower()
+        memory_enabled = (getattr(account, "memory_enabled", "false") == "true")
+        decision_protocol = (getattr(AgentConfig, "TRADE_DECISION_PROTOCOL", "tool") or "tool").strip().lower()
+        termination_token = "<TRADE_DONE>" if decision_protocol == "tool" else "<FINAL_JSON>"
+
+        if agent_type == "react":
+            system_prompt = get_trade_agent_prompt(memory_enabled=memory_enabled)
+        elif agent_type == "multi_agent":
+            system_prompt = MULTI_AGENT_MANAGER_PROMPT
+        elif agent_type == "advanced_multi_agent":
+            system_prompt = Advanced_MANAGER_PROMPT
+        elif agent_type in {"buy_hold", "grid"}:
+            system_prompt = (
+                "This account uses a baseline strategy and does not rely on an LLM system prompt "
+                "for decision generation."
+            )
+        else:
+            system_prompt = f"Unknown agent_type='{agent_type}'. No dedicated system prompt template found."
+
+        return {
+            "account_id": account.id,
+            "account_name": account.name,
+            "agent_type": agent_type,
+            "memory_enabled": memory_enabled,
+            "decision_protocol": decision_protocol,
+            "termination_token": termination_token,
+            "system_prompt": system_prompt,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get account {account_id} system prompt: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get account system prompt: {str(e)}")
 
 
 

@@ -12,7 +12,14 @@ class AgentConfig:
     # - "tool": default, agent executes trades via execute_trade tool and ends with termination token
     # - "final_json": legacy mode, agent returns one decision inside <FINAL_JSON>...</FINAL_JSON>
     TRADE_DECISION_PROTOCOL = os.getenv("TRADE_DECISION_PROTOCOL", "tool").strip().lower()
-    AGENT_TRADE_TERMINATION_TOKEN = os.getenv("AGENT_TRADE_TERMINATION_TOKEN", "<TRADE_DONE>")
+    # System prompt section switches:
+    # - True: include SIMULATION ENVIRONMENT NOTICE block
+    # - False: omit this block from trading system prompt
+    AGENT_INCLUDE_SIMULATION_NOTICE = os.getenv("AGENT_INCLUDE_SIMULATION_NOTICE", "false") == "true"
+    # Tool routing behavior:
+    # - True: agent should call `select_tools` to dynamically route tools by step
+    # - False: legacy mode without dynamic tool routing instructions
+    AGENT_ENABLE_TOOL_ROUTING = os.getenv("AGENT_ENABLE_TOOL_ROUTING", "true").strip().lower() in {"1", "true", "yes", "on"}
 
     TOOL_SELECTOR_TOP_K = 30
     TOOL_SELECTOR_MAX_RETRIES = 10
