@@ -82,6 +82,7 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
     enable_rule_aware: false,
     agent_type: 'react',
     memory_enabled: 'false',
+    tool_routing_enabled: 'true',
   })
   const [editAccount, setEditAccount] = useState<AIAccountCreate>({
     name: '',
@@ -90,6 +91,7 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
     api_key: '',
     agent_type: 'react',
     memory_enabled: 'false',
+    tool_routing_enabled: 'true',
   })
 
   const loadAccounts = async () => {
@@ -178,7 +180,16 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
 
       console.log('[SettingsDialog] Creating account with data:', newAccount)
       await createAccount(newAccount)
-      setNewAccount({ name: '', model: '', base_url: '', api_key: '', agent_type: 'react', enable_rule_aware: false })
+      setNewAccount({
+        name: '',
+        model: '',
+        base_url: '',
+        api_key: '',
+        agent_type: 'react',
+        memory_enabled: 'false',
+        tool_routing_enabled: 'true',
+        enable_rule_aware: false,
+      })
       setShowAddForm(false)
       await loadAccounts()
 
@@ -259,7 +270,15 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
       console.log('Updating account with data:', editAccount)
       await updateAccount(editingId, editAccount)
       setEditingId(null)
-      setEditAccount({ name: '', model: '', base_url: '', api_key: '', agent_type: 'react' })
+      setEditAccount({
+        name: '',
+        model: '',
+        base_url: '',
+        api_key: '',
+        agent_type: 'react',
+        memory_enabled: 'false',
+        tool_routing_enabled: 'true',
+      })
       setTestResult(null)
       await loadAccounts()
       
@@ -288,13 +307,23 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
       api_key: account.api_key || '',
       agent_type: account.agent_type || 'react',
       memory_enabled: account.memory_enabled || 'false',
+      tool_routing_enabled: account.tool_routing_enabled || 'true',
       enable_rule_aware: account.enable_rule_aware || false,
     })
   }
 
   const cancelEdit = () => {
     setEditingId(null)
-    setEditAccount({ name: '', model: '', base_url: '', api_key: '', agent_type: 'react', enable_rule_aware: false })
+    setEditAccount({
+      name: '',
+      model: '',
+      base_url: '',
+      api_key: '',
+      agent_type: 'react',
+      memory_enabled: 'false',
+      tool_routing_enabled: 'true',
+      enable_rule_aware: false,
+    })
     setTestResult(null)
     setError(null)
   }
@@ -433,6 +462,14 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
                             onCheckedChange={(checked) => setEditAccount({ ...editAccount, memory_enabled: checked ? 'true' : 'false' })}
                           />
                           <Label htmlFor="memory-enabled-edit">Enable Memory System</Label>
+                        </div>
+                        <div className="flex items-center space-x-2">
+                          <Switch
+                            id="tool-routing-enabled-edit"
+                            checked={editAccount.tool_routing_enabled === 'true'}
+                            onCheckedChange={(checked) => setEditAccount({ ...editAccount, tool_routing_enabled: checked ? 'true' : 'false' })}
+                          />
+                          <Label htmlFor="tool-routing-enabled-edit">Enable Tool Routing</Label>
                         </div>
                         {testResult && (
                           <div className={`text-xs p-2 rounded ${
@@ -588,6 +625,14 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
                     onCheckedChange={(checked) => setNewAccount({ ...newAccount, memory_enabled: checked ? 'true' : 'false' })}
                   />
                   <Label htmlFor="memory-enabled-new">Enable Memory System</Label>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <Switch
+                    id="tool-routing-enabled-new"
+                    checked={newAccount.tool_routing_enabled === 'true'}
+                    onCheckedChange={(checked) => setNewAccount({ ...newAccount, tool_routing_enabled: checked ? 'true' : 'false' })}
+                  />
+                  <Label htmlFor="tool-routing-enabled-new">Enable Tool Routing</Label>
                 </div>
                 <div className="flex gap-2">
                   <Button onClick={handleCreateAccount} disabled={loading}>

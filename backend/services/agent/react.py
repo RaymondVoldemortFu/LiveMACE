@@ -22,6 +22,21 @@ llm_logger = logging.getLogger("llm_trace")
 agent_logger = logging.getLogger("agent_decision")
 tool_output_logger = logging.getLogger("tool_output")
 
+DEFAULT_NON_ROUTED_TOOL_NAMES = [
+    "get_market_snapshot",
+    "get_kline_history",
+    "get_account_state",
+    "get_history_decisions",
+    "consult_search_agent",
+    "execute_shell_command",
+    "read_file",
+    "write_file",
+    "run_python_script",
+    "execute_trade",
+    "memory_search",
+    "memory_add",
+]
+
 
 # SYSTEM_PROMPT = TRADE_AGENT_PROMPT
 GEMINI_COMPAT_INSTRUCTION = """
@@ -56,9 +71,13 @@ class ReActAgent(BaseAgent):
         super().__init__(llm, tools, agent_name=agent_name)
         self.max_steps = max_steps
         self.user_id = user_id
+        self.tool_routing_enabled = bool(getattr(AgentConfig, "AGENT_ENABLE_TOOL_ROUTING", True))
         # Memory tools are now registered in env_wrapper.register_default_tools()
         # self.memory = get_memory_service()
         ensure_tool_selector_tool(self.llm, self.tools)
+
+    def set_tool_routing_enabled(self, enabled: bool):
+        self.tool_routing_enabled = bool(enabled)
 
     def _missing_required_args(self, func: Callable, args: Dict[str, Any]) -> List[str]:
         """Return missing required callable parameters."""
@@ -309,7 +328,10 @@ class ReActAgent(BaseAgent):
 
         # Check if memory tools are available
         has_memory = any(tool.name in ['memory_add', 'memory_search'] for tool in self.tools.tools.values())
-        system_prompt = get_trade_agent_prompt(memory_enabled=has_memory)
+        system_prompt = get_trade_agent_prompt(
+            memory_enabled=has_memory,
+            tool_routing_enabled=self.tool_routing_enabled,
+        )
 
         # Get current UTC+8 time
         tz_utc_8 = timezone(timedelta(hours=8))
@@ -322,14 +344,15 @@ class ReActAgent(BaseAgent):
         system_prompt_with_time = f"{system_prompt}\n\nCurrent Time (UTC+8): {current_time}"
 
         # Only expose required tools + tool selector at the start
-        if bool(getattr(AgentConfig, "AGENT_ENABLE_TOOL_ROUTING", True)):
+        if self.tool_routing_enabled:
             initial_tools = list(REQUIRED_TOOL_NAMES)
             if META_TOOL_NAME not in initial_tools:
                 initial_tools.append(META_TOOL_NAME)
             self.tools.set_active_tools(initial_tools)
         else:
-            # Legacy mode: expose all tools directly without routing.
-            self.tools.clear_active_tools()
+            # Non-routing mode: expose a fixed default tool set only.
+            default_tools = [name for name in DEFAULT_NON_ROUTED_TOOL_NAMES if name in self.tools.tools]
+            self.tools.set_active_tools(default_tools)
 
         messages: List[Dict[str, Any]] = [
             {"role": "system", "content": system_prompt_with_time},

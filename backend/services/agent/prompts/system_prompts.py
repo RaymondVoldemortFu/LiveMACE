@@ -108,7 +108,7 @@ TOOL_SELECTOR_TOOL_HINT_BLOCK = """
 """
 
 TOOL_SELECTOR_TOOL_DISABLED_HINT_BLOCK = """
-- select_tools is available in the system but routing is disabled for this run; prioritize direct tool usage.
+- Routing is disabled for this run; call tools directly from the default fixed tool set.
 """
 
 MEMORY_SYSTEM_BLOCK = """
@@ -350,14 +350,18 @@ Common constraints:
 # TODO: memory prompts should be moved to a separate file, and load dynamically from the file system. 
 # TODO: Trade tool should be included in basic tools and always available.
 
-def get_trade_agent_prompt(memory_enabled: bool = False) -> str:
+def get_trade_agent_prompt(memory_enabled: bool = False, tool_routing_enabled: bool | None = None) -> str:
     """
     Get trading agent prompt with dynamic memory/protocol sections.
     """
     decision_protocol = (getattr(AgentConfig, "TRADE_DECISION_PROTOCOL", "tool") or "tool").strip().lower()
     termination_token = "<TRADE_DONE>" if decision_protocol == "tool" else "<FINAL_JSON>"
     include_simulation_notice = bool(getattr(AgentConfig, "AGENT_INCLUDE_SIMULATION_NOTICE", False))
-    enable_tool_routing = bool(getattr(AgentConfig, "AGENT_ENABLE_TOOL_ROUTING", True))
+    enable_tool_routing = (
+        bool(getattr(AgentConfig, "AGENT_ENABLE_TOOL_ROUTING", True))
+        if tool_routing_enabled is None
+        else bool(tool_routing_enabled)
+    )
 
     return TRADE_AGENT_PROMPT_TEMPLATE.format(
         simulation_notice_block=(SIMULATION_NOTICE_BLOCK if include_simulation_notice else "").strip(),

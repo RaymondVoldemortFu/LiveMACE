@@ -109,6 +109,7 @@ def main() -> int:
                     existing.api_key = api_key
                     existing.account_type = "AI"
                     existing.agent_type = DEFAULT_AGENT_TYPE
+                    existing.tool_routing_enabled = "true"
                     existing.is_active = "true"
                     updated += 1
                     print(f"[UPDATED] {name} (model={model})")
@@ -123,6 +124,7 @@ def main() -> int:
                 name=name,
                 account_type="AI",
                 agent_type=DEFAULT_AGENT_TYPE,
+                tool_routing_enabled="true",
                 enable_rule_aware="false",
                 is_active="true",
                 model=model,

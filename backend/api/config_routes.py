@@ -9,7 +9,6 @@ from typing import Optional
 import logging
 
 from database.connection import SessionLocal
-from database.models import SystemConfig
 
 logger = logging.getLogger(__name__)
 

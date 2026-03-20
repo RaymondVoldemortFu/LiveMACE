@@ -210,6 +210,7 @@ export interface TradingAccount {
   api_key?: string  // API key (masked in responses)
   agent_type?: string // "react" | "multi_agent" | "advanced_multi_agent" | "buy_hold" | "grid"
   memory_enabled?: string // "true" or "false"
+  tool_routing_enabled?: string // "true" or "false"
   enable_rule_aware?: boolean  // Enable Rule-Aware Trading
   initial_capital: number
   current_cash: number
@@ -225,6 +226,7 @@ export interface TradingAccountCreate {
   api_key?: string
   agent_type?: string
   memory_enabled?: string
+  tool_routing_enabled?: string
   enable_rule_aware?: boolean
   initial_capital?: number
   account_type?: string
@@ -237,6 +239,7 @@ export interface TradingAccountUpdate {
   api_key?: string
   agent_type?: string
   memory_enabled?: string
+  tool_routing_enabled?: string
   enable_rule_aware?: boolean
 }
 
@@ -245,11 +248,11 @@ export interface AccountSystemPromptResponse {
   account_name: string
   agent_type: string
   memory_enabled: boolean
+  tool_routing_enabled?: boolean
   decision_protocol: string
   termination_token: string
   system_prompt: string
 }
-
 
 export async function loginUser(username: string, password: string): Promise<UserAuthResponse> {
   const response = await apiRequest('/users/login', {
@@ -315,6 +318,7 @@ export async function createAccount(account: TradingAccountCreate): Promise<Trad
       account_type: account.account_type || 'AI',
       agent_type: account.agent_type || 'react',
       memory_enabled: account.memory_enabled || 'false',
+      tool_routing_enabled: account.tool_routing_enabled || 'true',
       enable_rule_aware: account.enable_rule_aware || false,
       initial_capital: account.initial_capital || 10000
     })
@@ -332,6 +336,7 @@ export async function updateAccount(accountId: number, account: TradingAccountUp
       api_key: account.api_key,
       agent_type: account.agent_type,
       memory_enabled: account.memory_enabled,
+      tool_routing_enabled: account.tool_routing_enabled,
       enable_rule_aware: account.enable_rule_aware
     })
   })

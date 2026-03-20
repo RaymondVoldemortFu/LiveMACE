@@ -60,6 +60,7 @@ async def list_all_accounts(db: Session = Depends(get_db)):
                 "account_type": account.account_type,
                 "agent_type": getattr(account, "agent_type", "react"),
                 "memory_enabled": getattr(account, "memory_enabled", "false"),
+                "tool_routing_enabled": getattr(account, "tool_routing_enabled", "true"),
                 "enable_rule_aware": getattr(account, "enable_rule_aware", "false") == "true",
                 "initial_capital": float(account.initial_capital),
                 "current_cash": float(account.current_cash),
@@ -164,11 +165,15 @@ async def get_account_system_prompt(account_id: int, db: Session = Depends(get_d
 
         agent_type = (getattr(account, "agent_type", "react") or "react").strip().lower()
         memory_enabled = (getattr(account, "memory_enabled", "false") == "true")
+        tool_routing_enabled = (getattr(account, "tool_routing_enabled", "true") == "true")
         decision_protocol = (getattr(AgentConfig, "TRADE_DECISION_PROTOCOL", "tool") or "tool").strip().lower()
         termination_token = "<TRADE_DONE>" if decision_protocol == "tool" else "<FINAL_JSON>"
 
         if agent_type == "react":
-            system_prompt = get_trade_agent_prompt(memory_enabled=memory_enabled)
+            system_prompt = get_trade_agent_prompt(
+                memory_enabled=memory_enabled,
+                tool_routing_enabled=tool_routing_enabled,
+            )
         elif agent_type == "multi_agent":
             system_prompt = MULTI_AGENT_MANAGER_PROMPT
         elif agent_type == "advanced_multi_agent":
@@ -186,6 +191,7 @@ async def get_account_system_prompt(account_id: int, db: Session = Depends(get_d
             "account_name": account.name,
             "agent_type": agent_type,
             "memory_enabled": memory_enabled,
+            "tool_routing_enabled": tool_routing_enabled,
             "decision_protocol": decision_protocol,
             "termination_token": termination_token,
             "system_prompt": system_prompt,
@@ -283,6 +289,7 @@ async def create_new_account(payload: dict, db: Session = Depends(get_db)):
             account_type=payload.get("account_type", "AI"),
             agent_type=payload.get("agent_type", "react"),
             memory_enabled=payload.get("memory_enabled", "false"),
+            tool_routing_enabled=payload.get("tool_routing_enabled", "true"),
             enable_rule_aware=enable_rule_aware_value,
             model=model,
             base_url=base_url,
@@ -314,6 +321,8 @@ async def create_new_account(payload: dict, db: Session = Depends(get_db)):
             "name": new_account.name,
             "account_type": new_account.account_type,
             "agent_type": new_account.agent_type,
+            "memory_enabled": new_account.memory_enabled,
+            "tool_routing_enabled": new_account.tool_routing_enabled,
             "enable_rule_aware": new_account.enable_rule_aware == "true",
             "initial_capital": float(new_account.initial_capital),
             "current_cash": float(new_account.current_cash),
@@ -364,6 +373,10 @@ async def update_account_settings(account_id: int, payload: dict, db: Session = 
             account.memory_enabled = payload["memory_enabled"]
             logger.info(f"Updated memory_enabled to: {account.memory_enabled}")
 
+        if "tool_routing_enabled" in payload:
+            account.tool_routing_enabled = payload["tool_routing_enabled"]
+            logger.info(f"Updated tool_routing_enabled to: {account.tool_routing_enabled}")
+
         if "enable_rule_aware" in payload:
             account.enable_rule_aware = "true" if payload["enable_rule_aware"] is True else "false"
             logger.info(f"Updated enable_rule_aware to: {account.enable_rule_aware}")
@@ -398,6 +411,8 @@ async def update_account_settings(account_id: int, payload: dict, db: Session = 
             "name": account.name,
             "account_type": account.account_type,
             "agent_type": getattr(account, "agent_type", "react"),
+            "memory_enabled": getattr(account, "memory_enabled", "false"),
+            "tool_routing_enabled": getattr(account, "tool_routing_enabled", "true"),
             "enable_rule_aware": getattr(account, "enable_rule_aware", "false") == "true",
             "initial_capital": float(account.initial_capital),
             "current_cash": float(account.current_cash),

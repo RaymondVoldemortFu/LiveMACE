@@ -45,7 +45,6 @@ SUPPORTED_SYMBOLS: Dict[str, str] = {
     "BNB": "Binance Coin",
 }
 
-
 def _is_default_api_key(api_key: str) -> bool:
     """Check if the API key is a default/placeholder key that should be skipped"""
     return api_key in DEMO_API_KEYS
@@ -680,6 +679,10 @@ def call_agent_for_decision(
                 user_id=str(account.id),
                 agent_name=account_name
             )
+            if hasattr(agent, "set_tool_routing_enabled"):
+                tool_routing_enabled = getattr(account, "tool_routing_enabled", "true") == "true"
+                agent.set_tool_routing_enabled(tool_routing_enabled)
+                logger.info(f"Tool routing enabled={tool_routing_enabled} for account {account.name}")
             logger.info(f"Standard {agent_type} agent created successfully for account {account.name}")
 
         # Get account info before run (to avoid DetachedInstanceError later)
