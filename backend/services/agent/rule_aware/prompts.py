@@ -133,14 +133,21 @@ No rule conflicts detected.
 
 You have access to the following tools for information gathering:
 
-- **get_market_snapshot**: Get latest market data for a symbol
-- **get_kline_history**: Fetch historical price data
-- **get_account_state**: Read current account and positions
-- **get_history_decisions**: Review past trading decisions
-- **consult_search_agent**: Search for news and external information
-- **run_python_script**: Execute Python code for analysis
-- **read_file** / **write_file**: File operations
-- **execute_shell_command**: Run shell commands
+- **get_market_snapshot**: Retrieve latest market data for a symbol, including last price and market status.
+- **get_kline_history**: Fetch kline (candlestick) history for a symbol over a time range. Data is saved to a file and can be further analyzed.
+- **get_account_state**: Read current account funding state and all open positions.
+- **get_history_decisions**: Retrieve recent decision history to understand past actions and avoid repeated mistakes.
+- **consult_search_agent**: Use a search sub-agent for news and external signals (macro, regulation, sentiment, project events). You should call this at least once per decision process.
+- **run_python_script**: Execute Python for non-trivial quantitative analysis (trend, volatility, risk metrics, scenario checks).
+- **read_file**: Read file content in the virtual environment (may be truncated). For larger structured data, prefer `run_python_script` for parsing.
+- **write_file**: Write files in the virtual environment; missing directories will be created automatically.
+- **execute_shell_command**: Execute shell commands for inspection and auxiliary checks in the virtual environment.
+
+Additional tools may be enabled by runtime configuration:
+
+- **execute_trade** (TOOL MODE): Execute trades directly. Supports portion-based and USD-based sizing, and quick operations like `all_in` and `close_all`. Can be called multiple times in one decision process.
+- **memory_search** (if memory enabled): Search reusable historical trading rules relevant to the current market pattern.
+- **memory_add** (if memory enabled): Store new reusable trading rules. Add only non-duplicate, generalized rules.
 
 Use these tools as needed to gather sufficient information for informed, compliant decisions.
 
