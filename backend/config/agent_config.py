@@ -52,12 +52,22 @@ class AgentConfig:
     # Memory Configuration
     # Note: Memory is now controlled per-account via account.memory_enabled field
     # Lightweight embedding model (384 dimensions)
-    MEMORY_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
-    # Memory backend: "local" (SQLite) or "chroma" (vector database)
-    MEMORY_BACKEND = "chroma"  # Options: "local", "chroma"
+    MEMORY_EMBEDDING_MODEL = "BAAI/bge-base-en-v1.5"
+    # Memory backend: "local" (SQLite), "chroma" (vector database), or "pinecone" (cloud)
+    MEMORY_BACKEND = "pinecone"  # Options: "local", "chroma", "pinecone"
     CHROMA_PERSIST_DIR = "./chroma_db"  # Directory for Chroma persistence
+    # Pinecone Configuration
+    PINECONE_API_KEY = os.getenv("PINECONE_API_KEY", "")
+    PINECONE_INDEX_NAME = "agent-memories"
+    PINECONE_ENVIRONMENT = "us-east-1"  # Free tier region
     # Similarity threshold for counting as effective retrieval (0.0-1.0)
     MEMORY_RETRIEVAL_THRESHOLD = 0.6
+    # Rerank: over-fetch top_k candidates, then rerank by score + time decay to get final limit
+    MEMORY_RERANK_TOP_K = 20
+    # Time decay half-life in days (memories older than this get 50% weight)
+    MEMORY_TIME_DECAY_HALF_LIFE_DAYS = 7
+    # Rerank formula: α × similarity + (1-α) × time_decay
+    MEMORY_RERANK_SIMILARITY_WEIGHT = 0.8
 
 
 class LLMConfig:

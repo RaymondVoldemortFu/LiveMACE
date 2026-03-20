@@ -33,6 +33,37 @@ def update_schema():
             else:
                 print("Column trace_id already exists.")
 
+            # 2.1 Add direction column to AIDecisionLog if it doesn't exist
+            print("Checking for direction column in ai_decision_logs...")
+            result = conn.execute(text("PRAGMA table_info(ai_decision_logs)"))
+            columns = [row[1] for row in result]
+
+            if "direction" not in columns:
+                print("Adding direction column to ai_decision_logs...")
+                conn.execute(text("ALTER TABLE ai_decision_logs ADD COLUMN direction VARCHAR(10)"))
+                print("Column direction added.")
+            else:
+                print("Column direction already exists.")
+
+            # 2.2 Add execution columns to AIDecisionLog if they don't exist
+            print("Checking for execution fields in ai_decision_logs...")
+            result = conn.execute(text("PRAGMA table_info(ai_decision_logs)"))
+            columns = [row[1] for row in result]
+
+            if "execution_price" not in columns:
+                print("Adding execution_price column to ai_decision_logs...")
+                conn.execute(text("ALTER TABLE ai_decision_logs ADD COLUMN execution_price DECIMAL(18, 6)"))
+                print("Column execution_price added.")
+            else:
+                print("Column execution_price already exists.")
+
+            if "execution_quantity" not in columns:
+                print("Adding execution_quantity column to ai_decision_logs...")
+                conn.execute(text("ALTER TABLE ai_decision_logs ADD COLUMN execution_quantity DECIMAL(18, 8)"))
+                print("Column execution_quantity added.")
+            else:
+                print("Column execution_quantity already exists.")
+
             # 3. Add agent_type column to Accounts if it doesn't exist
             print("Checking for agent_type column in accounts...")
             result = conn.execute(text("PRAGMA table_info(accounts)"))
@@ -44,8 +75,20 @@ def update_schema():
                 print("Column agent_type added.")
             else:
                 print("Column agent_type already exists.")
+
+            # 4. Add memory_enabled column to Accounts if it doesn't exist
+            print("\nChecking for memory_enabled column in accounts...")
+            result = conn.execute(text("PRAGMA table_info(accounts)"))
+            columns = [row[1] for row in result]
+
+            if "memory_enabled" not in columns:
+                print("Adding memory_enabled column to accounts...")
+                conn.execute(text("ALTER TABLE accounts ADD COLUMN memory_enabled VARCHAR(10) DEFAULT 'false' NOT NULL"))
+                print("Column memory_enabled added.")
+            else:
+                print("Column memory_enabled already exists.")
             
-            # 4. Add enable_rule_aware column to Accounts if it doesn't exist
+            # 5. Add enable_rule_aware column to Accounts if it doesn't exist
             print("\nChecking for enable_rule_aware column in accounts...")
             result = conn.execute(text("PRAGMA table_info(accounts)"))
             columns = [row[1] for row in result]
@@ -69,7 +112,7 @@ def update_schema():
             else:
                 print("Column tool_routing_enabled already exists.")
             
-            # 5. Remove old LLM audit fields from Accounts if they exist (moved to RuleEvaluationResult)
+            # 6. Remove old LLM audit fields from Accounts if they exist (moved to RuleEvaluationResult)
             print("\nChecking for deprecated LLM audit fields in accounts...")
             result = conn.execute(text("PRAGMA table_info(accounts)"))
             columns = [row[1] for row in result]
@@ -83,7 +126,7 @@ def update_schema():
                 print("These fields are now in rule_evaluation_results table (per-decision).")
                 print("If you want to remove them, you need to recreate the table.")
             
-            # 6. Add LLM audit detail fields to RuleEvaluationResult if they don't exist
+            # 7. Add LLM audit detail fields to RuleEvaluationResult if they don't exist
             print("\nChecking for LLM audit detail fields in rule_evaluation_results...")
             result = conn.execute(text("PRAGMA table_info(rule_evaluation_results)"))
             columns = [row[1] for row in result]
@@ -103,7 +146,7 @@ def update_schema():
                 else:
                     print(f"Column {field_name} already exists.")
             
-            # 7. Verify new tables exist
+            # 8. Verify new tables exist
             print("\nVerifying new tables...")
             tables_to_check = ['account_snapshots', 'asset_metadata', 'rule_evaluation_results']
             for table_name in tables_to_check:

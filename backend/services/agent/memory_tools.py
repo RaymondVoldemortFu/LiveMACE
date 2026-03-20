@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 _memory_service = None
 
 # Similarity threshold for deduplication
-DEDUP_SIMILARITY_THRESHOLD = 0.85
+DEDUP_SIMILARITY_THRESHOLD = 0.90
 
 def get_or_create_memory_service():
     """Get or create memory service singleton"""
@@ -111,6 +111,8 @@ def create_memory_tools(db: Session, trace_id: str = None):
                 formatted_memories.append({
                     "id": memory.get("id", idx),
                     "content": content,
+                    "similarity": round(memory.get("similarity", 0), 4),
+                    "final_score": memory.get("final_score"),
                     "metadata": metadata
                 })
 

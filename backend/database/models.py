@@ -324,9 +324,6 @@ class AgentMemory(Base):
     created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
     updated_at = Column(TIMESTAMP, server_default=func.current_timestamp(), onupdate=func.current_timestamp())
 
-    # Expiration logic
-    expires_at = Column(DateTime, nullable=True)
-
     account = relationship("Account", back_populates="memories")
 
 

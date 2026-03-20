@@ -179,10 +179,11 @@ class ChromaMemory(MemoryInterface):
                 logger.error("Failed to compute query embedding")
                 return []
 
-            # Search in Chroma with metadata filtering
+            # Search in Chroma: over-fetch for rerank
+            top_k = getattr(AgentConfig, 'MEMORY_RERANK_TOP_K', 20)
             results = self.collection.query(
                 query_embeddings=[query_embedding],
-                n_results=limit,
+                n_results=top_k,
                 where={"$and": [{"account_id": str(account_id)}, {"market": market}]},
                 include=["documents", "metadatas", "distances"]
             )
@@ -208,9 +209,12 @@ class ChromaMemory(MemoryInterface):
                         "created_at": metadata.get("created_at")
                     })
 
+            # Rerank with time decay
+            top_results = self.rerank(formatted_results, limit)
+
             # Update retrieval count only for high-quality matches
-            if formatted_results and db:
-                high_quality_ids = [r["id"] for r in formatted_results if r.get("similarity", 0) > AgentConfig.MEMORY_RETRIEVAL_THRESHOLD]
+            if top_results and db:
+                high_quality_ids = [r["id"] for r in top_results if r.get("similarity", 0) > AgentConfig.MEMORY_RETRIEVAL_THRESHOLD]
                 if high_quality_ids:
                     try:
                         db.query(AgentMemory).filter(
@@ -227,8 +231,8 @@ class ChromaMemory(MemoryInterface):
                         logger.error(f"Failed to update retrieval count: {db_error}")
                         db.rollback()
 
-            logger.info(f"Found {len(formatted_results)} relevant memories for account {account_id}")
-            return formatted_results
+            logger.info(f"Found {len(top_results)} relevant memories for account {account_id}")
+            return top_results
 
         except Exception as e:
             logger.error(f"Error searching memories in Chroma: {e}")
@@ -288,6 +292,36 @@ class ChromaMemory(MemoryInterface):
             logger.info(f"Memory {memory_id} deleted from Chroma")
         except Exception as e:
             logger.error(f"Error deleting memory from Chroma: {e}")
+
+    def clear_account_memories(self, account_id: str) -> int:
+        """Delete all memories for an account from both Chroma and SQLite"""
+        try:
+            from database.connection import SessionLocal
+            db = SessionLocal()
+            try:
+                # Get all memory IDs for this account
+                memories = db.query(AgentMemory).filter(AgentMemory.account_id == int(account_id)).all()
+                ids = [m.memory_id for m in memories]
+
+                # Delete from Chroma
+                if self.collection and ids:
+                    self.collection.delete(ids=ids)
+
+                # Delete from SQLite
+                db.query(AgentMemory).filter(AgentMemory.account_id == int(account_id)).delete()
+                db.commit()
+                logger.info(f"Cleared {len(ids)} memories for account {account_id}")
+                return len(ids)
+            except Exception as e:
+                logger.error(f"Failed to clear memories: {e}")
+                db.rollback()
+                return 0
+            finally:
+                db.close()
+        except Exception as e:
+            logger.error(f"Error clearing account memories: {e}")
+            return 0
+
 
     def reset(self, db: Session = None):
         """Reset/clear all memories from both Chroma and SQLite (useful for testing)"""
