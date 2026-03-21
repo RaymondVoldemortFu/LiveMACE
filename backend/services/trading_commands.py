@@ -176,6 +176,308 @@ def _collect_account_decision(account_id: int, prices: Dict[str, float]) -> Opti
         db.close()
 
 
+def _process_account_decision_payload(db: Session, payload: Dict, prices: Dict[str, float]) -> None:
+    """
+    Process one agent decision payload immediately.
+    This keeps execution close to the moment each agent finishes.
+    """
+    account = get_account(db, payload["account_id"])
+    if not account:
+        logger.warning(f"Account {payload['account_id']} disappeared before execution")
+        return
+
+    account_agent_type = str(getattr(account, "agent_type", "react") or "react").strip().lower()
+    if account_agent_type not in AGENT_DECISION_TYPES:
+        # Baselines are handled separately.
+        return
+
+    portfolio = payload["portfolio"]
+    decision = payload["decision"]
+
+    if not decision or not isinstance(decision, dict):
+        logger.warning(f"Invalid decision payload for account {account.name}, skipping")
+        return
+
+    # New protocol: when decision comes from tool-mode, trades are already executed
+    # inside the agent via execute_trade. Avoid duplicate execution.
+    decision_protocol = str(decision.get("protocol", "")).strip().lower()
+    if decision_protocol == "tool" or "executed_trades" in decision:
+        executed_trades = decision.get("executed_trades", [])
+        logger.info(
+            f"Tool-mode decision received for account={account.name}, executed_trade_calls={len(executed_trades)}"
+        )
+        # Persist a summary decision row so trace history can surface this session.
+        # Trades may already be logged by execute_trade, but those rows don't carry trace_id.
+        try:
+            save_ai_decision(db, account.id, decision, portfolio, executed=True)
+        except Exception as save_err:
+            logger.warning(
+                f"Failed to save tool-mode summary decision for account={account.name}: {save_err}"
+            )
+        return
+
+    try:
+        account_id = account.id
+        # Extract account info
+        account_name = account.name
+
+        logger.info(f"Processing AI trading for account: {account_name}")
+
+        operation = decision.get("operation", "").lower() if decision.get("operation") else ""
+        symbol = decision.get("symbol", "").upper() if decision.get("symbol") else ""
+        market = _infer_market(symbol, decision.get("market"))
+        direction = decision.get("direction", "long").lower() if decision.get("direction") else "long"
+        target_portion = float(decision.get("target_portion_of_balance", 0)) if decision.get("target_portion_of_balance") is not None else 0
+        reason = decision.get("reason", "No reason provided")
+
+        logger.info(f"AI decision for {account.name}: {operation} {symbol} {direction} market={market} (portion: {target_portion:.2%}) - {reason}")
+
+        # Get current price early for logging
+        price = prices.get(symbol, 0.0)
+        leverage = int(decision.get("leverage", 1)) or 1
+
+        # Validate decision
+        if operation not in ["open", "close", "hold"]:
+            logger.warning(f"Invalid operation '{operation}' from AI for {account.name}, skipping")
+            _log_trade_execution(operation, symbol, target_portion, price, leverage, False, f"Invalid operation: {operation}")
+            save_ai_decision(db, account.id, decision, portfolio, executed=False)
+            return
+
+        if operation == "hold":
+            logger.info(f"AI decided to HOLD for {account.name}")
+            _log_trade_execution(operation, symbol, target_portion, price, leverage, True, reason)
+            # Save hold decision
+            save_ai_decision(db, account.id, decision, portfolio, executed=True)
+            return
+
+        if market == "US":
+            if symbol not in US_TRADING_SYMBOLS:
+                logger.warning(f"Invalid US symbol '{symbol}' from AI for {account.name}, skipping")
+                _log_trade_execution(operation, symbol, target_portion, price, leverage, False, f"Invalid US symbol: {symbol}")
+                save_ai_decision(db, account.id, decision, portfolio, executed=False)
+                return
+        elif symbol not in SUPPORTED_SYMBOLS:
+            logger.warning(f"Invalid symbol '{symbol}' from AI for {account.name}, skipping")
+            _log_trade_execution(operation, symbol, target_portion, price, leverage, False, f"Invalid symbol: {symbol}")
+            save_ai_decision(db, account.id, decision, portfolio, executed=False)
+            return
+        if market == "US":
+            status = get_market_status(symbol, "US")
+            if not status.get("is_trading", False):
+                logger.info(f"US market closed, skipping trade for {symbol}")
+                _log_trade_execution(operation, symbol, target_portion, price, leverage, False, "US market closed")
+                save_ai_decision(db, account_id, decision, portfolio, executed=False)
+                return
+
+        if direction not in ["long", "short"]:
+            logger.warning(f"Invalid direction '{direction}' from AI for {account.name}, skipping")
+            _log_trade_execution(operation, symbol, target_portion, price, leverage, False, f"Invalid direction: {direction}")
+            save_ai_decision(db, account.id, decision, portfolio, executed=False)
+            return
+
+        if target_portion < 0 or target_portion > 1:
+            logger.warning(f"Invalid target_portion {target_portion} from AI for {account.name}, skipping")
+            _log_trade_execution(operation, symbol, target_portion, price, leverage, False, f"Invalid target_portion: {target_portion}")
+            save_ai_decision(db, account.id, decision, portfolio, executed=False)
+            return
+
+        # Check price validity
+        if price <= 0:
+            logger.warning(f"Invalid price for {symbol} for {account.name}, skipping")
+            _log_trade_execution(operation, symbol, target_portion, price, leverage, False, "Invalid/Missing price")
+            save_ai_decision(db, account.id, decision, portfolio, executed=False)
+            return
+
+        # Calculate quantity based on operation
+        if operation == "open":
+            # Legacy mode fix: allow adding to same-side position, block only opposite side.
+            existing_position = (
+                db.query(Position)
+                .filter(Position.account_id == account.id, Position.symbol == symbol, Position.market == "CRYPTO")
+                .first()
+            )
+
+            if existing_position and float(existing_position.quantity) > 0:
+                if existing_position.side is None:
+                    logger.warning(
+                        f"Cannot open {direction} position on {symbol} - existing spot position has side=None."
+                    )
+                    _log_trade_execution(
+                        operation,
+                        symbol,
+                        target_portion,
+                        price,
+                        leverage,
+                        False,
+                        "Existing CRYPTO spot position (side=None); blocking additional open to avoid overwrite",
+                    )
+                    save_ai_decision(db, account.id, decision, portfolio, executed=False)
+                    return
+
+                existing_side = (existing_position.side or "LONG").lower()
+                if existing_side != direction:
+                    logger.warning(
+                        f"Cannot open {direction} position on {symbol} - already holding {existing_side}."
+                    )
+                    _log_trade_execution(
+                        operation, symbol, target_portion, price, leverage, False,
+                        f"Opposite position exists: {existing_position.side}"
+                    )
+                    save_ai_decision(db, account.id, decision, portfolio, executed=False)
+                    return
+
+            # Open a new position - calculate quantity based on available cash and target portion
+            available_cash = float(account.current_cash)
+            order_value = available_cash * target_portion
+            if market == "US":
+                quantity = int(Decimal(str(order_value)) / Decimal(str(price)))
+            else:
+                # For crypto, support fractional quantities - use float instead of int
+                quantity = float(Decimal(str(order_value)) / Decimal(str(price)))
+                # Round to reasonable precision (6 decimal places for crypto)
+                quantity = round(quantity, 6)
+
+            if quantity <= 0:
+                logger.info(f"Calculated {direction.upper()} quantity <= 0 for {symbol} for {account.name}, skipping")
+                _log_trade_execution(operation, symbol, target_portion, price, leverage, False, "Calculated quantity <= 0")
+                save_ai_decision(db, account.id, decision, portfolio, executed=False)
+                return
+
+            # Set side based on direction
+            if market == "US":
+                side = "BUY" if direction == "long" else "SELL"
+            else:
+                side = "LONG" if direction == "long" else "SHORT"
+
+        elif operation == "close":
+            # Close a position - calculate quantity based on position and target portion
+            position = (
+                db.query(Position)
+                .filter(Position.account_id == account.id, Position.symbol == symbol, Position.market == market)
+                .first()
+            )
+
+            if not position or float(position.quantity) <= 0:
+                logger.warning(f"No position available to close for {symbol} for {account.name}, skipping")
+                _log_trade_execution(operation, symbol, target_portion, price, leverage, False, "No position to close")
+                save_ai_decision(db, account.id, decision, portfolio, executed=False)
+                return
+
+            # Validate that direction matches the position side
+            position_side = (position.side or "LONG").lower()
+            if position_side != direction:
+                logger.warning(f"Cannot close {direction} position on {symbol} - current position is {position_side.upper()}. Direction mismatch!")
+                _log_trade_execution(operation, symbol, target_portion, price, leverage, False, f"Direction mismatch: {direction} vs {position_side}")
+                save_ai_decision(db, account.id, decision, portfolio, executed=False)
+                return
+
+            # For leveraged positions, use total quantity; for spot, use available_quantity
+            if position.leverage > 1:
+                position_quantity = float(position.quantity)
+            else:
+                position_quantity = float(position.available_quantity)
+
+            # Calculate quantity to close
+            # If target_portion is 0.0, it means CLOSE EVERYTHING (Target is 0%)
+            if target_portion == 0.0:
+                quantity = position_quantity
+            else:
+                # For now, interpret target_portion as "ratio of position to close" if > 0
+                # This is a temporary behavior to support partial closes until full target-balance logic is implemented
+                # TODO: Implement full target-balance logic for partial closes
+                quantity = position_quantity * target_portion
+
+            # Round to reasonable precision (6 decimal places for crypto)
+            if market == "US":
+                quantity = int(quantity)
+            else:
+                quantity = round(quantity, 6)
+
+            if quantity > position_quantity:
+                quantity = position_quantity
+
+            if quantity <= 0:
+                logger.info(f"Calculated close quantity <= 0 for {symbol} for {account.name}, skipping")
+                _log_trade_execution(operation, symbol, target_portion, price, leverage, False, "Calculated quantity <= 0")
+                save_ai_decision(db, account.id, decision, portfolio, executed=False)
+                return
+
+            # Set side to close the position: SELL closes LONG, BUY closes SHORT
+            if market == "US":
+                side = "SELL" if direction == "long" else "BUY"
+            else:
+                side = "SELL" if direction == "long" else "BUY"
+
+        else:
+            return
+
+        # Create and execute order using leverage-aware function
+        name = SUPPORTED_SYMBOLS.get(symbol, symbol)
+
+        order = None
+        executed = False
+        fail_reason = ""
+        try:
+            if market == "US":
+                order = create_order(
+                    db=db,
+                    account=account,
+                    symbol=symbol,
+                    name=name,
+                    side=side,
+                    order_type="MARKET",
+                    price=None,
+                    quantity=quantity,
+                    leverage=1,
+                    market="US",
+                )
+                db.commit()
+                db.refresh(order)
+                executed = check_and_execute_order(db, order)
+                if not executed:
+                    raise ValueError("US stock order was not executed")
+            else:
+                order = place_and_execute_crypto(
+                    db=db,
+                    account_id=account.id,
+                    symbol=symbol,
+                    name=name,
+                    side=side,
+                    order_type="MARKET",
+                    price=None,
+                    quantity=quantity,
+                    leverage=leverage
+                )
+
+            logger.info(
+                f"AI order executed: account={account.name} {operation.upper()} {direction.upper()} {side} {symbol} {order.order_no} quantity={quantity} leverage={leverage}x market={market} reason='{reason}'"
+            )
+            executed = True
+            _log_trade_execution(operation, symbol, target_portion, price, leverage, True, reason)
+
+        except Exception as e:
+            try:
+                # Ensure any uncommitted writes from order creation/execution
+                # are not accidentally committed by later save_ai_decision().
+                db.rollback()
+            except Exception as rollback_err:
+                logger.warning(f"Rollback failed after order execution error for {account.name}: {rollback_err}")
+            logger.error(f"Failed to execute order for {account.name}: {e}")
+            executed = False
+            fail_reason = str(e)
+            _log_trade_execution(operation, symbol, target_portion, price, leverage, False, f"Execution failed: {fail_reason}")
+
+        # Save decision with final execution status (only called once)
+        order_id = order.id if order else None
+        exec_price = float(order.price) if order and order.price else None
+        exec_quantity = float(order.filled_quantity) if order and order.filled_quantity else None
+        save_ai_decision(db, account.id, decision, portfolio, executed=executed, order_id=order_id, execution_price=exec_price, execution_quantity=exec_quantity)
+
+    except Exception as account_err:
+        logger.error(f"AI-driven order placement failed for account {account.name}: {account_err}", exc_info=True)
+        # Continue with next account even if one fails
+
+
 def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
     """Place crypto order based on AI model decision for all active accounts"""
     if not _ai_trade_run_lock.acquire(blocking=False):
@@ -198,8 +500,8 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
             logger.warning("Failed to fetch market prices, skipping AI trading")
             return
 
-        # Collect account decisions concurrently (agent calls in parallel)
-        decision_payloads: List[Dict] = []
+        # Collect and process account decisions concurrently.
+        # Each completed decision is handled immediately (no end-of-batch cache).
         concurrency = min(
             len(accounts),
             max(1, int(getattr(AgentConfig, "AGENT_MAX_CONCURRENCY", 1))),
@@ -220,7 +522,7 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
                     try:
                         result = fut.result()
                         if result:
-                            decision_payloads.append(result)
+                            _process_account_decision_payload(db, result, prices)
                     except Exception as worker_err:
                         logger.error(
                             f"Decision worker crashed for account_id={account_id}: {worker_err}",
@@ -242,299 +544,6 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
                     _grid_baseline.run_tick(db, account, prices)
                 except Exception as e:
                     logger.error(f"Grid baseline failed for account={account.id} ({account.name}): {e}", exc_info=True)
-
-        # 2) Execute/save agent decisions sequentially to keep order lifecycle consistent
-        for payload in decision_payloads:
-            account = get_account(db, payload["account_id"])
-            if not account:
-                logger.warning(f"Account {payload['account_id']} disappeared before execution")
-                continue
-
-            account_agent_type = str(getattr(account, "agent_type", "react") or "react").strip().lower()
-            if account_agent_type not in AGENT_DECISION_TYPES:
-                # Baselines are handled above.
-                continue
-
-            portfolio = payload["portfolio"]
-            decision = payload["decision"]
-
-            if not decision or not isinstance(decision, dict):
-                logger.warning(f"Invalid decision payload for account {account.name}, skipping")
-                continue
-
-            # New protocol: when decision comes from tool-mode, trades are already executed
-            # inside the agent via execute_trade. Avoid duplicate execution.
-            decision_protocol = str(decision.get("protocol", "")).strip().lower()
-            if decision_protocol == "tool" or "executed_trades" in decision:
-                executed_trades = decision.get("executed_trades", [])
-                logger.info(
-                    f"Tool-mode decision received for account={account.name}, executed_trade_calls={len(executed_trades)}"
-                )
-                # Persist a summary decision row so trace history can surface this session.
-                # Trades may already be logged by execute_trade, but those rows don't carry trace_id.
-                try:
-                    save_ai_decision(db, account.id, decision, portfolio, executed=True)
-                except Exception as save_err:
-                    logger.warning(
-                        f"Failed to save tool-mode summary decision for account={account.name}: {save_err}"
-                    )
-                continue
-
-            try:
-                account_id = account.id
-                # Extract account info
-                account_name = account.name
-                account_current_cash = float(account.current_cash)
-
-                logger.info(f"Processing AI trading for account: {account_name}")
-
-                operation = decision.get("operation", "").lower() if decision.get("operation") else ""
-                symbol = decision.get("symbol", "").upper() if decision.get("symbol") else ""
-                market = _infer_market(symbol, decision.get("market"))
-                direction = decision.get("direction", "long").lower() if decision.get("direction") else "long"
-                target_portion = float(decision.get("target_portion_of_balance", 0)) if decision.get("target_portion_of_balance") is not None else 0
-                reason = decision.get("reason", "No reason provided")
-
-                logger.info(f"AI decision for {account.name}: {operation} {symbol} {direction} market={market} (portion: {target_portion:.2%}) - {reason}")
-
-                # Get current price early for logging
-                price = prices.get(symbol, 0.0)
-                leverage = int(decision.get("leverage", 1)) or 1
-
-                # Validate decision
-                if operation not in ["open", "close", "hold"]:
-                    logger.warning(f"Invalid operation '{operation}' from AI for {account.name}, skipping")
-                    _log_trade_execution(operation, symbol, target_portion, price, leverage, False, f"Invalid operation: {operation}")
-                    save_ai_decision(db, account.id, decision, portfolio, executed=False)
-                    continue
-
-                if operation == "hold":
-                    logger.info(f"AI decided to HOLD for {account.name}")
-                    _log_trade_execution(operation, symbol, target_portion, price, leverage, True, reason)
-                    # Save hold decision
-                    save_ai_decision(db, account.id, decision, portfolio, executed=True)
-                    continue
-
-                if market == "US":
-                    if symbol not in US_TRADING_SYMBOLS:
-                        logger.warning(f"Invalid US symbol '{symbol}' from AI for {account.name}, skipping")
-                        _log_trade_execution(operation, symbol, target_portion, price, leverage, False, f"Invalid US symbol: {symbol}")
-                        save_ai_decision(db, account, decision, portfolio, executed=False)
-                        continue
-                elif symbol not in SUPPORTED_SYMBOLS:
-                    logger.warning(f"Invalid symbol '{symbol}' from AI for {account.name}, skipping")
-                    _log_trade_execution(operation, symbol, target_portion, price, leverage, False, f"Invalid symbol: {symbol}")
-                    save_ai_decision(db, account.id, decision, portfolio, executed=False)
-                    continue
-                if market == "US":
-                    status = get_market_status(symbol, "US")
-                    if not status.get("is_trading", False):
-                        logger.info(f"US market closed, skipping trade for {symbol}")
-                        _log_trade_execution(operation, symbol, target_portion, price, leverage, False, "US market closed")
-                        save_ai_decision(db, account_id, decision, portfolio, executed=False)
-                        continue
-
-                if direction not in ["long", "short"]:
-                    logger.warning(f"Invalid direction '{direction}' from AI for {account.name}, skipping")
-                    _log_trade_execution(operation, symbol, target_portion, price, leverage, False, f"Invalid direction: {direction}")
-                    save_ai_decision(db, account.id, decision, portfolio, executed=False)
-                    continue
-
-                if target_portion < 0 or target_portion > 1:
-                    logger.warning(f"Invalid target_portion {target_portion} from AI for {account.name}, skipping")
-                    _log_trade_execution(operation, symbol, target_portion, price, leverage, False, f"Invalid target_portion: {target_portion}")
-                    save_ai_decision(db, account.id, decision, portfolio, executed=False)
-                    continue
-
-                # Check price validity
-                if price <= 0:
-                    logger.warning(f"Invalid price for {symbol} for {account.name}, skipping")
-                    _log_trade_execution(operation, symbol, target_portion, price, leverage, False, "Invalid/Missing price")
-                    save_ai_decision(db, account.id, decision, portfolio, executed=False)
-                    continue
-
-                # Calculate quantity based on operation
-                if operation == "open":
-                    # Legacy mode fix: allow adding to same-side position, block only opposite side.
-                    existing_position = (
-                        db.query(Position)
-                        .filter(Position.account_id == account.id, Position.symbol == symbol, Position.market == "CRYPTO")
-                        .first()
-                    )
-                    
-                    if existing_position and float(existing_position.quantity) > 0:
-                        if existing_position.side is None:
-                            logger.warning(
-                                f"Cannot open {direction} position on {symbol} - existing spot position has side=None."
-                            )
-                            _log_trade_execution(
-                                operation,
-                                symbol,
-                                target_portion,
-                                price,
-                                leverage,
-                                False,
-                                "Existing CRYPTO spot position (side=None); blocking additional open to avoid overwrite",
-                            )
-                            save_ai_decision(db, account.id, decision, portfolio, executed=False)
-                            continue
-
-                        existing_side = (existing_position.side or "LONG").lower()
-                        if existing_side != direction:
-                            logger.warning(
-                                f"Cannot open {direction} position on {symbol} - already holding {existing_side}."
-                            )
-                            _log_trade_execution(
-                                operation, symbol, target_portion, price, leverage, False,
-                                f"Opposite position exists: {existing_position.side}"
-                            )
-                            save_ai_decision(db, account.id, decision, portfolio, executed=False)
-                            continue
-
-                    # Open a new position - calculate quantity based on available cash and target portion
-                    available_cash = float(account.current_cash)
-                    order_value = available_cash * target_portion
-                    if market == "US":
-                        quantity = int(Decimal(str(order_value)) / Decimal(str(price)))
-                    else:
-                        # For crypto, support fractional quantities - use float instead of int
-                        quantity = float(Decimal(str(order_value)) / Decimal(str(price)))
-                        # Round to reasonable precision (6 decimal places for crypto)
-                        quantity = round(quantity, 6)
-                    
-                    if quantity <= 0:
-                        logger.info(f"Calculated {direction.upper()} quantity <= 0 for {symbol} for {account.name}, skipping")
-                        _log_trade_execution(operation, symbol, target_portion, price, leverage, False, "Calculated quantity <= 0")
-                        save_ai_decision(db, account.id, decision, portfolio, executed=False)
-                        continue
-
-                    # Set side based on direction
-                    if market == "US":
-                        side = "BUY" if direction == "long" else "SELL"
-                    else:
-                        side = "LONG" if direction == "long" else "SHORT"
-
-                elif operation == "close":
-                    # Close a position - calculate quantity based on position and target portion
-                    position = (
-                        db.query(Position)
-                        .filter(Position.account_id == account.id, Position.symbol == symbol, Position.market == market)
-                        .first()
-                    )
-                    
-                    if not position or float(position.quantity) <= 0:
-                        logger.warning(f"No position available to close for {symbol} for {account.name}, skipping")
-                        _log_trade_execution(operation, symbol, target_portion, price, leverage, False, "No position to close")
-                        save_ai_decision(db, account.id, decision, portfolio, executed=False)
-                        continue
-
-                    # Validate that direction matches the position side
-                    position_side = (position.side or "LONG").lower()
-                    if position_side != direction:
-                        logger.warning(f"Cannot close {direction} position on {symbol} - current position is {position_side.upper()}. Direction mismatch!")
-                        _log_trade_execution(operation, symbol, target_portion, price, leverage, False, f"Direction mismatch: {direction} vs {position_side}")
-                        save_ai_decision(db, account.id, decision, portfolio, executed=False)
-                        continue
-
-                    # For leveraged positions, use total quantity; for spot, use available_quantity
-                    if position.leverage > 1:
-                        position_quantity = float(position.quantity)
-                    else:
-                        position_quantity = float(position.available_quantity)
-
-                    # Calculate quantity to close
-                    # If target_portion is 0.0, it means CLOSE EVERYTHING (Target is 0%)
-                    if target_portion == 0.0:
-                        quantity = position_quantity
-                    else:
-                        # For now, interpret target_portion as "ratio of position to close" if > 0
-                        # This is a temporary behavior to support partial closes until full target-balance logic is implemented
-                        # TODO: Implement full target-balance logic for partial closes
-                        quantity = position_quantity * target_portion
-
-                    # Round to reasonable precision (6 decimal places for crypto)
-                    if market == "US":
-                        quantity = int(quantity)
-                    else:
-                        quantity = round(quantity, 6)
-                    
-                    if quantity > position_quantity:
-                        quantity = position_quantity
-
-                    if quantity <= 0:
-                        logger.info(f"Calculated close quantity <= 0 for {symbol} for {account.name}, skipping")
-                        _log_trade_execution(operation, symbol, target_portion, price, leverage, False, "Calculated quantity <= 0")
-                        save_ai_decision(db, account.id, decision, portfolio, executed=False)
-                        continue
-
-                    # Set side to close the position: SELL closes LONG, BUY closes SHORT
-                    if market == "US":
-                        side = "SELL" if direction == "long" else "BUY"
-                    else:
-                        side = "SELL" if direction == "long" else "BUY"
-                
-                else:
-                    continue
-
-                # Create and execute order using leverage-aware function
-                name = SUPPORTED_SYMBOLS.get(symbol, symbol)
-                
-                order = None
-                executed = False
-                fail_reason = ""
-                try:
-                    if market == "US":
-                        order = create_order(
-                            db=db,
-                            account=account,
-                            symbol=symbol,
-                            name=name,
-                            side=side,
-                            order_type="MARKET",
-                            price=None,
-                            quantity=quantity,
-                            leverage=1,
-                            market="US",
-                        )
-                        db.commit()
-                        db.refresh(order)
-                        executed = check_and_execute_order(db, order)
-                        if not executed:
-                            raise ValueError("US stock order was not executed")
-                    else:
-                        order = place_and_execute_crypto(
-                            db=db,
-                            account_id=account.id,
-                            symbol=symbol,
-                            name=name,
-                            side=side,
-                            order_type="MARKET",
-                            price=None,
-                            quantity=quantity,
-                            leverage=leverage
-                        )
-                    
-                    logger.info(
-                        f"AI order executed: account={account.name} {operation.upper()} {direction.upper()} {side} {symbol} {order.order_no} quantity={quantity} leverage={leverage}x market={market} reason='{reason}'"
-                    )
-                    executed = True
-                    _log_trade_execution(operation, symbol, target_portion, price, leverage, True, reason)
-
-                except Exception as e:
-                    logger.error(f"Failed to execute order for {account.name}: {e}")
-                    executed = False
-                    fail_reason = str(e)
-                    _log_trade_execution(operation, symbol, target_portion, price, leverage, False, f"Execution failed: {fail_reason}")
-
-                # Save decision with final execution status (only called once)
-                order_id = order.id if order else None
-                exec_price = float(order.price) if order and order.price else None
-                exec_quantity = float(order.filled_quantity) if order and order.filled_quantity else None
-                save_ai_decision(db, account.id, decision, portfolio, executed=executed, order_id=order_id, execution_price=exec_price, execution_quantity=exec_quantity)
-
-            except Exception as account_err:
-                logger.error(f"AI-driven order placement failed for account {account.name}: {account_err}", exc_info=True)
-                # Continue with next account even if one fails
 
     except Exception as err:
         logger.error(f"AI-driven order placement failed: {err}", exc_info=True)
