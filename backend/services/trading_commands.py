@@ -220,7 +220,6 @@ def _process_account_decision_payload(db: Session, payload: Dict, prices: Dict[s
         account_id = account.id
         # Extract account info
         account_name = account.name
-        account_current_cash = float(account.current_cash)
 
         logger.info(f"Processing AI trading for account: {account_name}")
 
@@ -255,7 +254,7 @@ def _process_account_decision_payload(db: Session, payload: Dict, prices: Dict[s
             if symbol not in US_TRADING_SYMBOLS:
                 logger.warning(f"Invalid US symbol '{symbol}' from AI for {account.name}, skipping")
                 _log_trade_execution(operation, symbol, target_portion, price, leverage, False, f"Invalid US symbol: {symbol}")
-                save_ai_decision(db, account, decision, portfolio, executed=False)
+                save_ai_decision(db, account.id, decision, portfolio, executed=False)
                 return
         elif symbol not in SUPPORTED_SYMBOLS:
             logger.warning(f"Invalid symbol '{symbol}' from AI for {account.name}, skipping")
@@ -457,6 +456,12 @@ def _process_account_decision_payload(db: Session, payload: Dict, prices: Dict[s
             _log_trade_execution(operation, symbol, target_portion, price, leverage, True, reason)
 
         except Exception as e:
+            try:
+                # Ensure any uncommitted writes from order creation/execution
+                # are not accidentally committed by later save_ai_decision().
+                db.rollback()
+            except Exception as rollback_err:
+                logger.warning(f"Rollback failed after order execution error for {account.name}: {rollback_err}")
             logger.error(f"Failed to execute order for {account.name}: {e}")
             executed = False
             fail_reason = str(e)
