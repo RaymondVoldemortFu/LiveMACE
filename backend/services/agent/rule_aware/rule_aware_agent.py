@@ -36,18 +36,19 @@ class RuleAwareAgent(BaseAgent):
     """
     
     def __init__(
-        self, 
-        llm: LLMClient, 
-        tools: ToolRegistry, 
+        self,
+        llm: LLMClient,
+        tools: ToolRegistry,
         rule_engine: RuleEngine,
         max_steps: int = AgentConfig.MAX_STEPS,
         user_id: str = None,
         enable_llm_audit: bool = False,
-        account_id: int = None
+        account_id: int = None,
+        agent_name: str = None
     ):
         """
         Initialize Rule-Aware Agent
-        
+
         Args:
             llm: LLM client
             tools: Tool registry
@@ -56,8 +57,9 @@ class RuleAwareAgent(BaseAgent):
             user_id: User ID for memory
             enable_llm_audit: Whether to enable LLM-based audit scoring
             account_id: Account ID for updating audit statistics
+            agent_name: Agent display name for logging
         """
-        super().__init__(llm, tools)
+        super().__init__(llm, tools, agent_name=agent_name)
         self.max_steps = max_steps
         self.user_id = user_id
         self.account_id = account_id
