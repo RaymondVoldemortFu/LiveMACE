@@ -2,6 +2,8 @@
 """Gemini API client adapter for LLMClient interface"""
 import json
 import logging
+import random
+import time
 import requests
 from typing import Any, List, Dict, Optional
 
@@ -62,11 +64,33 @@ class GeminiFunction:
 class GeminiClient:
     """Gemini API client using HTTP requests (supports custom base_url)"""
 
-    def __init__(self, model: str, api_key: str, base_url: str = None):
+    def __init__(
+        self,
+        model: str,
+        api_key: str,
+        base_url: str = None,
+        max_retries: int = 3,
+        retry_backoff_base: float = 1.0,
+        retry_backoff_max: float = 8.0,
+    ):
         self.model = model
         self.api_key = api_key
         self.base_url = base_url.rstrip('/') if base_url else "https://generativelanguage.googleapis.com/v1beta"
         self.thought_signatures = []  # Track thought signatures across turns
+        self.max_retries = max(0, max_retries)
+        self.retry_backoff_base = max(0.1, retry_backoff_base)
+        self.retry_backoff_max = max(self.retry_backoff_base, retry_backoff_max)
+
+    @staticmethod
+    def _is_retryable_status_code(status_code: int) -> bool:
+        return status_code == 429 or 500 <= status_code < 600
+
+    def _calculate_retry_delay(self, attempt: int) -> float:
+        # Exponential backoff with jitter to reduce retry storms.
+        exp_delay = self.retry_backoff_base * (2 ** (attempt - 1))
+        capped_delay = min(exp_delay, self.retry_backoff_max)
+        jitter = random.uniform(0, capped_delay * 0.2)
+        return capped_delay + jitter
 
     def _convert_tools_to_gemini(self, tools: Optional[List[Dict]]) -> Optional[List]:
         """Convert OpenAI tool format to Gemini function declarations"""
@@ -185,16 +209,53 @@ class GeminiClient:
         logger.debug(f"Gemini API request to {safe_url}")
         logger.debug(f"Gemini request payload: {json.dumps(payload, ensure_ascii=False, indent=2)}")
 
-        response = requests.post(url, headers=headers, json=payload, timeout=30)
+        response = None
+        for attempt in range(1, self.max_retries + 2):
+            try:
+                response = requests.post(url, headers=headers, json=payload, timeout=30)
 
-        # Log error details for debugging (redact URL to avoid leaking API key)
-        if response.status_code != 200:
-            logger.error(f"Gemini API error {response.status_code}: {response.text}")
+                if self._is_retryable_status_code(response.status_code) and attempt <= self.max_retries:
+                    delay = self._calculate_retry_delay(attempt)
+                    logger.warning(
+                        "Gemini API retryable error %s on attempt %s/%s, retrying in %.2fs",
+                        response.status_code,
+                        attempt,
+                        self.max_retries + 1,
+                        delay,
+                    )
+                    time.sleep(delay)
+                    continue
+
+                # Log error details for debugging (redact URL to avoid leaking API key)
+                if response.status_code != 200:
+                    logger.error(f"Gemini API error {response.status_code}: {response.text}")
+
+                response.raise_for_status()
+                break
+            except (requests.Timeout, requests.ConnectionError) as e:
+                if attempt > self.max_retries:
+                    raise Exception(f"Gemini API request failed after retries: {str(e)}") from None
+                delay = self._calculate_retry_delay(attempt)
+                logger.warning(
+                    "Gemini API network error on attempt %s/%s: %s, retrying in %.2fs",
+                    attempt,
+                    self.max_retries + 1,
+                    str(e),
+                    delay,
+                )
+                time.sleep(delay)
+            except requests.HTTPError:
+                # Non-retryable HTTP errors arrive here (or retry budget exhausted).
+                break
+
+        if response is None:
+            raise Exception("Gemini API request failed: no response received")
 
         try:
             response.raise_for_status()
         except Exception:
             raise Exception(f"Gemini API error {response.status_code}: {response.text}") from None
+
         result = response.json()
 
         # Parse response

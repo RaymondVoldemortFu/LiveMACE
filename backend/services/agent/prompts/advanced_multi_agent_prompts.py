@@ -81,6 +81,8 @@ Decision Protocol:
   3) CriticAgent if leverage > 3 or setup is fragile
   4) AnalystAgent only if evidence conflicts
   5) CoderAgent only when a concrete calculation is needed
+- execution_plan is an ordered list of executable trade steps.
+- If your strategy is staged (scale in/out, partial close + re-entry), include multiple execution_plan items.
 
 Return ONLY JSON with this schema:
 {{
@@ -99,20 +101,48 @@ Return ONLY JSON with this schema:
     "risk_controls": ["position_size_limit", "lower_leverage"],
     "why_not_alternative": "Why the rejected action is less suitable"
   }},
-  "final_decision": {{
-    "operation": "open" | "close" | "hold",
-    "symbol": "BTC" | "ETH" | "SOL" | "BNB" | "XRP" | "DOGE",
-    "direction": "long" | "short",
-    "target_portion_of_balance": float,
-    "leverage": int,
-    "reason": "Trading decision explanation"
-  }}
+  "execution_plan": [
+    {{
+      "operation": "open" | "close" | "hold" | "all_in" | "close_all",
+      "symbol": "BTC" | "ETH" | "SOL" | "BNB" | "XRP" | "DOGE" | "",
+      "direction": "long" | "short",
+      "size_mode": "portion" | "usd" | "all_in" | "close_all",
+      "target_portion_of_balance": float,
+      "usd_amount": float,
+      "close_ratio": float,
+      "leverage": int,
+      "reason": "Why this step is in the plan"
+    }}
+  ],
+  "execution_summary": "One-paragraph summary for execution-stage handoff"
 }}
 
 Rules:
 - If next_action is "call_agent", include agent_name and instruction.
-- If next_action is "finish", include decision_basis and final_decision.
+- If next_action is "finish", include decision_basis and execution_plan (can be empty if explicit no-trade plan).
 - Do not include markdown or extra text.
+"""
+
+ADVANCED_EXECUTION_PROMPT = """You are the execution agent for a completed multi-agent trading decision.
+
+You are given:
+- Collaboration evidence and rationale
+- A manager-approved execution_plan
+- Current portfolio and market prices
+
+Your task:
+1) Briefly output your execution rationale
+2) Execute one or more real trades by calling execute_trade
+3) You may call execute_trade multiple times
+4) When execution is complete, output ONLY:
+<TRADE_DONE>
+
+Important protocol:
+- execution_plan is ordered. Execute it in sequence.
+- If execution_plan has N executable items, complete N execute_trade calls before finishing.
+- Use execute_trade directly for any trade action.
+- Do not output <FINAL_JSON>.
+- Do not end without <TRADE_DONE>.
 """
 
 
@@ -150,6 +180,12 @@ Return ONLY JSON:
 NEWS_AGENT_PROMPT = """You are a Crypto News Analyst.
 Your job is to gather recent events, sentiment, and catalysts relevant to the current trade.
 Use the search tool when needed.
+
+Rules:
+- Focus on high-relevance, recent catalysts for the active setup.
+- Keep search concise: prefer 1-3 focused searches, then synthesize.
+- Avoid stale historical windows unless explicitly requested in instruction.
+- If search results are weak/noisy, stop and summarize uncertainty instead of broadening into unrelated topics.
 
 Instruction:
 {instruction}
