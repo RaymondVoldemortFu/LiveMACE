@@ -1,26 +1,13 @@
 # Open Alpha Arena
 
-<img width="3840" height="1498" alt="image" src="https://github.com/user-attachments/assets/dac4b5d1-3da7-4b54-97e5-cef226d99547" />
-
-<img width="2882" height="1792" alt="image" src="https://github.com/user-attachments/assets/66a5283b-3761-4992-82d1-8cd01f4d518d" />
-
 This is a project inspired by [nof1 Alpha Arena](https://nof1.ai), you can setup AI trading bot on crypto market.
-
-DONE:
-- Paper Trading
-- OpenAI compatible API
-- LEVERAGE
-- ccxt for quotation
-
-TODO:
-- real trading (actually you can implement it with ccxt by the help of AI coding tools easily)
 
 ## Star History
 
 <a href="https://www.star-history.com/#etrobot/open-alpha-arena&type=date&legend=top-left">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=etrobot/open-alpha-arena&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=etrobot/open-alpha-arena&type=date&legend=top-left" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=RaymondVoldemortFu/open-alpha-arena-bench&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=RaymondVoldemortFu/open-alpha-arena-bench&type=date&legend=top-left" />
    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=etrobot/open-alpha-arena&type=date&legend=top-left" />
  </picture>
 </a>
@@ -69,7 +56,62 @@ pnpm run build
 ```
 Static assets for the frontend are produced by Vite. The backend is a standard FastAPI app that can be run with Uvicorn or any ASGI server.
 
+### Docker Deploy
+1) Prepare environment variables:
 
+```bash
+# create backend/.env and fill in at least:
+# API_KEY=...
+# BASE_URL=...
+```
+
+2) Prepare sqlite file on host (for persistence):
+
+```bash
+touch backend/data.db
+```
+
+3) Build and start service:
+
+```bash
+docker compose up -d --build
+```
+
+4) View logs / stop:
+
+```bash
+docker compose logs -f app
+docker compose down
+```
+
+Notes:
+- `docker-compose.yml` mounts `./backend/data.db` to `/app/data.db`, matching `DATABASE_URL=sqlite:///./data.db`.
+- The compose file also mounts `/var/run/docker.sock` so backend sandbox container features can work.
+
+### Batch Account Initialization
+From `backend/`:
+
+```bash
+uv run python create_accounts_from_env.py
+```
+
+Optional flags:
+- Update existing same-name accounts:
+
+```bash
+uv run python create_accounts_from_env.py --update-existing
+```
+
+- Create all model accounts for all `API_KEY*` x `BASE_URL*` combinations:
+
+```bash
+uv run python create_accounts_from_env.py --mode all-combinations
+```
+
+Combination mode env naming:
+- Base variables: `API_KEY`, `BASE_URL`
+- Optional suffixed variables: `API_KEY_<SUFFIX>`, `BASE_URL_<SUFFIX>`
+- The script creates Cartesian products of all discovered API keys and base URLs, then creates one account per model for each combination.
 
 ## License
 MIT
