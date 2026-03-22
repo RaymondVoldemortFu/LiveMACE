@@ -1,14 +1,17 @@
-version: '3.8'
-
 services:
   app:
     build: .
     container_name: usmover
     restart: unless-stopped
+    env_file:
+      - ./backend/.env
     ports:
-      - "5611:5611" 
+      - "5611:5611"
     volumes:
-      - ./data:/app/data 
+      # Persist sqlite database used by DATABASE_URL=sqlite:///./data.db
+      - ./backend/data.db:/app/data.db
+      # Required by backend/services/container_service.py to manage sandbox containers
+      - /var/run/docker.sock:/var/run/docker.sock
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.usmover.rule=Host(`oaa.finan.club`)"
