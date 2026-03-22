@@ -1,0 +1,56 @@
+openapi: 3.0.0
+info:
+  title: Pig Latin
+  version: '1'
+  description: >-
+    Pig Latin is a simple tool for encoding Pig Latin. It returns the encoded
+    Pig Latin.
+  contact:
+    name: APIVerve
+    url: https://apiverve.com
+    email: support@apiverve.com
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+servers:
+  - url: https://api.apiverve.com
+    description: Production server
+security:
+  - ApiKeyAuth: []
+paths:
+  /v1/piglatin:
+    get:
+      summary: Pig Latin
+      description: >-
+        Pig Latin is a simple tool for encoding Pig Latin. It returns the
+        encoded Pig Latin.
+      operationId: piglatin
+      tags:
+        - 22
+      parameters: []
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  data:
+                    type: object
+        '400':
+          description: Bad Request - Invalid parameters
+        '401':
+          description: Unauthorized - Invalid or missing API key
+        '429':
+          description: Too Many Requests - Rate limit exceeded
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
+  schemas: {}

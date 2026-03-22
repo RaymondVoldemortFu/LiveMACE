@@ -21,6 +21,7 @@ from alpaca.trading.client import TradingClient
 
 from config.agent_config import AgentConfig
 from services.time_source import now_utc, delta_t_minutes
+from config.market_data_config import ALPACA_US_FEED_ENABLED, ALPACA_US_FEED
 
 dotenv.load_dotenv()
 
@@ -302,6 +303,15 @@ def _estimate_start_time(end_dt: datetime, timeframe: TimeFrame, count: int) -> 
     else:
         delta = timedelta(days=count)
     return end_dt - delta
+
+
+def _alpaca_feed_kwargs() -> Dict[str, Any]:
+    if not ALPACA_US_FEED_ENABLED:
+        return {}
+    feed = (ALPACA_US_FEED or "").strip()
+    if not feed:
+        return {}
+    return {"feed": feed}
 
 
 alpaca_client = AlpacaClient()

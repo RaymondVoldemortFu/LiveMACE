@@ -53,6 +53,14 @@ def on_startup():
                     "ADD COLUMN volatility FLOAT DEFAULT 0.0 NOT NULL"
                 )
             )
+        account_cols = [row[1] for row in conn.execute(text("PRAGMA table_info(accounts)"))]
+        if "tool_routing_enabled" not in account_cols:
+            conn.execute(
+                text(
+                    "ALTER TABLE accounts "
+                    "ADD COLUMN tool_routing_enabled VARCHAR(10) DEFAULT 'true' NOT NULL"
+                )
+            )
     # Seed trading configs if empty
     db: Session = SessionLocal()
     try:
@@ -127,6 +135,7 @@ def on_startup():
                 version="v1",
                 name="GPT",
                 account_type="AI",
+                tool_routing_enabled="true",
                 model=None,
                 base_url=None,
                 api_key=None,

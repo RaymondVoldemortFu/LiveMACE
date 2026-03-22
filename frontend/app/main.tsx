@@ -281,53 +281,55 @@ function App() {
     }
 
     return (
-      <main className="flex-1 min-h-0 p-4 overflow-y-auto">
-        {currentPage === 'portfolio' && (
-          <Portfolio
-            overview={overview}
-            positions={positions}
-            orders={orders}
-            trades={trades}
-            aiDecisions={aiDecisions}
-            allAssetCurves={allAssetCurves}
-            wsRef={wsRef}
-            onSwitchAccount={switchAccount}
-            onRefreshData={refreshData}
-            accountRefreshTrigger={accountRefreshTrigger}
-            accounts={accounts}
-            loadingAccounts={accountsLoading}
-          />
-        )}
-        
-        {currentPage === 'comprehensive' && (
-          <ComprehensiveView
-            overview={overview}
-            positions={positions}
-            orders={orders}
-            trades={trades}
-            aiDecisions={aiDecisions}
-            allAssetCurves={allAssetCurves}
-            wsRef={wsRef}
-            onSwitchUser={switchUser}
-            onSwitchAccount={switchAccount}
-            onRefreshData={refreshData}
-            accountRefreshTrigger={accountRefreshTrigger}
-            accounts={accounts}
-            loadingAccounts={accountsLoading}
-          />
-        )}
-        
-        {currentPage === 'agent-status' && (
-          <AgentStatusView accounts={accounts} />
-        )}
+      <main className="flex-1 min-h-0 overflow-auto">
+        <div className="min-h-full min-w-[1200px] p-4">
+          {currentPage === 'portfolio' && (
+            <Portfolio
+              overview={overview}
+              positions={positions}
+              orders={orders}
+              trades={trades}
+              aiDecisions={aiDecisions}
+              allAssetCurves={allAssetCurves}
+              wsRef={wsRef}
+              onSwitchAccount={switchAccount}
+              onRefreshData={refreshData}
+              accountRefreshTrigger={accountRefreshTrigger}
+              accounts={accounts}
+              loadingAccounts={accountsLoading}
+            />
+          )}
+          
+          {currentPage === 'comprehensive' && (
+            <ComprehensiveView
+              overview={overview}
+              positions={positions}
+              orders={orders}
+              trades={trades}
+              aiDecisions={aiDecisions}
+              allAssetCurves={allAssetCurves}
+              wsRef={wsRef}
+              onSwitchUser={switchUser}
+              onSwitchAccount={switchAccount}
+              onRefreshData={refreshData}
+              accountRefreshTrigger={accountRefreshTrigger}
+              accounts={accounts}
+              loadingAccounts={accountsLoading}
+            />
+          )}
+          
+          {currentPage === 'agent-status' && (
+            <AgentStatusView accounts={accounts} />
+          )}
 
-        {currentPage === 'memory' && (
-          <MemoryView account={account} accounts={accounts} />
-        )}
+          {currentPage === 'memory' && (
+            <MemoryView account={account} accounts={accounts} />
+          )}
 
-        {currentPage === 'compliance' && (
-          <ComplianceDashboard accounts={accounts} />
-        )}
+          {currentPage === 'compliance' && (
+            <ComplianceDashboard accounts={accounts} />
+          )}
+        </div>
       </main>
     )
   }

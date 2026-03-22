@@ -1,0 +1,4 @@
+# UTM Coordinate Converter - Example Request
+
+curl -X GET "https://api.apiverve.com/v1/utmconverter" \
+  -H "x-api-key: YOUR_API_KEY"

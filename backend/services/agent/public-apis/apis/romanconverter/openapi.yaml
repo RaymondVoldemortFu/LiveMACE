@@ -1,0 +1,58 @@
+openapi: 3.0.0
+info:
+  title: Roman Numeral Converter
+  version: '1'
+  description: >-
+    Roman Numeral Converter is a bidirectional tool for converting between
+    Arabic numbers (1-3999) and Roman numerals. It provides detailed breakdowns
+    of the conversion process.
+  contact:
+    name: APIVerve
+    url: https://apiverve.com
+    email: support@apiverve.com
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+servers:
+  - url: https://api.apiverve.com
+    description: Production server
+security:
+  - ApiKeyAuth: []
+paths:
+  /v1/romanconverter:
+    get:
+      summary: Roman Numeral Converter
+      description: >-
+        Roman Numeral Converter is a bidirectional tool for converting between
+        Arabic numbers (1-3999) and Roman numerals. It provides detailed
+        breakdowns of the conversion process.
+      operationId: romanconverter
+      tags:
+        - 3
+      parameters: []
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  data:
+                    type: object
+        '400':
+          description: Bad Request - Invalid parameters
+        '401':
+          description: Unauthorized - Invalid or missing API key
+        '429':
+          description: Too Many Requests - Rate limit exceeded
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
+  schemas: {}

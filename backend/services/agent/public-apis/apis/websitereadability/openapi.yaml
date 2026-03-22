@@ -1,0 +1,56 @@
+openapi: 3.0.0
+info:
+  title: Website Readability
+  version: '1'
+  description: >-
+    Website Readability is a simple tool for analyzing the readability of a
+    website. It returns the readability score of the website provided.
+  contact:
+    name: APIVerve
+    url: https://apiverve.com
+    email: support@apiverve.com
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+servers:
+  - url: https://api.apiverve.com
+    description: Production server
+security:
+  - ApiKeyAuth: []
+paths:
+  /v1/websitereadability:
+    get:
+      summary: Website Readability
+      description: >-
+        Website Readability is a simple tool for analyzing the readability of a
+        website. It returns the readability score of the website provided.
+      operationId: websitereadability
+      tags:
+        - 22
+      parameters: []
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  data:
+                    type: object
+        '400':
+          description: Bad Request - Invalid parameters
+        '401':
+          description: Unauthorized - Invalid or missing API key
+        '429':
+          description: Too Many Requests - Rate limit exceeded
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
+  schemas: {}

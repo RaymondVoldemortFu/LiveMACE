@@ -1,0 +1,28 @@
+# 📦 Food
+
+> 2 APIs in this category
+
+[← Back to API Catalog](../)
+
+---
+
+## Cocktail Recipe
+
+<img src="https://apiverve.web.app/publicapis/logos/cocktail.svg" width="60" height="60" />
+
+Cocktail is a simple tool for getting cocktail recipes. It returns the ingredients, instructions, and more of the cocktail.
+
+**[View Documentation →](https://apiverve.com/marketplace/cocktail)** | **[OpenAPI Spec](../apis/cocktail/openapi.yaml)** | **[Try in Postman](https://www.postman.com/apiverve/apiverve-workspace/collection/a6utjd8/apiverve-api-collection)**
+
+---
+
+## Recipes
+
+<img src="https://apiverve.web.app/publicapis/logos/recipe.svg" width="60" height="60" />
+
+Recipes is a simple tool for getting recipe information. It returns information on various recipes.
+
+**[View Documentation →](https://apiverve.com/marketplace/recipe)** | **[OpenAPI Spec](../apis/recipe/openapi.yaml)** | **[Try in Postman](https://www.postman.com/apiverve/apiverve-workspace/collection/a6utjd8/apiverve-api-collection)**
+
+---
+

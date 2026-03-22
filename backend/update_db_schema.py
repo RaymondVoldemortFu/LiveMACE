@@ -99,6 +99,18 @@ def update_schema():
                 print("Column enable_rule_aware added.")
             else:
                 print("Column enable_rule_aware already exists.")
+
+            # 4.1. Add tool_routing_enabled column to Accounts if it doesn't exist
+            print("\nChecking for tool_routing_enabled column in accounts...")
+            result = conn.execute(text("PRAGMA table_info(accounts)"))
+            columns = [row[1] for row in result]
+
+            if "tool_routing_enabled" not in columns:
+                print("Adding tool_routing_enabled column to accounts...")
+                conn.execute(text("ALTER TABLE accounts ADD COLUMN tool_routing_enabled VARCHAR(10) DEFAULT 'true' NOT NULL"))
+                print("Column tool_routing_enabled added.")
+            else:
+                print("Column tool_routing_enabled already exists.")
             
             # 6. Remove old LLM audit fields from Accounts if they exist (moved to RuleEvaluationResult)
             print("\nChecking for deprecated LLM audit fields in accounts...")
@@ -144,7 +156,7 @@ def update_schema():
                 else:
                     print(f"✗ Table {table_name} not found")
 
-            # 4. Add volatility column to AgentPeriodCheckpoint if it doesn't exist
+            # 8. Add volatility column to AgentPeriodCheckpoint if it doesn't exist
             print("Checking for volatility column in agent_period_checkpoints...")
             result = conn.execute(text("PRAGMA table_info(agent_period_checkpoints)"))
             columns = [row[1] for row in result]

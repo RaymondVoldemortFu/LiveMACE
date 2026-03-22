@@ -1,0 +1,58 @@
+openapi: 3.0.0
+info:
+  title: GUID Generator
+  version: '1'
+  description: >-
+    GUID Generator is a tool for generating Globally Unique Identifiers (GUIDs).
+    It creates RFC 4122 version 4 UUIDs with multiple formatting options
+    including uppercase, no hyphens, and braces.
+  contact:
+    name: APIVerve
+    url: https://apiverve.com
+    email: support@apiverve.com
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+servers:
+  - url: https://api.apiverve.com
+    description: Production server
+security:
+  - ApiKeyAuth: []
+paths:
+  /v1/guidgenerator:
+    get:
+      summary: GUID Generator
+      description: >-
+        GUID Generator is a tool for generating Globally Unique Identifiers
+        (GUIDs). It creates RFC 4122 version 4 UUIDs with multiple formatting
+        options including uppercase, no hyphens, and braces.
+      operationId: guidgenerator
+      tags:
+        - 6
+      parameters: []
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  data:
+                    type: object
+        '400':
+          description: Bad Request - Invalid parameters
+        '401':
+          description: Unauthorized - Invalid or missing API key
+        '429':
+          description: Too Many Requests - Rate limit exceeded
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
+  schemas: {}
