@@ -109,16 +109,21 @@ Optional flags:
 uv run python create_accounts_from_env.py --update-existing
 ```
 
-- Create all model accounts for all `API_KEY*` x `BASE_URL*` combinations:
+- Create all model accounts for all account-config combinations from `.env`:
 
 ```bash
 uv run python create_accounts_from_env.py --mode all-combinations
 ```
 
 Combination mode env naming:
-- Base variables: `API_KEY`, `BASE_URL`
-- Optional suffixed variables: `API_KEY_<SUFFIX>`, `BASE_URL_<SUFFIX>`
-- The script creates Cartesian products of all discovered API keys and base URLs, then creates one account per model for each combination.
+- Account param combinations come from:
+  - `ACCOUNT_COMBO_ACCOUNT_TYPE`
+  - `ACCOUNT_COMBO_AGENT_TYPE`
+  - `ACCOUNT_COMBO_MEMORY_ENABLED`
+  - `ACCOUNT_COMBO_TOOL_ROUTING_ENABLED`
+  - `ACCOUNT_COMBO_ENABLE_RULE_AWARE`
+  - `ACCOUNT_COMBO_IS_ACTIVE`
+- Each variable supports comma-separated values; script creates Cartesian products across them, then creates one account per model for each combination.
 
 ## License
 MIT
