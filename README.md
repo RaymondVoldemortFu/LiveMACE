@@ -116,14 +116,16 @@ uv run python create_accounts_from_env.py --mode all-combinations
 ```
 
 Combination mode env naming:
-- Account param combinations come from:
-  - `ACCOUNT_COMBO_ACCOUNT_TYPE`
-  - `ACCOUNT_COMBO_AGENT_TYPE`
-  - `ACCOUNT_COMBO_MEMORY_ENABLED`
-  - `ACCOUNT_COMBO_TOOL_ROUTING_ENABLED`
-  - `ACCOUNT_COMBO_ENABLE_RULE_AWARE`
-  - `ACCOUNT_COMBO_IS_ACTIVE`
-- Each variable supports comma-separated values; script creates Cartesian products across them, then creates one account per model for each combination.
+- Runtime API config still uses `API_KEY` and `BASE_URL`.
+- Account param combinations come from `.env` rows:
+  - `ACCOUNT_COMBO_ROW_1`
+  - `ACCOUNT_COMBO_ROW_2`
+  - ...
+- One row equals one combination (2D list style), then script creates one account per model for each row.
+- Row positional format:
+  - `account_type,agent_type,memory_enabled,tool_routing_enabled,enable_rule_aware,is_active`
+- Optional row key-value format:
+  - `account_type=AI;agent_type=react;memory_enabled=false;tool_routing_enabled=true;enable_rule_aware=false;is_active=true`
 
 ## License
 MIT
