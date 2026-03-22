@@ -634,24 +634,27 @@ def call_agent_for_decision(
             base_url=account_base_url,  # 注意要和 OpenAI SDK 预期的 base_url 对齐
         )
 
+        # Check if rule-aware is enabled for this account (needed before tool registration)
+        enable_rule_aware = getattr(account, 'enable_rule_aware', 'false')
+        is_rule_aware = enable_rule_aware == 'true' or enable_rule_aware == True
+
         registry = ToolRegistry()
         register_default_tools(registry, db, account_id, trace_id=trace_id)
 
-        # Register public-apis tools (tools_schema.json)
-        try:
-            registered_count = register_public_api_tools(registry)
-            logger.info(f"Registered {registered_count} public-apis tools")
-        except Exception as e:
-            logger.warning(f"Failed to register public-apis tools: {e}")
+        # Register public-apis tools (tools_schema.json) only for non-rule-aware agents.
+        # Rule-aware agents use a fixed, prompt-documented tool set — adding 300+ public-api
+        # tools exceeds provider limits (max 128) and pollutes the agent's tool namespace.
+        if not is_rule_aware:
+            try:
+                registered_count = register_public_api_tools(registry)
+                logger.info(f"Registered {registered_count} public-apis tools")
+            except Exception as e:
+                logger.warning(f"Failed to register public-apis tools: {e}")
 
         # Register the new history tool
         registry.register(HistoryTool(db, account_id))
 
         logger.info(f"Initiating agent decision for account: {account_name} (ID: {account_id}) Type: {account_type}")
-        
-        # Check if rule-aware is enabled for this account
-        enable_rule_aware = getattr(account, 'enable_rule_aware', 'false')
-        is_rule_aware = enable_rule_aware == 'true' or enable_rule_aware == True
 
         logger.info(f"Account {account.name} - enable_rule_aware: {enable_rule_aware}, is_rule_aware: {is_rule_aware}")
 
