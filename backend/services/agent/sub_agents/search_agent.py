@@ -175,6 +175,146 @@ class SearchSubAgent:
             # Fallback: just keep system + last 3 messages
             return [system_msg] + messages[-3:]
 
+    def _collect_sources_from_messages(self, messages: List[Dict[str, Any]], max_sources: int = 5) -> List[Dict[str, str]]:
+        """
+        Collect source candidates from tool outputs already present in message history.
+        This is used as a safe fallback when the model fails to emit FINAL_RESPONSE in time.
+        """
+        sources: List[Dict[str, str]] = []
+        seen_urls = set()
+
+        for msg in reversed(messages):
+            if msg.get("role") != "tool":
+                continue
+
+            raw = msg.get("content")
+            if not raw:
+                continue
+
+            try:
+                payload = json.loads(raw)
+            except Exception:
+                continue
+
+            results = payload.get("results") if isinstance(payload, dict) else None
+            if not isinstance(results, list):
+                continue
+
+            for item in results:
+                if not isinstance(item, dict):
+                    continue
+                url = item.get("url")
+                if not url or url in seen_urls:
+                    continue
+
+                seen_urls.add(url)
+                title = item.get("title") or "Untitled Source"
+                snippet = item.get("content") or item.get("raw_content") or ""
+                snippet = (str(snippet)[:500] + "...") if len(str(snippet)) > 500 else str(snippet)
+                sources.append({"title": str(title), "url": str(url), "snippet": snippet})
+
+                if len(sources) >= max_sources:
+                    return sources
+
+        return sources
+
+    def _forced_final_response(self, messages: List[Dict[str, Any]], latest_content: str = "") -> Dict[str, Any]:
+        """
+        Build a non-error structured response when step budget is exhausted.
+        """
+        sources = self._collect_sources_from_messages(messages, max_sources=5)
+        summary = self._generate_forced_summary(messages, sources, latest_content)
+        if not summary:
+            if sources:
+                summary = (
+                    "Search completed but reached max internal steps before final formatting. "
+                    "Returning the key sources collected so far."
+                )
+            else:
+                summary = (
+                    "Search reached max internal steps before producing a final formatted answer, "
+                    "and no reliable sources were retained."
+                )
+
+        return {"summary": summary, "sources": sources}
+
+    def _extract_query_context(self, messages: List[Dict[str, Any]]) -> Dict[str, str]:
+        """
+        Recover the original query context from the initial user message in run().
+        """
+        context = {"query": "", "topic": "", "time_range": ""}
+        for msg in messages:
+            if msg.get("role") != "user":
+                continue
+            content = str(msg.get("content") or "")
+            if "Query:" not in content:
+                continue
+            for line in content.splitlines():
+                if line.startswith("Query:"):
+                    context["query"] = line.replace("Query:", "", 1).strip()
+                elif line.startswith("Topic:"):
+                    context["topic"] = line.replace("Topic:", "", 1).strip()
+                elif line.startswith("Time Range:"):
+                    context["time_range"] = line.replace("Time Range:", "", 1).strip()
+            break
+        return context
+
+    def _generate_forced_summary(
+        self,
+        messages: List[Dict[str, Any]],
+        sources: List[Dict[str, str]],
+        latest_content: str = "",
+    ) -> str:
+        """
+        Force one final summarization pass without tools when step budget is exhausted.
+        """
+        if not self.llm_client:
+            return latest_content.strip()
+
+        context = self._extract_query_context(messages)
+        condensed_sources = []
+        for s in sources[:5]:
+            condensed_sources.append({
+                "title": s.get("title", ""),
+                "url": s.get("url", ""),
+                "snippet": (s.get("snippet", "") or "")[:300]
+            })
+
+        summarization_messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are a financial news summarization assistant. "
+                    "Produce a concise, evidence-based final summary from provided sources only. "
+                    "Do not call tools. Do not fabricate facts. "
+                    "If evidence is weak or off-topic, state uncertainty explicitly."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    "We reached the internal step limit in a search agent.\n"
+                    "Please produce the final summary now.\n\n"
+                    f"Original query: {context.get('query', '')}\n"
+                    f"Topic: {context.get('topic', '')}\n"
+                    f"Time range: {context.get('time_range', '')}\n"
+                    f"Latest assistant draft (may be incomplete): {latest_content.strip()}\n\n"
+                    f"Collected sources (JSON): {json.dumps(condensed_sources, ensure_ascii=False)}\n\n"
+                    "Return plain text summary only."
+                ),
+            },
+        ]
+
+        try:
+            msg = self.llm_client.call(summarization_messages)
+            summary = LLMClient.extract_text_content(msg).strip()
+            if not summary and isinstance(msg, dict):
+                summary = str(msg.get("content") or "").strip()
+            return summary
+        except Exception as e:
+            logger.warning(f"Forced summary generation failed: {e}")
+            return latest_content.strip()
+
     def run(self, query: str, topic: str = "general", time_range: str = "none", 
             search_depth: str = "basic", max_results: int = 5) -> Dict[str, Any]:
         """
@@ -261,6 +401,14 @@ class SearchSubAgent:
                 # Check for tool calls
                 tool_calls = msg.tool_calls if hasattr(msg, 'tool_calls') else (msg_dict.get('tool_calls') or [])
                 if tool_calls:
+                    # Last step cannot safely execute more tools; force a structured final response.
+                    if step == self.max_steps - 1:
+                        agent_logger.warning(
+                            "Max steps reached with pending tool calls; forcing structured final response"
+                        )
+                        content = LLMClient.extract_text_content(msg)
+                        return self._forced_final_response(messages, latest_content=content)
+
                     agent_logger.info(f"Sub-Agent requested {len(tool_calls)} tools")
                     for tc in tool_calls:
                         # Support both object and dict formats
@@ -335,11 +483,12 @@ class SearchSubAgent:
                     # If it's the last step and no final response, try to return content
                     if step == self.max_steps - 1:
                          agent_logger.warning("Max steps reached without <FINAL_RESPONSE>")
-                         return {"summary": content, "sources": []}
+                         return self._forced_final_response(messages, latest_content=content)
 
             except Exception as e:
                 logger.error(f"Sub-agent step failed: {e}")
                 agent_logger.error(f"Sub-agent step failed: {e}")
                 return {"error": str(e)}
 
-        return {"error": "Max steps reached without final response."}
+        agent_logger.warning("Loop exited without final response; returning forced structured fallback")
+        return self._forced_final_response(messages, latest_content="")
