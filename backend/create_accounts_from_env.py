@@ -15,13 +15,12 @@ Examples:
 Optional env vars:
 - API_KEY / BASE_URL (required)
 - ACCOUNT_DEFAULT_* (used by single mode defaults)
-- ACCOUNT_COMBO_* (used by all-combinations mode)
+- ACCOUNT_COMBO_ROW_* (used by all-combinations mode)
 """
 
 from __future__ import annotations
 
 import argparse
-import itertools
 import os
 import re
 from decimal import Decimal
@@ -78,7 +77,7 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Account creation mode: "
             "'single' creates one account per model using API_KEY/BASE_URL; "
-            "'all-combinations' creates one account per model for each ACCOUNT_COMBO_* combination from .env."
+            "'all-combinations' creates one account per model for each ACCOUNT_COMBO_ROW_* row from .env."
         ),
     )
     return parser.parse_args()
@@ -115,23 +114,6 @@ def _sanitize_env_suffix(raw: str) -> str:
     return normalized or "default"
 
 
-def _parse_csv_env(env_name: str, default_values: List[str]) -> List[str]:
-    raw = (os.getenv(env_name) or "").strip()
-    if not raw:
-        return list(default_values)
-    values = [item.strip() for item in raw.split(",") if item.strip()]
-    if not values:
-        return list(default_values)
-    deduped: List[str] = []
-    seen = set()
-    for value in values:
-        if value in seen:
-            continue
-        seen.add(value)
-        deduped.append(value)
-    return deduped
-
-
 def _normalize_bool_text(value: str) -> str:
     lowered = value.strip().lower()
     if lowered in {"1", "true", "yes", "on"}:
@@ -161,33 +143,88 @@ def _build_single_mode_config() -> Dict[str, str]:
     }
 
 
-def _build_all_combinations_configs() -> List[Tuple[str, Dict[str, str]]]:
-    field_options: Dict[str, List[str]] = {
-        "account_type": _parse_csv_env("ACCOUNT_COMBO_ACCOUNT_TYPE", ["AI"]),
-        "agent_type": _parse_csv_env("ACCOUNT_COMBO_AGENT_TYPE", [DEFAULT_AGENT_TYPE]),
-        "memory_enabled": [
-            _normalize_bool_text(v)
-            for v in _parse_csv_env("ACCOUNT_COMBO_MEMORY_ENABLED", ["false"])
-        ],
-        "tool_routing_enabled": [
-            _normalize_bool_text(v)
-            for v in _parse_csv_env("ACCOUNT_COMBO_TOOL_ROUTING_ENABLED", ["true"])
-        ],
-        "enable_rule_aware": [
-            _normalize_bool_text(v)
-            for v in _parse_csv_env("ACCOUNT_COMBO_ENABLE_RULE_AWARE", ["false"])
-        ],
-        "is_active": [
-            _normalize_bool_text(v)
-            for v in _parse_csv_env("ACCOUNT_COMBO_IS_ACTIVE", ["true"])
-        ],
-    }
+def _normalize_account_config(config: Dict[str, str]) -> Dict[str, str]:
+    normalized = dict(config)
+    normalized["account_type"] = (normalized.get("account_type") or "").strip() or "AI"
+    normalized["agent_type"] = (
+        (normalized.get("agent_type") or "").strip() or DEFAULT_AGENT_TYPE
+    )
+    normalized["memory_enabled"] = _normalize_bool_text(normalized.get("memory_enabled", "false"))
+    normalized["tool_routing_enabled"] = _normalize_bool_text(
+        normalized.get("tool_routing_enabled", "true")
+    )
+    normalized["enable_rule_aware"] = _normalize_bool_text(
+        normalized.get("enable_rule_aware", "false")
+    )
+    normalized["is_active"] = _normalize_bool_text(normalized.get("is_active", "true"))
+    return normalized
 
+
+def _parse_combo_row_value(row_value: str, base_config: Dict[str, str]) -> Dict[str, str]:
+    value = (row_value or "").strip()
+    if not value:
+        raise SystemExit("ACCOUNT_COMBO_ROW_* cannot be empty.")
+
+    # Row supports two formats:
+    # 1) Positional CSV:
+    #    account_type,agent_type,memory_enabled,tool_routing_enabled,enable_rule_aware,is_active
+    # 2) Key-value:
+    #    account_type=AI;agent_type=react;memory_enabled=false;tool_routing_enabled=true;enable_rule_aware=false;is_active=true
+    if "=" in value:
+        config = dict(base_config)
+        parts = [p.strip() for p in re.split(r"[;,]", value) if p.strip()]
+        for part in parts:
+            if "=" not in part:
+                raise SystemExit(
+                    f"Invalid key-value combo segment '{part}'. Expected key=value."
+                )
+            key, raw_val = part.split("=", 1)
+            key = key.strip()
+            if key not in ACCOUNT_FIELD_KEYS:
+                allowed = ", ".join(ACCOUNT_FIELD_KEYS)
+                raise SystemExit(f"Unknown combo key '{key}'. Allowed keys: {allowed}.")
+            config[key] = raw_val.strip()
+        return _normalize_account_config(config)
+
+    parts = [p.strip() for p in value.split(",")]
+    if len(parts) != len(ACCOUNT_FIELD_KEYS):
+        raise SystemExit(
+            "Positional ACCOUNT_COMBO_ROW_* must have exactly 6 columns: "
+            "account_type,agent_type,memory_enabled,tool_routing_enabled,enable_rule_aware,is_active."
+        )
+    config = dict(base_config)
+    config.update({key: part for key, part in zip(ACCOUNT_FIELD_KEYS, parts)})
+    return _normalize_account_config(config)
+
+
+def _get_combo_row_items() -> List[Tuple[str, str]]:
+    items: List[Tuple[str, str, int]] = []
+    prefix = "ACCOUNT_COMBO_ROW_"
+    for key, value in os.environ.items():
+        if not key.startswith(prefix):
+            continue
+        suffix = key[len(prefix):]
+        order = int(suffix) if suffix.isdigit() else 10**9
+        items.append((key, (value or "").strip(), order))
+
+    items.sort(key=lambda x: (x[2], x[0]))
+    return [(key, value) for key, value, _ in items]
+
+
+def _build_all_combinations_configs() -> List[Tuple[str, Dict[str, str]]]:
+    row_items = _get_combo_row_items()
+    if not row_items:
+        raise SystemExit(
+            "No ACCOUNT_COMBO_ROW_* found. Please define rows in .env for --mode all-combinations."
+        )
+
+    base_config = _build_single_mode_config()
     combinations: List[Tuple[str, Dict[str, str]]] = []
-    for values in itertools.product(*(field_options[key] for key in ACCOUNT_FIELD_KEYS)):
-        config = {key: value for key, value in zip(ACCOUNT_FIELD_KEYS, values)}
+    for idx, (_, row_value) in enumerate(row_items, start=1):
+        config = _parse_combo_row_value(row_value=row_value, base_config=base_config)
         combo_name = "__".join(
             [
+                f"row-{idx:03d}",
                 f"at-{_sanitize_env_suffix(config['account_type'])}",
                 f"ag-{_sanitize_env_suffix(config['agent_type'])}",
                 f"mem-{config['memory_enabled']}",
