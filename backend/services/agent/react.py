@@ -129,11 +129,8 @@ class ReActAgent(BaseAgent):
 
             resp = self.llm.call(request_messages, tools=self.tools.openai_tools)
 
-            # Convert to dict for consistent handling and logging
-            if hasattr(resp, "model_dump"):
-                resp_dict = resp.model_dump()
-            else:
-                resp_dict = resp.dict()
+            # Convert to dict preserving provider-specific extra fields (e.g. Gemini thought_signature)
+            resp_dict = LLMClient.build_message_dict(resp)
 
             # Requirement 1: Log raw LLM response
             llm_logger.info(f"--- Step {step+1}/{self.max_steps} Response ---")

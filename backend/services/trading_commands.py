@@ -319,7 +319,7 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
                     if symbol not in US_TRADING_SYMBOLS:
                         logger.warning(f"Invalid US symbol '{symbol}' from AI for {account.name}, skipping")
                         _log_trade_execution(operation, symbol, target_portion, price, leverage, False, f"Invalid US symbol: {symbol}")
-                        save_ai_decision(db, account, decision, portfolio, executed=False)
+                        save_ai_decision(db, account.id, decision, portfolio, executed=False)
                         continue
                 elif symbol not in SUPPORTED_SYMBOLS:
                     logger.warning(f"Invalid symbol '{symbol}' from AI for {account.name}, skipping")

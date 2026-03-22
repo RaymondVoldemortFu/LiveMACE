@@ -466,7 +466,10 @@ def _save_rule_evaluation(db: Session, account_id: int, decision: Dict, trace_id
             final_score = s_audit
 
         has_hard_violations = len(r0_violations) > 0 or len(r1_violations) > 0
-        logger.info(f"Final score: {final_score:.3f} (s_rule_sat={s_rule_sat:.3f}, s_audit={s_audit:.3f}, has_hard_violations={has_hard_violations})")
+        _fs = f"{final_score:.3f}" if final_score is not None else "None"
+        _sr = f"{s_rule_sat:.3f}" if s_rule_sat is not None else "None"
+        _sa = f"{s_audit:.3f}" if s_audit is not None else "None"
+        logger.info(f"Final score: {_fs} (s_rule_sat={_sr}, s_audit={_sa}, has_hard_violations={has_hard_violations})")
 
         # Create evaluation record
         eval_result = RuleEvaluationResult(
