@@ -1,0 +1,57 @@
+openapi: 3.0.0
+info:
+  title: Lottery Numbers
+  version: '1'
+  description: >-
+    Lottery Numbers is a simple tool for looking up winning lottery numbers. It
+    returns the winning lottery numbers based on the lottery name provided.
+  contact:
+    name: APIVerve
+    url: https://apiverve.com
+    email: support@apiverve.com
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+servers:
+  - url: https://api.apiverve.com
+    description: Production server
+security:
+  - ApiKeyAuth: []
+paths:
+  /v1/lottery:
+    get:
+      summary: Lottery Numbers
+      description: >-
+        Lottery Numbers is a simple tool for looking up winning lottery numbers.
+        It returns the winning lottery numbers based on the lottery name
+        provided.
+      operationId: lottery
+      tags:
+        - 4
+      parameters: []
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  data:
+                    type: object
+        '400':
+          description: Bad Request - Invalid parameters
+        '401':
+          description: Unauthorized - Invalid or missing API key
+        '429':
+          description: Too Many Requests - Rate limit exceeded
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
+  schemas: {}

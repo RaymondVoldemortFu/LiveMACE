@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import re
 import socket
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -10,6 +11,7 @@ from .llm_client import LLMClient
 from .memory import get_memory_service
 from .prompts.advanced_multi_agent_prompts import (
     ANALYST_AGENT_PROMPT,
+    ADVANCED_EXECUTION_PROMPT,
     CODER_AGENT_PROMPT,
     CRITIC_AGENT_PROMPT,
     NEWS_AGENT_PROMPT,
@@ -25,6 +27,8 @@ class AdvancedMultiAgent(BaseAgent):
     """Manager-driven multi-agent architecture for a single trading decision."""
 
     VALID_AGENTS = {"TradingAgent", "NewsAgent", "CoderAgent", "AnalystAgent", "CriticAgent"}
+    TERMINATION_TOKEN = "<TRADE_DONE>"
+    NEWS_AGENT_MAX_SEARCH_CALLS = 3
 
     def __init__(self, llm: LLMClient, tools: ToolRegistry, max_steps: int = 15, user_id: str = None):
         super().__init__(llm, tools)
@@ -139,6 +143,77 @@ class AdvancedMultiAgent(BaseAgent):
         if len(text) > max_len:
             return text[: max_len - 3] + "..."
         return text
+
+    @staticmethod
+    def _safe_split_once(text: str, marker: str) -> Tuple[str, str]:
+        if marker in text:
+            left, right = text.split(marker, 1)
+            return left.strip(), right.strip()
+        return text.strip(), ""
+
+    def _build_manager_messages(
+        self,
+        objective: str,
+        context_str: str,
+        portfolio: Dict[str, Any],
+        prices: Dict[str, Any],
+        step: int,
+    ) -> List[Dict[str, str]]:
+        """System: policy/schema. User: current trading task state."""
+        intro, _ = self._safe_split_once(Advanced_MANAGER_PROMPT, "Trading objective:")
+        _, protocol_and_schema = self._safe_split_once(Advanced_MANAGER_PROMPT, "Decision Protocol:")
+
+        system_parts = [intro]
+        if protocol_and_schema:
+            system_parts.append(f"Decision Protocol:\n{protocol_and_schema}")
+        system_prompt = "\n\n".join([p for p in system_parts if p]).strip()
+
+        user_prompt = (
+            "Current trading task state:\n"
+            f"Trading objective:\n{objective}\n\n"
+            f"Portfolio:\n{json.dumps(portfolio, ensure_ascii=False)}\n\n"
+            f"Market Prices:\n{json.dumps(prices, ensure_ascii=False)}\n\n"
+            f"Evidence Book (use evidence IDs when citing prior findings):\n{self._format_evidence_book()}\n\n"
+            f"Current Context:\n{context_str}\n\n"
+            f"Known Conflicts/Tensions:\n{self._format_conflicts()}\n\n"
+            f"Collaboration State:\n{self._format_collaboration_state(step)}\n\n"
+            "Decide the next action now and return ONLY JSON."
+        )
+        return [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
+
+    def _build_sub_agent_messages(
+        self,
+        agent_name: str,
+        prompt_template: str,
+        instruction: str,
+        portfolio: Dict[str, Any],
+        prices: Dict[str, Any],
+    ) -> List[Dict[str, str]]:
+        """System: role/spec. User: concrete instruction + runtime context."""
+        context_marker = "Instruction:" if "Instruction:" in prompt_template else "Context:"
+        intro, _ = self._safe_split_once(prompt_template, context_marker)
+        _, schema_tail = self._safe_split_once(prompt_template, "Return ONLY JSON:")
+
+        system_parts = [intro]
+        if schema_tail:
+            system_parts.append(f"Return ONLY JSON:\n{schema_tail}")
+        system_prompt = "\n\n".join([p for p in system_parts if p]).strip()
+
+        user_lines = [f"Current task for {agent_name}:", instruction]
+        if agent_name in {"TradingAgent", "AnalystAgent", "CriticAgent"}:
+            user_lines.extend(
+                [
+                    "",
+                    f"Portfolio:\n{json.dumps(portfolio, ensure_ascii=False)}",
+                    "",
+                    f"Prices:\n{json.dumps(prices, ensure_ascii=False)}",
+                ]
+            )
+        user_lines.append("")
+        user_lines.append("Respond now.")
+        user_prompt = "\n".join(user_lines)
+
+        return [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
 
     def _derive_stance(self, text: str, sentiment: str = "") -> str:
         source = f"{text} {sentiment}".lower()
@@ -310,10 +385,11 @@ class AdvancedMultiAgent(BaseAgent):
                 self.context.append(f"Manager explicitly skipped {agent}. Reason: {reason}")
 
     def _validate_finish(
-        self, final_decision: Dict[str, Any], decision: Dict[str, Any], allow_partial: bool = False
+        self, execution_plan: Any, decision: Dict[str, Any], allow_partial: bool = False
     ) -> Tuple[bool, str]:
-        if not isinstance(final_decision, dict) or not final_decision:
-            return False, "Missing final_decision object."
+        plan_items = self._safe_list(execution_plan)
+        if not plan_items and "execution_plan" not in decision:
+            return False, "Missing execution_plan object."
 
         missing_core = []
         if self._agent_call_count("TradingAgent") == 0:
@@ -323,7 +399,13 @@ class AdvancedMultiAgent(BaseAgent):
         if missing_core:
             return False, f"Finish blocked: missing core evidence from {', '.join(missing_core)}."
 
-        leverage = final_decision.get("leverage", 1)
+        leverage = 1
+        leverages = []
+        for item in plan_items:
+            if isinstance(item, dict):
+                leverages.append(item.get("leverage", 1))
+        if leverages:
+            leverage = max(leverages)
         try:
             leverage = int(leverage)
         except Exception:
@@ -363,6 +445,211 @@ class AdvancedMultiAgent(BaseAgent):
 
         return " | ".join([p for p in parts if p])
 
+    def _expected_execution_calls(self, execution_plan: List[Dict[str, Any]]) -> int:
+        expected = 0
+        for step in execution_plan:
+            if not isinstance(step, dict):
+                continue
+            op = str(step.get("operation") or "").strip().lower()
+            if not op:
+                continue
+            # Keep hold as an executable step as well for tool-mode trace consistency.
+            expected += 1
+        return expected
+
+    def _is_done_message(self, text: str) -> bool:
+        if not text:
+            return False
+        normalized = text.strip().replace("`", "")
+        if normalized == self.TERMINATION_TOKEN:
+            return True
+        squashed = re.sub(r"\s+", "", normalized).upper()
+        # Be tolerant to near-miss variants seen in production traces.
+        if squashed in {"<TRADE_DONE>", "TRADE_DONE>", "<TRADE_DONE", "TRADE_DONE"}:
+            return True
+        if "TRADE_DONE" in squashed and len(squashed) <= 32:
+            return True
+        return False
+
+    def _validate_news_query(self, args: Dict[str, Any]) -> Optional[str]:
+        query = str(args.get("query") or "")
+        if not query.strip():
+            return "News query is empty. Provide a focused, recent-market query."
+
+        years = re.findall(r"\b(20\d{2})\b", query)
+        if not years:
+            return None
+
+        current_year = datetime.now(timezone.utc).year
+        stale_years = []
+        for y in years:
+            try:
+                year_num = int(y)
+            except ValueError:
+                continue
+            if year_num < current_year - 1:
+                stale_years.append(year_num)
+        if stale_years:
+            return (
+                f"Query targets stale year(s): {sorted(set(stale_years))}. "
+                "Focus on current/recent catalysts unless explicitly asked for historical backtest."
+            )
+        return None
+
+    def _build_execution_messages(
+        self,
+        execution_plan: List[Dict[str, Any]],
+        decision: Dict[str, Any],
+        portfolio: Dict[str, Any],
+        prices: Dict[str, Any],
+    ) -> List[Dict[str, str]]:
+        expected_calls = self._expected_execution_calls(execution_plan)
+        execution_context = {
+            "execution_plan": execution_plan,
+            "expected_execute_trade_calls": expected_calls,
+            "decision_basis": decision.get("decision_basis") or {},
+            "manager_reason": decision.get("reason") or "",
+            "collaboration_tradeoff": decision.get("collaboration_tradeoff") or "",
+            "evidence_ids": self._safe_list(decision.get("evidence_ids")),
+        }
+        user_prompt = (
+            "Execute the approved plan now.\n\n"
+            f"Execution Context:\n{json.dumps(execution_context, ensure_ascii=False)}\n\n"
+            f"Portfolio:\n{json.dumps(portfolio, ensure_ascii=False)}\n\n"
+            f"Market Prices:\n{json.dumps(prices, ensure_ascii=False)}\n\n"
+            "Execute the execution_plan in order. "
+            f"Expected execute_trade calls for this plan: {expected_calls}. "
+            "Call execute_trade one or more times as needed. "
+            f"When complete, output exactly: {self.TERMINATION_TOKEN}"
+        )
+        return [{"role": "system", "content": ADVANCED_EXECUTION_PROMPT}, {"role": "user", "content": user_prompt}]
+
+    def _run_execution_stage(
+        self,
+        execution_plan: List[Dict[str, Any]],
+        decision: Dict[str, Any],
+        portfolio: Dict[str, Any],
+        prices: Dict[str, Any],
+        on_step: Optional[Callable] = None,
+    ) -> List[Dict[str, Any]]:
+        messages = self._build_execution_messages(execution_plan, decision, portfolio, prices)
+        available_tools_names = [t["function"]["name"] for t in self.tools.openai_tools]
+        allowed_tools = ["execute_trade"]
+        valid_tools = [t for t in allowed_tools if t in available_tools_names]
+        stage_tools = [t for t in self.tools.openai_tools if t["function"]["name"] in valid_tools]
+        executed_trades: List[Dict[str, Any]] = []
+        expected_calls = self._expected_execution_calls(execution_plan)
+
+        for _ in range(24):
+            resp = self.llm.call(messages, tools=stage_tools if stage_tools else None)
+            msg_content = resp.content or ""
+            tool_calls = resp.tool_calls
+
+            if hasattr(resp, "model_dump"):
+                resp_dict = resp.model_dump()
+            else:
+                resp_dict = resp.dict()
+            messages.append(resp_dict)
+
+            if on_step:
+                on_step(
+                    {
+                        "role": "assistant",
+                        "content": f"[Execution] {msg_content}" if msg_content else None,
+                        "tool_calls": [
+                            t.model_dump() if hasattr(t, "model_dump") else t for t in tool_calls
+                        ]
+                        if tool_calls
+                        else None,
+                        "metadata": {"agent": "ExecutionAgent"},
+                    }
+                )
+
+            if tool_calls:
+                for tc in tool_calls:
+                    name = tc.function.name
+                    try:
+                        args = json.loads(tc.function.arguments or "{}")
+                    except Exception as e:
+                        args = {}
+                        result = {"error": f"Invalid tool arguments for {name}: {e}"}
+                    else:
+                        tool_func = self.tools.get(name)
+                        if tool_func is None:
+                            result = {"error": f"Tool not found: {name}"}
+                        else:
+                            try:
+                                result = tool_func(**args)
+                            except Exception as e:
+                                result = {"error": f"Tool execution failed for {name}: {e}"}
+
+                    if name == "execute_trade":
+                        executed_trades.append(result if isinstance(result, dict) else {"raw_result": str(result)})
+
+                    tool_msg = {
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "name": name,
+                        "content": json.dumps(result, ensure_ascii=False),
+                    }
+                    messages.append(tool_msg)
+
+                    if on_step:
+                        on_step(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tc.id,
+                                "name": name,
+                                "content": json.dumps(result, ensure_ascii=False),
+                                "metadata": {"agent": "ExecutionAgent"},
+                            }
+                        )
+                if expected_calls > 0 and len(executed_trades) < expected_calls:
+                    remaining = expected_calls - len(executed_trades)
+                    next_step = execution_plan[len(executed_trades)] if len(executed_trades) < len(execution_plan) else {}
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                f"Continue execution. Remaining execute_trade calls required: {remaining}. "
+                                f"Next step should follow this plan item: {json.dumps(next_step, ensure_ascii=False)}. "
+                                f"After all required calls, output ONLY: {self.TERMINATION_TOKEN}"
+                            ),
+                        }
+                    )
+                continue
+
+            if self._is_done_message(msg_content):
+                if expected_calls == 0 or len(executed_trades) >= expected_calls:
+                    return executed_trades
+                remaining = expected_calls - len(executed_trades)
+                next_step = execution_plan[len(executed_trades)] if len(executed_trades) < len(execution_plan) else {}
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Termination denied: only {len(executed_trades)}/{expected_calls} execute_trade calls completed. "
+                            f"Execute remaining {remaining} step(s). Next required step: {json.dumps(next_step, ensure_ascii=False)}. "
+                            f"When fully complete, output ONLY: {self.TERMINATION_TOKEN}"
+                        ),
+                    }
+                )
+                continue
+
+            reminder = (
+                "Continue execution using execute_trade if needed. "
+                f"When complete, output ONLY: {self.TERMINATION_TOKEN}"
+            )
+            messages.append({"role": "user", "content": reminder})
+
+        if expected_calls > 0 and len(executed_trades) < expected_calls:
+            logger.warning(
+                "Execution stage exited by step limit before completing plan: completed=%s expected=%s",
+                len(executed_trades),
+                expected_calls,
+            )
+        return executed_trades
+
     def _run_sub_agent(
         self,
         agent_name: str,
@@ -392,13 +679,13 @@ class AdvancedMultiAgent(BaseAgent):
         available_tools_names = [t["function"]["name"] for t in self.tools.openai_tools]
         valid_tools = [t for t in allowed_tools if t in available_tools_names]
 
-        formatted_prompt = system_prompt.format(
+        messages = self._build_sub_agent_messages(
+            agent_name=agent_name,
+            prompt_template=system_prompt,
             instruction=instruction,
-            portfolio=json.dumps(portfolio, ensure_ascii=False),
-            prices=json.dumps(prices, ensure_ascii=False),
+            portfolio=portfolio,
+            prices=prices,
         )
-
-        messages = [{"role": "system", "content": formatted_prompt}]
 
         if on_step:
             on_step(
@@ -411,10 +698,14 @@ class AdvancedMultiAgent(BaseAgent):
 
         sub_agent_steps = 20
         agent_tools = [t for t in self.tools.openai_tools if t["function"]["name"] in valid_tools]
+        news_search_calls = 0
 
         current_response = ""
         for _ in range(sub_agent_steps):
-            resp = self.llm.call(messages, tools=agent_tools if agent_tools else None)
+            current_tools = agent_tools
+            if agent_name == "NewsAgent" and news_search_calls >= self.NEWS_AGENT_MAX_SEARCH_CALLS:
+                current_tools = []
+            resp = self.llm.call(messages, tools=current_tools if current_tools else None)
 
             msg_content = resp.content or ""
             tool_calls = resp.tool_calls
@@ -452,10 +743,29 @@ class AdvancedMultiAgent(BaseAgent):
                         if tool_func is None:
                             result = {"error": f"Tool not found: {name}"}
                         else:
-                            try:
-                                result = tool_func(**args)
-                            except Exception as e:
-                                result = {"error": f"Tool execution failed for {name}: {e}"}
+                            if agent_name == "NewsAgent" and name == "consult_search_agent":
+                                if news_search_calls >= self.NEWS_AGENT_MAX_SEARCH_CALLS:
+                                    result = {
+                                        "error": (
+                                            f"NewsAgent search budget reached ({self.NEWS_AGENT_MAX_SEARCH_CALLS}). "
+                                            "Use gathered evidence and return final JSON without more searches."
+                                        )
+                                    }
+                                else:
+                                    query_issue = self._validate_news_query(args)
+                                    if query_issue:
+                                        result = {"error": query_issue}
+                                    else:
+                                        try:
+                                            result = tool_func(**args)
+                                            news_search_calls += 1
+                                        except Exception as e:
+                                            result = {"error": f"Tool execution failed for {name}: {e}"}
+                            else:
+                                try:
+                                    result = tool_func(**args)
+                                except Exception as e:
+                                    result = {"error": f"Tool execution failed for {name}: {e}"}
 
                     tool_msg = {
                         "role": "tool",
@@ -475,18 +785,30 @@ class AdvancedMultiAgent(BaseAgent):
                                 "metadata": {"agent": agent_name},
                             }
                         )
+                if agent_name == "NewsAgent" and news_search_calls >= self.NEWS_AGENT_MAX_SEARCH_CALLS:
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "Search budget reached. Do not call more tools. "
+                                "Return ONLY JSON now using already collected evidence."
+                            ),
+                        }
+                    )
             else:
                 current_response = msg_content
                 break
 
         if not current_response:
             # Force a final summary response without tools if the agent only used tools.
-            fallback_prompt = (
-                f"{formatted_prompt}\n\n"
+            fallback_user_prompt = (
+                f"Current task for {agent_name}:\n{instruction}\n\n"
                 "Your previous responses relied only on tool calls or were empty. "
                 "Return ONLY JSON now with a concise summary and actionable details. Do not call tools."
             )
-            resp = self.llm.call([{"role": "system", "content": fallback_prompt}])
+            fallback_messages = list(messages[:2])
+            fallback_messages[1] = {"role": "user", "content": fallback_user_prompt}
+            resp = self.llm.call(fallback_messages)
             current_response = resp.content or ""
 
         return current_response
@@ -527,21 +849,19 @@ class AdvancedMultiAgent(BaseAgent):
 
         objective = self._build_objective(portfolio)
         final_decision = None
+        executed_trades: List[Dict[str, Any]] = []
 
         for step in range(self.max_steps):
             context_str = "\n".join(self.context[-16:]) if self.context else "No prior actions."
 
-            formatted_manager_prompt = Advanced_MANAGER_PROMPT.format(
+            manager_messages = self._build_manager_messages(
                 objective=objective,
-                context=context_str,
-                portfolio=json.dumps(portfolio, ensure_ascii=False),
-                prices=json.dumps(prices, ensure_ascii=False),
-                evidence_book=self._format_evidence_book(),
-                conflicts=self._format_conflicts(),
-                collaboration_state=self._format_collaboration_state(step),
+                context_str=context_str,
+                portfolio=portfolio,
+                prices=prices,
+                step=step,
             )
-
-            resp = self.llm.call([{"role": "system", "content": formatted_manager_prompt}])
+            resp = self.llm.call(manager_messages)
             content = resp.content or ""
 
             if on_step:
@@ -614,13 +934,13 @@ class AdvancedMultiAgent(BaseAgent):
                     )
 
             elif action == "finish":
-                candidate_final = decision.get("final_decision")
+                candidate_plan = decision.get("execution_plan")
                 allow_partial = step >= max(0, self.max_steps - 3)
                 if allow_partial:
                     basis = decision.setdefault("decision_basis", {}) or {}
                     if not basis.get("supporting_evidence_ids") and self.evidence_log:
                         basis["supporting_evidence_ids"] = [ev["id"] for ev in self.evidence_log[-2:]]
-                ok, msg = self._validate_finish(candidate_final, decision, allow_partial=allow_partial)
+                ok, msg = self._validate_finish(candidate_plan, decision, allow_partial=allow_partial)
                 if not ok:
                     self.context.append(f"Step {step + 1}: {msg}")
                     if on_step:
@@ -633,8 +953,33 @@ class AdvancedMultiAgent(BaseAgent):
                         )
                     continue
 
-                final_decision = candidate_final
-                final_decision["reason"] = f"[MultiAgent] {self._compose_final_reason(final_decision.get('reason', ''), decision)}"
+                execution_plan = []
+                for item in self._safe_list(candidate_plan):
+                    if isinstance(item, dict):
+                        execution_plan.append(item)
+                if not execution_plan and decision.get("final_decision"):
+                    execution_plan = [decision.get("final_decision")]
+
+                executed_trades = self._run_execution_stage(
+                    execution_plan=execution_plan,
+                    decision=decision,
+                    portfolio=portfolio,
+                    prices=prices,
+                    on_step=on_step,
+                )
+
+                final_decision = {
+                    "operation": "hold",
+                    "symbol": "",
+                    "direction": "long",
+                    "target_portion_of_balance": 0.0,
+                    "leverage": 1,
+                    "reason": f"[MultiAgent] {self._compose_final_reason(decision.get('execution_summary', ''), decision)}",
+                    "protocol": "tool",
+                    "executed_trades": executed_trades,
+                    "execution_plan": execution_plan,
+                    "decision_basis": decision.get("decision_basis") or {},
+                }
                 self._notify_evaluator(trace_id)
                 break
 
@@ -649,6 +994,8 @@ class AdvancedMultiAgent(BaseAgent):
                 "target_portion_of_balance": 0.0,
                 "leverage": 1,
                 "reason": "MultiAgent Manager did not reach a conclusion within max steps.",
+                "protocol": "tool",
+                "executed_trades": executed_trades,
             }
 
         if self.memory and self.user_id:

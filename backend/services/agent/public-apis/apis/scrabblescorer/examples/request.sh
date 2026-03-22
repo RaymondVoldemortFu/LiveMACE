@@ -1,0 +1,4 @@
+# Scrabble Word Scorer - Example Request
+
+curl -X GET "https://api.apiverve.com/v1/scrabblescorer" \
+  -H "x-api-key: YOUR_API_KEY"

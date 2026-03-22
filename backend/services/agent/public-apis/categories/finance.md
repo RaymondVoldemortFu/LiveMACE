@@ -1,0 +1,138 @@
+# 💰 Finance
+
+> 13 APIs in this category
+
+[← Back to API Catalog](../)
+
+---
+
+## BIN Lookup
+
+<img src="https://apiverve.web.app/publicapis/logos/binlookup.svg" width="60" height="60" />
+
+BIN Lookup is a simple tool for looking up BIN number information. It returns information such as the bank, card type, and more based on the BIN number provided.
+
+**[View Documentation →](https://apiverve.com/marketplace/binlookup)** | **[OpenAPI Spec](../apis/binlookup/openapi.yaml)** | **[Try in Postman](https://www.postman.com/apiverve/apiverve-workspace/collection/a6utjd8/apiverve-api-collection)**
+
+---
+
+## Currency Converter
+
+<img src="https://apiverve.web.app/publicapis/logos/currencyconverter.svg" width="60" height="60" />
+
+Currency Converter is a simple tool for converting currency rates. It returns the converted currency rate based on the amount and currency provided.
+
+**[View Documentation →](https://apiverve.com/marketplace/currencyconverter)** | **[OpenAPI Spec](../apis/currencyconverter/openapi.yaml)** | **[Try in Postman](https://www.postman.com/apiverve/apiverve-workspace/collection/a6utjd8/apiverve-api-collection)**
+
+---
+
+## Currency Symbols
+
+<img src="https://apiverve.web.app/publicapis/logos/currencysymbols.svg" width="60" height="60" />
+
+Currency Symbols is a simple tool for getting currency symbols. It returns the currency symbol, name, and more of a currency.
+
+**[View Documentation →](https://apiverve.com/marketplace/currencysymbols)** | **[OpenAPI Spec](../apis/currencysymbols/openapi.yaml)** | **[Try in Postman](https://www.postman.com/apiverve/apiverve-workspace/collection/a6utjd8/apiverve-api-collection)**
+
+---
+
+## Exchange Rate
+
+<img src="https://apiverve.web.app/publicapis/logos/exchangerate.svg" width="60" height="60" />
+
+Exchange Rate is a simple tool for getting the current exchange rate between two currencies. It returns the current exchange rate.
+
+**[View Documentation →](https://apiverve.com/marketplace/exchangerate)** | **[OpenAPI Spec](../apis/exchangerate/openapi.yaml)** | **[Try in Postman](https://www.postman.com/apiverve/apiverve-workspace/collection/a6utjd8/apiverve-api-collection)**
+
+---
+
+## Gold Price
+
+<img src="https://apiverve.web.app/publicapis/logos/goldprice.svg" width="60" height="60" />
+
+Gold Price is a simple tool for getting the current price of gold. It returns the current price of gold in any currency and in various units.
+
+**[View Documentation →](https://apiverve.com/marketplace/goldprice)** | **[OpenAPI Spec](../apis/goldprice/openapi.yaml)** | **[Try in Postman](https://www.postman.com/apiverve/apiverve-workspace/collection/a6utjd8/apiverve-api-collection)**
+
+---
+
+## IFSC Lookup
+
+<img src="https://apiverve.web.app/publicapis/logos/ifsclookup.svg" width="60" height="60" />
+
+IFSC Lookup is a simple tool for getting information on IFSC codes. It returns information on various IFSC codes.
+
+**[View Documentation →](https://apiverve.com/marketplace/ifsclookup)** | **[OpenAPI Spec](../apis/ifsclookup/openapi.yaml)** | **[Try in Postman](https://www.postman.com/apiverve/apiverve-workspace/collection/a6utjd8/apiverve-api-collection)**
+
+---
+
+## Loan Calculator
+
+<img src="https://apiverve.web.app/publicapis/logos/loanpaymentcalculator.svg" width="60" height="60" />
+
+Loan Payment Calculator is a simple tool for calculating loan payments. It returns the monthly payment, total interest, and more.
+
+**[View Documentation →](https://apiverve.com/marketplace/loanpaymentcalculator)** | **[OpenAPI Spec](../apis/loanpaymentcalculator/openapi.yaml)** | **[Try in Postman](https://www.postman.com/apiverve/apiverve-workspace/collection/a6utjd8/apiverve-api-collection)**
+
+---
+
+## Mortgage Calculator
+
+<img src="https://apiverve.web.app/publicapis/logos/mortgagecalculator.svg" width="60" height="60" />
+
+Mortgage Calculator is a simple tool for calculating mortgage payments. It returns the monthly payment, total interest, and more.
+
+**[View Documentation →](https://apiverve.com/marketplace/mortgagecalculator)** | **[OpenAPI Spec](../apis/mortgagecalculator/openapi.yaml)** | **[Try in Postman](https://www.postman.com/apiverve/apiverve-workspace/collection/a6utjd8/apiverve-api-collection)**
+
+---
+
+## Routing Number Lookup
+
+<img src="https://apiverve.web.app/publicapis/logos/routinglookup.svg" width="60" height="60" />
+
+Routing Number Lookup is a simple tool for looking up routing number information for USA Banks. It returns information such as the bank, location, and more based on the routing number provided.
+
+**[View Documentation →](https://apiverve.com/marketplace/routinglookup)** | **[OpenAPI Spec](../apis/routinglookup/openapi.yaml)** | **[Try in Postman](https://www.postman.com/apiverve/apiverve-workspace/collection/a6utjd8/apiverve-api-collection)**
+
+---
+
+## Sales Tax Lookup
+
+<img src="https://apiverve.web.app/publicapis/logos/salestax.svg" width="60" height="60" />
+
+Sales Tax Lookup is a simple tool for looking up the sales tax rate of a location. It returns the sales tax rate.
+
+**[View Documentation →](https://apiverve.com/marketplace/salestax)** | **[OpenAPI Spec](../apis/salestax/openapi.yaml)** | **[Try in Postman](https://www.postman.com/apiverve/apiverve-workspace/collection/a6utjd8/apiverve-api-collection)**
+
+---
+
+## Silver Price
+
+<img src="https://apiverve.web.app/publicapis/logos/silverprice.svg" width="60" height="60" />
+
+Silver Price is a simple tool for getting the current price of silver. It returns the current price of silver in any currency and in various units.
+
+**[View Documentation →](https://apiverve.com/marketplace/silverprice)** | **[OpenAPI Spec](../apis/silverprice/openapi.yaml)** | **[Try in Postman](https://www.postman.com/apiverve/apiverve-workspace/collection/a6utjd8/apiverve-api-collection)**
+
+---
+
+## Stock Market Open Times
+
+<img src="https://apiverve.web.app/publicapis/logos/stockmarketopentimes.svg" width="60" height="60" />
+
+Stock Market Open Times is a simple tool for getting the open times of the stock market. It returns the open times of the stock market for each day of the week.
+
+**[View Documentation →](https://apiverve.com/marketplace/stockmarketopentimes)** | **[OpenAPI Spec](../apis/stockmarketopentimes/openapi.yaml)** | **[Try in Postman](https://www.postman.com/apiverve/apiverve-workspace/collection/a6utjd8/apiverve-api-collection)**
+
+---
+
+## SWIFT Code Lookup
+
+<img src="https://apiverve.web.app/publicapis/logos/swiftlookup.svg" width="60" height="60" />
+
+SWIFT Code Lookup is a simple tool for looking up SWIFT code information. It returns information such as the bank, branch, and more based on the SWIFT code provided.
+
+**[View Documentation →](https://apiverve.com/marketplace/swiftlookup)** | **[OpenAPI Spec](../apis/swiftlookup/openapi.yaml)** | **[Try in Postman](https://www.postman.com/apiverve/apiverve-workspace/collection/a6utjd8/apiverve-api-collection)**
+
+---
+

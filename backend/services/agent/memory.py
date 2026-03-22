@@ -5,6 +5,7 @@ No external services required - all embeddings and storage are local.
 import logging
 import json
 import uuid
+import math
 import numpy as np
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional
@@ -48,6 +49,52 @@ class MemoryInterface(ABC):
     def delete(self, memory_id: str):
         """Delete a specific memory."""
         pass
+
+    @abstractmethod
+    def clear_account_memories(self, account_id: str) -> int:
+        """Delete all memories for an account. Returns count deleted."""
+        pass
+
+    @abstractmethod
+    def reset(self, db: Session = None):
+        """Reset/clear ALL memories across all accounts."""
+        pass
+
+    @staticmethod
+    def rerank(results: List[Dict], limit: int) -> List[Dict]:
+        """Rerank search results by weighted combination of similarity and time decay.
+
+        final_score = α × similarity + (1 - α) × time_decay
+        where time_decay = 0.5 ^ (age_days / half_life_days)
+        """
+        if not results:
+            return []
+
+        half_life = getattr(AgentConfig, 'MEMORY_TIME_DECAY_HALF_LIFE_DAYS', 7)
+        alpha = getattr(AgentConfig, 'MEMORY_RERANK_SIMILARITY_WEIGHT', 0.8)
+        now = datetime.now()
+
+        for r in results:
+            # Parse created_at
+            created_at = r.get("created_at")
+            if isinstance(created_at, str):
+                try:
+                    created_at = datetime.fromisoformat(created_at)
+                except (ValueError, TypeError):
+                    created_at = None
+
+            if created_at:
+                age_days = max((now - created_at).total_seconds() / 86400, 0)
+                time_decay = math.pow(0.5, age_days / half_life)
+            else:
+                time_decay = 0.5  # Unknown age gets neutral weight
+
+            similarity = r.get("similarity", 0)
+            r["time_decay"] = round(time_decay, 4)
+            r["final_score"] = round(alpha * similarity + (1 - alpha) * time_decay, 4)
+
+        results.sort(key=lambda x: x["final_score"], reverse=True)
+        return results[:limit]
 
 
 class LocalMemory(MemoryInterface):
@@ -176,9 +223,13 @@ class LocalMemory(MemoryInterface):
                     "created_at": mem.created_at.isoformat() if mem.created_at else None
                 })
 
-            # Sort by similarity (descending) and return top results
+            # Sort by similarity (descending) and over-fetch for rerank
             results.sort(key=lambda x: x["similarity"], reverse=True)
-            top_results = results[:limit]
+            top_k = getattr(AgentConfig, 'MEMORY_RERANK_TOP_K', 20)
+            candidates = results[:top_k]
+
+            # Rerank with time decay
+            top_results = self.rerank(candidates, limit)
 
             # Update retrieval count only for high-quality matches
             if top_results:
@@ -245,11 +296,48 @@ class LocalMemory(MemoryInterface):
         except Exception as e:
             logger.error(f"Error deleting memory: {e}")
 
+    def clear_account_memories(self, account_id: str) -> int:
+        """Delete all memories for an account from SQLite"""
+        try:
+            db: Session = SessionLocal()
+            try:
+                count = db.query(AgentMemory).filter(AgentMemory.account_id == int(account_id)).count()
+                db.query(AgentMemory).filter(AgentMemory.account_id == int(account_id)).delete()
+                db.commit()
+                logger.info(f"Cleared {count} memories for account {account_id}")
+                return count
+            except Exception as e:
+                logger.error(f"Failed to clear memories: {e}")
+                db.rollback()
+                return 0
+            finally:
+                db.close()
+        except Exception as e:
+            logger.error(f"Error clearing account memories: {e}")
+            return 0
+
+    def reset(self, db: Session = None):
+        """Reset all memories from SQLite"""
+        try:
+            session = db or SessionLocal()
+            try:
+                session.query(AgentMemory).delete()
+                session.commit()
+                logger.info("All memories cleared from SQLite")
+            except Exception as e:
+                logger.error(f"Failed to reset memories: {e}")
+                session.rollback()
+            finally:
+                if not db:
+                    session.close()
+        except Exception as e:
+            logger.error(f"Error resetting memories: {e}")
+
 
 def get_memory_service() -> Optional[MemoryInterface]:
     """
     Get the memory service instance based on configuration.
-    Returns ChromaMemory or LocalMemory, None if dependencies unavailable.
+    Returns PineconeMemory, ChromaMemory, or LocalMemory based on config.
     """
     if not SENTENCE_TRANSFORMERS_AVAILABLE:
         logger.warning("sentence-transformers is not installed.")
@@ -259,7 +347,27 @@ def get_memory_service() -> Optional[MemoryInterface]:
     # Choose backend based on configuration
     backend = getattr(AgentConfig, 'MEMORY_BACKEND', 'local')
 
-    if backend == 'chroma':
+    if backend == 'pinecone':
+        try:
+            from .memory_pinecone import PineconeMemory, PINECONE_AVAILABLE
+            if PINECONE_AVAILABLE:
+                api_key = AgentConfig.PINECONE_API_KEY
+                if not api_key:
+                    logger.warning("PINECONE_API_KEY not set. Falling back to LocalMemory.")
+                    return LocalMemory()
+
+                index_name = AgentConfig.PINECONE_INDEX_NAME
+                environment = AgentConfig.PINECONE_ENVIRONMENT
+                logger.info(f"Using Pinecone memory backend (index: {index_name})")
+                return PineconeMemory(api_key=api_key, index_name=index_name, environment=environment)
+            else:
+                logger.warning("Pinecone backend selected but pinecone-client not installed. Falling back to LocalMemory.")
+                logger.warning("Install with: pip install pinecone-client")
+                return LocalMemory()
+        except Exception as e:
+            logger.error(f"Failed to initialize Pinecone backend: {e}. Falling back to LocalMemory.")
+            return LocalMemory()
+    elif backend == 'chroma':
         try:
             from .memory_chroma import ChromaMemory, CHROMA_AVAILABLE
             if CHROMA_AVAILABLE:
@@ -276,4 +384,3 @@ def get_memory_service() -> Optional[MemoryInterface]:
     else:
         logger.info("Using LocalMemory backend (SQLite)")
         return LocalMemory()
-

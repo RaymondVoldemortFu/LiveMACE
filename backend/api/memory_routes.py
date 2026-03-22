@@ -2,11 +2,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from collections import defaultdict
 from typing import Optional
+import logging
 
 from database.connection import get_db
 from database.models import AgentMemory
 from services.evaluation.memory_evaluator import MemoryEvaluator
+from services.agent.memory import get_memory_service
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/memory", tags=["memory"])
 
 
@@ -80,3 +83,45 @@ def get_growth_timeline(account_id: int, market: Optional[str] = Query(None), db
         })
 
     return {"timeline": timeline}
+
+
+@router.delete("/clear-all")
+def clear_all_memories(db: Session = Depends(get_db)):
+    """Clear ALL memories across all accounts (SQLite + vector backend)."""
+    try:
+        count = db.query(AgentMemory).count()
+        db.query(AgentMemory).delete()
+        db.commit()
+
+        try:
+            memory_backend = get_memory_service()
+            if memory_backend:
+                memory_backend.reset()
+        except Exception as e:
+            logger.warning(f"Could not reset vector backend: {e}")
+
+        return {"success": True, "deleted": count}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/{account_id}/clear")
+def clear_memories(account_id: int, db: Session = Depends(get_db)):
+    """Clear all memories for a specific account (SQLite + vector backend)."""
+    try:
+        count = db.query(AgentMemory).filter(AgentMemory.account_id == account_id).count()
+        db.query(AgentMemory).filter(AgentMemory.account_id == account_id).delete()
+        db.commit()
+
+        try:
+            memory_backend = get_memory_service()
+            if memory_backend:
+                memory_backend.clear_account_memories(str(account_id))
+        except Exception as e:
+            logger.warning(f"Could not clear vector backend memories: {e}")
+
+        return {"success": True, "deleted": count}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))

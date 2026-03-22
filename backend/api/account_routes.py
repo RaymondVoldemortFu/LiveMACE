@@ -24,6 +24,10 @@ from database.connection import SessionLocal
 from database.models import Account, Position, Trade
 from services.time_source import now_utc
 from services.agent.llm_client import LLMClient
+from config.agent_config import AgentConfig
+from services.agent.prompts.system_prompts import get_trade_agent_prompt
+from services.agent.prompts.multi_agent_prompts import MANAGER_PROMPT as MULTI_AGENT_MANAGER_PROMPT
+from services.agent.prompts.advanced_multi_agent_prompts import Advanced_MANAGER_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +60,7 @@ async def list_all_accounts(db: Session = Depends(get_db)):
                 "account_type": account.account_type,
                 "agent_type": getattr(account, "agent_type", "react"),
                 "memory_enabled": getattr(account, "memory_enabled", "false"),
+                "tool_routing_enabled": getattr(account, "tool_routing_enabled", "true"),
                 "enable_rule_aware": getattr(account, "enable_rule_aware", "false") == "true",
                 "initial_capital": float(account.initial_capital),
                 "current_cash": float(account.current_cash),
@@ -147,6 +152,57 @@ async def get_specific_account_overview(account_id: int, db: Session = Depends(g
         raise HTTPException(status_code=500, detail=f"Failed to get account overview: {str(e)}")
 
 
+@router.get("/{account_id}/system-prompt")
+async def get_account_system_prompt(account_id: int, db: Session = Depends(get_db)):
+    """Get rendered system prompt for a specific account."""
+    try:
+        account = db.query(Account).filter(
+            Account.id == account_id,
+            Account.is_active == "true"
+        ).first()
+        if not account:
+            raise HTTPException(status_code=404, detail="Account not found")
+
+        agent_type = (getattr(account, "agent_type", "react") or "react").strip().lower()
+        memory_enabled = (getattr(account, "memory_enabled", "false") == "true")
+        tool_routing_enabled = (getattr(account, "tool_routing_enabled", "true") == "true")
+        decision_protocol = (getattr(AgentConfig, "TRADE_DECISION_PROTOCOL", "tool") or "tool").strip().lower()
+        termination_token = "<TRADE_DONE>" if decision_protocol == "tool" else "<FINAL_JSON>"
+
+        if agent_type == "react":
+            system_prompt = get_trade_agent_prompt(
+                memory_enabled=memory_enabled,
+                tool_routing_enabled=tool_routing_enabled,
+            )
+        elif agent_type == "multi_agent":
+            system_prompt = MULTI_AGENT_MANAGER_PROMPT
+        elif agent_type == "advanced_multi_agent":
+            system_prompt = Advanced_MANAGER_PROMPT
+        elif agent_type in {"buy_hold", "grid"}:
+            system_prompt = (
+                "This account uses a baseline strategy and does not rely on an LLM system prompt "
+                "for decision generation."
+            )
+        else:
+            system_prompt = f"Unknown agent_type='{agent_type}'. No dedicated system prompt template found."
+
+        return {
+            "account_id": account.id,
+            "account_name": account.name,
+            "agent_type": agent_type,
+            "memory_enabled": memory_enabled,
+            "tool_routing_enabled": tool_routing_enabled,
+            "decision_protocol": decision_protocol,
+            "termination_token": termination_token,
+            "system_prompt": system_prompt,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get account {account_id} system prompt: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get account system prompt: {str(e)}")
+
+
 
 @router.get("/overview")
 async def get_account_overview(db: Session = Depends(get_db)):
@@ -233,6 +289,7 @@ async def create_new_account(payload: dict, db: Session = Depends(get_db)):
             account_type=payload.get("account_type", "AI"),
             agent_type=payload.get("agent_type", "react"),
             memory_enabled=payload.get("memory_enabled", "false"),
+            tool_routing_enabled=payload.get("tool_routing_enabled", "true"),
             enable_rule_aware=enable_rule_aware_value,
             model=model,
             base_url=base_url,
@@ -264,6 +321,8 @@ async def create_new_account(payload: dict, db: Session = Depends(get_db)):
             "name": new_account.name,
             "account_type": new_account.account_type,
             "agent_type": new_account.agent_type,
+            "memory_enabled": new_account.memory_enabled,
+            "tool_routing_enabled": new_account.tool_routing_enabled,
             "enable_rule_aware": new_account.enable_rule_aware == "true",
             "initial_capital": float(new_account.initial_capital),
             "current_cash": float(new_account.current_cash),
@@ -314,6 +373,10 @@ async def update_account_settings(account_id: int, payload: dict, db: Session = 
             account.memory_enabled = payload["memory_enabled"]
             logger.info(f"Updated memory_enabled to: {account.memory_enabled}")
 
+        if "tool_routing_enabled" in payload:
+            account.tool_routing_enabled = payload["tool_routing_enabled"]
+            logger.info(f"Updated tool_routing_enabled to: {account.tool_routing_enabled}")
+
         if "enable_rule_aware" in payload:
             account.enable_rule_aware = "true" if payload["enable_rule_aware"] is True else "false"
             logger.info(f"Updated enable_rule_aware to: {account.enable_rule_aware}")
@@ -348,6 +411,8 @@ async def update_account_settings(account_id: int, payload: dict, db: Session = 
             "name": account.name,
             "account_type": account.account_type,
             "agent_type": getattr(account, "agent_type", "react"),
+            "memory_enabled": getattr(account, "memory_enabled", "false"),
+            "tool_routing_enabled": getattr(account, "tool_routing_enabled", "true"),
             "enable_rule_aware": getattr(account, "enable_rule_aware", "false") == "true",
             "initial_capital": float(account.initial_capital),
             "current_cash": float(account.current_cash),

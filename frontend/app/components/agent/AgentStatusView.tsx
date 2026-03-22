@@ -138,7 +138,7 @@ export default function AgentStatusView({ accounts }: AgentStatusViewProps) {
                         <span className="text-xs text-muted-foreground">MEMORY</span>
                         <span className="text-xs text-muted-foreground">{new Date(step.created_at).toLocaleTimeString()}</span>
                     </div>
-                    <div className="max-w-[80%] rounded-lg p-3 bg-orange-50 border border-orange-200 text-xs text-muted-foreground whitespace-pre-wrap">
+                    <div className="max-w-[80%] rounded-lg p-3 bg-orange-50 border border-orange-200 text-xs text-muted-foreground whitespace-pre-wrap break-all [overflow-wrap:anywhere]">
                         {step.content}
                     </div>
                 </div>
@@ -193,24 +193,31 @@ export default function AgentStatusView({ accounts }: AgentStatusViewProps) {
                     <span className="text-xs text-muted-foreground">{new Date(step.created_at).toLocaleTimeString()}</span>
                 </div>
                 
-                <div className={`max-w-[80%] rounded-lg p-3 ${isUser ? 'bg-primary text-primary-foreground' : 'bg-muted border'} overflow-hidden break-words`}>
+                <div className={`max-w-[80%] rounded-lg p-3 ${isUser ? 'bg-primary text-primary-foreground' : 'bg-muted border'} overflow-hidden break-all [overflow-wrap:anywhere]`}>
                     {displayContent && (
-                        <div className="whitespace-pre-wrap text-sm break-words">
+                        <div className="whitespace-pre-wrap text-sm break-all [overflow-wrap:anywhere]">
                             {displayContent}
                         </div>
                     )}
                     
                     {normalizedToolCalls.length > 0 && (
-                        <div className="mt-2 bg-black/5 p-2 rounded text-xs font-mono overflow-x-auto whitespace-pre-wrap break-all">
+                        <div className="mt-2 bg-black/5 p-2 rounded text-xs font-mono overflow-x-auto whitespace-pre-wrap break-all [overflow-wrap:anywhere]">
                             <div className="font-bold text-purple-600 mb-1">Tool Calls:</div>
-                            <pre className="whitespace-pre-wrap break-all">{JSON.stringify(normalizedToolCalls, null, 2)}</pre>
+                            <pre className="whitespace-pre-wrap break-all [overflow-wrap:anywhere]">{JSON.stringify(normalizedToolCalls, null, 2)}</pre>
+                        </div>
+                    )}
+
+                    {step.tool_output && typeof step.tool_output === 'object' && Array.isArray((step.tool_output as any).selected_tools) && (
+                        <div className="mt-2 bg-black/5 p-2 rounded text-xs font-mono overflow-x-auto whitespace-pre-wrap break-all [overflow-wrap:anywhere]">
+                            <div className="font-bold text-blue-600 mb-1">Selected Tools:</div>
+                            <pre className="whitespace-pre-wrap break-all [overflow-wrap:anywhere]">{(step.tool_output as any).selected_tools.join(', ')}</pre>
                         </div>
                     )}
 
                     {step.tool_output && (
-                         <div className="mt-2 bg-black/5 p-2 rounded text-xs font-mono overflow-x-auto whitespace-pre-wrap break-all">
+                         <div className="mt-2 bg-black/5 p-2 rounded text-xs font-mono overflow-x-auto whitespace-pre-wrap break-all [overflow-wrap:anywhere]">
                             <div className="font-bold text-blue-600 mb-1">Tool Output:</div>
-                            <pre className="whitespace-pre-wrap break-all">{typeof step.tool_output === 'string' ? step.tool_output : JSON.stringify(step.tool_output, null, 2)}</pre>
+                            <pre className="whitespace-pre-wrap break-all [overflow-wrap:anywhere]">{typeof step.tool_output === 'string' ? step.tool_output : JSON.stringify(step.tool_output, null, 2)}</pre>
                         </div>
                     )}
                 </div>
@@ -315,9 +322,9 @@ export default function AgentStatusView({ accounts }: AgentStatusViewProps) {
                         </div>
                     </CardTitle>
                 </CardHeader>
-                <CardContent className="flex-1 overflow-y-auto p-4" ref={scrollRef}>
+                <CardContent className="flex-1 overflow-auto p-4" ref={scrollRef}>
                     {trace ? (
-                        <div className="space-y-4">
+                        <div className="space-y-4 min-w-[960px]">
                             {trace.steps.map(renderStep)}
                         </div>
                     ) : (

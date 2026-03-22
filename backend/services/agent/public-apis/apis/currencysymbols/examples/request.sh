@@ -1,0 +1,4 @@
+# Currency Symbols - Example Request
+
+curl -X GET "https://api.apiverve.com/v1/currencysymbols" \
+  -H "x-api-key: YOUR_API_KEY"

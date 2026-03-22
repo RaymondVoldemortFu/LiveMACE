@@ -1,0 +1,88 @@
+# 🌤️ Weather
+
+> 8 APIs in this category
+
+[← Back to API Catalog](../)
+
+---
+
+## Air Quality
+
+<img src="https://apiverve.web.app/publicapis/logos/airquality.svg" width="60" height="60" />
+
+Air Quality is a simple tool for getting air quality data. It returns the air quality index, o3, pm2, and more.
+
+**[View Documentation →](https://apiverve.com/marketplace/airquality)** | **[OpenAPI Spec](../apis/airquality/openapi.yaml)** | **[Try in Postman](https://www.postman.com/apiverve/apiverve-workspace/collection/a6utjd8/apiverve-api-collection)**
+
+---
+
+## Marine Weather
+
+<img src="https://apiverve.web.app/publicapis/logos/marineweather.svg" width="60" height="60" />
+
+Marine Weather is a simple tool for getting marine weather data. It returns the current weather conditions in coordinates within the ocean and sea.
+
+**[View Documentation →](https://apiverve.com/marketplace/marineweather)** | **[OpenAPI Spec](../apis/marineweather/openapi.yaml)** | **[Try in Postman](https://www.postman.com/apiverve/apiverve-workspace/collection/a6utjd8/apiverve-api-collection)**
+
+---
+
+## Moonrise Moonset
+
+<img src="https://apiverve.web.app/publicapis/logos/moonrisemoonset.svg" width="60" height="60" />
+
+Moonrise Moonset is a simple tool for getting moonrise and moonset times. It returns the moonrise and moonset times based on the location provided.
+
+**[View Documentation →](https://apiverve.com/marketplace/moonrisemoonset)** | **[OpenAPI Spec](../apis/moonrisemoonset/openapi.yaml)** | **[Try in Postman](https://www.postman.com/apiverve/apiverve-workspace/collection/a6utjd8/apiverve-api-collection)**
+
+---
+
+## Solar Potential
+
+<img src="https://apiverve.web.app/publicapis/logos/solarpotential.svg" width="60" height="60" />
+
+Solar Potential is a simple tool for getting the estimated annual energy production of a PV system. It returns the estimated annual energy production of a PV system.
+
+**[View Documentation →](https://apiverve.com/marketplace/solarpotential)** | **[OpenAPI Spec](../apis/solarpotential/openapi.yaml)** | **[Try in Postman](https://www.postman.com/apiverve/apiverve-workspace/collection/a6utjd8/apiverve-api-collection)**
+
+---
+
+## Sunrise Sunset
+
+<img src="https://apiverve.web.app/publicapis/logos/sunrisesunset.svg" width="60" height="60" />
+
+Sunrise Sunset is a simple tool for getting the sunrise and sunset times. It returns the sunrise and sunset times for a given location and date.
+
+**[View Documentation →](https://apiverve.com/marketplace/sunrisesunset)** | **[OpenAPI Spec](../apis/sunrisesunset/openapi.yaml)** | **[Try in Postman](https://www.postman.com/apiverve/apiverve-workspace/collection/a6utjd8/apiverve-api-collection)**
+
+---
+
+## Weather
+
+<img src="https://apiverve.web.app/publicapis/logos/weatherforecast.svg" width="60" height="60" />
+
+Weather is a simple tool for getting the current weather. It returns the temperature, humidity, and more for a given location.
+
+**[View Documentation →](https://apiverve.com/marketplace/weatherforecast)** | **[OpenAPI Spec](../apis/weatherforecast/openapi.yaml)** | **[Try in Postman](https://www.postman.com/apiverve/apiverve-workspace/collection/a6utjd8/apiverve-api-collection)**
+
+---
+
+## Weather Seasons
+
+<img src="https://apiverve.web.app/publicapis/logos/weatherseasons.svg" width="60" height="60" />
+
+Weather Seasons is a simple tool for getting the dates of the solstice and equinox. It returns the dates of the solstice and equinox for a given year.
+
+**[View Documentation →](https://apiverve.com/marketplace/weatherseasons)** | **[OpenAPI Spec](../apis/weatherseasons/openapi.yaml)** | **[Try in Postman](https://www.postman.com/apiverve/apiverve-workspace/collection/a6utjd8/apiverve-api-collection)**
+
+---
+
+## Worldwide Earthquakes
+
+<img src="https://apiverve.web.app/publicapis/logos/earthquake.svg" width="60" height="60" />
+
+Earthquake is a simple tool for getting earthquake data. It returns the earthquake data for the past hour.
+
+**[View Documentation →](https://apiverve.com/marketplace/earthquake)** | **[OpenAPI Spec](../apis/earthquake/openapi.yaml)** | **[Try in Postman](https://www.postman.com/apiverve/apiverve-workspace/collection/a6utjd8/apiverve-api-collection)**
+
+---
+

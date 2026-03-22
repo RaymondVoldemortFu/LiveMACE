@@ -21,6 +21,7 @@ from services.agent.core import *
 from services.agent.env_wrapper import *
 from services.agent.llm_client import *
 from services.agent.tools import *
+from services.agent.public_apis_registry import register_public_api_tools
 from services.agent.history_tool import HistoryTool
 from services.container_service import ContainerService
 
@@ -43,7 +44,6 @@ SUPPORTED_SYMBOLS: Dict[str, str] = {
     "XRP": "Ripple",
     "BNB": "Binance Coin",
 }
-
 
 def _is_default_api_key(api_key: str) -> bool:
     """Check if the API key is a default/placeholder key that should be skipped"""
@@ -636,7 +636,14 @@ def call_agent_for_decision(
 
         registry = ToolRegistry()
         register_default_tools(registry, db, account_id, trace_id=trace_id)
-        
+
+        # Register public-apis tools (tools_schema.json)
+        try:
+            registered_count = register_public_api_tools(registry)
+            logger.info(f"Registered {registered_count} public-apis tools")
+        except Exception as e:
+            logger.warning(f"Failed to register public-apis tools: {e}")
+
         # Register the new history tool
         registry.register(HistoryTool(db, account_id))
 
@@ -659,6 +666,7 @@ def call_agent_for_decision(
                 max_steps=AgentConfig.MAX_STEPS,
                 user_id=str(account.id),
                 account_id=account.id,
+                agent_name=account_name,
                 enable_llm_audit=True  # Enable LLM-based audit scoring
             )
             logger.info(f"Rule-Aware Agent created successfully for account {account.name}")
@@ -671,8 +679,13 @@ def call_agent_for_decision(
                 llm=llm,
                 tools=registry,
                 max_steps=AgentConfig.MAX_STEPS,
-                user_id=str(account.id)
+                user_id=str(account.id),
+                agent_name=account_name
             )
+            if hasattr(agent, "set_tool_routing_enabled"):
+                tool_routing_enabled = getattr(account, "tool_routing_enabled", "true") == "true"
+                agent.set_tool_routing_enabled(tool_routing_enabled)
+                logger.info(f"Tool routing enabled={tool_routing_enabled} for account {account.name}")
             logger.info(f"Standard {agent_type} agent created successfully for account {account.name}")
 
         # Get account info before run (to avoid DetachedInstanceError later)

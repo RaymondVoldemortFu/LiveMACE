@@ -1,0 +1,58 @@
+openapi: 3.0.0
+info:
+  title: Domain Expiration
+  version: '1'
+  description: >-
+    Domain Expiration Checker is a simple tool for checking the expiration date
+    and age of a domain. It returns the expiration date and age of the domain
+    provided.
+  contact:
+    name: APIVerve
+    url: https://apiverve.com
+    email: support@apiverve.com
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+servers:
+  - url: https://api.apiverve.com
+    description: Production server
+security:
+  - ApiKeyAuth: []
+paths:
+  /v1/domainexpiration:
+    get:
+      summary: Domain Expiration
+      description: >-
+        Domain Expiration Checker is a simple tool for checking the expiration
+        date and age of a domain. It returns the expiration date and age of the
+        domain provided.
+      operationId: domainexpiration
+      tags:
+        - 10
+      parameters: []
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  data:
+                    type: object
+        '400':
+          description: Bad Request - Invalid parameters
+        '401':
+          description: Unauthorized - Invalid or missing API key
+        '429':
+          description: Too Many Requests - Rate limit exceeded
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
+  schemas: {}

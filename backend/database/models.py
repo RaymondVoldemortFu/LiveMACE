@@ -42,6 +42,7 @@ class Account(Base):
     account_type = Column(String(20), nullable=False, default="AI")  # "AI" or "MANUAL"
     agent_type = Column(String(20), nullable=False, default="react") # "react" or "multi_agent"
     memory_enabled = Column(String(10), nullable=False, default="false")  # "true" or "false"
+    tool_routing_enabled = Column(String(10), nullable=False, default="true")  # "true" or "false"
     enable_rule_aware = Column(String(10), nullable=False, default="false")  # "true" or "false" - Enable Rule-Aware Trading
     is_active = Column(String(10), nullable=False, default="true")
     
@@ -322,9 +323,6 @@ class AgentMemory(Base):
 
     created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
     updated_at = Column(TIMESTAMP, server_default=func.current_timestamp(), onupdate=func.current_timestamp())
-
-    # Expiration logic
-    expires_at = Column(DateTime, nullable=True)
 
     account = relationship("Account", back_populates="memories")
 

@@ -18,12 +18,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { Plus, Pencil } from 'lucide-react'
+import { Plus, Pencil, Eye } from 'lucide-react'
 import {
   getAccounts as getAccounts,
   createAccount as createAccount,
   updateAccount as updateAccount,
+  getAccountSystemPrompt,
   testLLMConnection,
+  type AccountSystemPromptResponse,
   type TradingAccount,
   type TradingAccountCreate,
 } from '@/lib/api'
@@ -69,6 +71,9 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
   const [error, setError] = useState<string | null>(null)
   const [testResult, setTestResult] = useState<string | null>(null)
   const [testing, setTesting] = useState(false)
+  const [viewingPromptAccountId, setViewingPromptAccountId] = useState<number | null>(null)
+  const [promptLoadingAccountId, setPromptLoadingAccountId] = useState<number | null>(null)
+  const [accountPrompts, setAccountPrompts] = useState<Record<number, AccountSystemPromptResponse>>({})
   const [newAccount, setNewAccount] = useState<AIAccountCreate>({
     name: '',
     model: '',
@@ -77,6 +82,7 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
     enable_rule_aware: false,
     agent_type: 'react',
     memory_enabled: 'false',
+    tool_routing_enabled: 'true',
   })
   const [editAccount, setEditAccount] = useState<AIAccountCreate>({
     name: '',
@@ -85,6 +91,7 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
     api_key: '',
     agent_type: 'react',
     memory_enabled: 'false',
+    tool_routing_enabled: 'true',
   })
 
   const loadAccounts = async () => {
@@ -173,7 +180,16 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
 
       console.log('[SettingsDialog] Creating account with data:', newAccount)
       await createAccount(newAccount)
-      setNewAccount({ name: '', model: '', base_url: '', api_key: '', agent_type: 'react', enable_rule_aware: false })
+      setNewAccount({
+        name: '',
+        model: '',
+        base_url: '',
+        api_key: '',
+        agent_type: 'react',
+        memory_enabled: 'false',
+        tool_routing_enabled: 'true',
+        enable_rule_aware: false,
+      })
       setShowAddForm(false)
       await loadAccounts()
 
@@ -254,7 +270,15 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
       console.log('Updating account with data:', editAccount)
       await updateAccount(editingId, editAccount)
       setEditingId(null)
-      setEditAccount({ name: '', model: '', base_url: '', api_key: '', agent_type: 'react' })
+      setEditAccount({
+        name: '',
+        model: '',
+        base_url: '',
+        api_key: '',
+        agent_type: 'react',
+        memory_enabled: 'false',
+        tool_routing_enabled: 'true',
+      })
       setTestResult(null)
       await loadAccounts()
       
@@ -283,15 +307,51 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
       api_key: account.api_key || '',
       agent_type: account.agent_type || 'react',
       memory_enabled: account.memory_enabled || 'false',
+      tool_routing_enabled: account.tool_routing_enabled || 'true',
       enable_rule_aware: account.enable_rule_aware || false,
     })
   }
 
   const cancelEdit = () => {
     setEditingId(null)
-    setEditAccount({ name: '', model: '', base_url: '', api_key: '', agent_type: 'react', enable_rule_aware: false })
+    setEditAccount({
+      name: '',
+      model: '',
+      base_url: '',
+      api_key: '',
+      agent_type: 'react',
+      memory_enabled: 'false',
+      tool_routing_enabled: 'true',
+      enable_rule_aware: false,
+    })
     setTestResult(null)
     setError(null)
+  }
+
+  const handleViewPrompt = async (account: AIAccount) => {
+    if (viewingPromptAccountId === account.id) {
+      setViewingPromptAccountId(null)
+      return
+    }
+
+    setViewingPromptAccountId(account.id)
+    setError(null)
+
+    if (accountPrompts[account.id]) {
+      return
+    }
+
+    try {
+      setPromptLoadingAccountId(account.id)
+      const promptData = await getAccountSystemPrompt(account.id)
+      setAccountPrompts((prev) => ({ ...prev, [account.id]: promptData }))
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Failed to load system prompt'
+      toast.error(errorMessage)
+      setViewingPromptAccountId(null)
+    } finally {
+      setPromptLoadingAccountId(null)
+    }
   }
 
   return (
@@ -403,6 +463,14 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
                           />
                           <Label htmlFor="memory-enabled-edit">Enable Memory System</Label>
                         </div>
+                        <div className="flex items-center space-x-2">
+                          <Switch
+                            id="tool-routing-enabled-edit"
+                            checked={editAccount.tool_routing_enabled === 'true'}
+                            onCheckedChange={(checked) => setEditAccount({ ...editAccount, tool_routing_enabled: checked ? 'true' : 'false' })}
+                          />
+                          <Label htmlFor="tool-routing-enabled-edit">Enable Tool Routing</Label>
+                        </div>
                         {testResult && (
                           <div className={`text-xs p-2 rounded ${
                             testResult.includes('❌') 
@@ -445,6 +513,13 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
                         </div>
                         <div className="flex gap-2">
                           <Button
+                            onClick={() => handleViewPrompt(account)}
+                            variant="outline"
+                            size="sm"
+                          >
+                            <Eye className="h-4 w-4" />
+                          </Button>
+                          <Button
                             onClick={() => startEdit(account)}
                             variant="outline"
                             size="sm"
@@ -452,6 +527,22 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
                             <Pencil className="h-4 w-4" />
                           </Button>
                         </div>
+                      </div>
+                    )}
+                    {viewingPromptAccountId === account.id && (
+                      <div className="mt-3 rounded-md border bg-muted/30 p-3 space-y-2">
+                        <div className="text-xs text-muted-foreground">
+                          {promptLoadingAccountId === account.id
+                            ? 'Loading system prompt...'
+                            : accountPrompts[account.id]
+                              ? `Agent: ${accountPrompts[account.id].agent_type} • Protocol: ${accountPrompts[account.id].decision_protocol} • End Token: ${accountPrompts[account.id].termination_token}`
+                              : 'No prompt loaded'}
+                        </div>
+                        {accountPrompts[account.id]?.system_prompt && (
+                          <pre className="max-h-80 overflow-auto rounded bg-background p-3 text-xs whitespace-pre-wrap">
+                            {accountPrompts[account.id].system_prompt}
+                          </pre>
+                        )}
                       </div>
                     )}
                   </div>
@@ -534,6 +625,14 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
                     onCheckedChange={(checked) => setNewAccount({ ...newAccount, memory_enabled: checked ? 'true' : 'false' })}
                   />
                   <Label htmlFor="memory-enabled-new">Enable Memory System</Label>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <Switch
+                    id="tool-routing-enabled-new"
+                    checked={newAccount.tool_routing_enabled === 'true'}
+                    onCheckedChange={(checked) => setNewAccount({ ...newAccount, tool_routing_enabled: checked ? 'true' : 'false' })}
+                  />
+                  <Label htmlFor="tool-routing-enabled-new">Enable Tool Routing</Label>
                 </div>
                 <div className="flex gap-2">
                   <Button onClick={handleCreateAccount} disabled={loading}>

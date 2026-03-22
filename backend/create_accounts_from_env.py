@@ -20,6 +20,7 @@ import argparse
 import os
 from decimal import Decimal
 from pathlib import Path
+from typing import Tuple
 
 import dotenv
 
@@ -30,14 +31,15 @@ MODEL_LIST = [
     "deepseek-v3.2",
     # google
     "gemini-3-pro-preview",
-    # anthropic
-    "claude-opus-4-6",
+    # xai
+    # "grok-420-agents-all", # TODO: waiting for api provider to fix bug in their service
     # qwen
     "qwen3-max",
 ]
 
-DEFAULT_AGENT_TYPE = "advanced_multi_agent"
+DEFAULT_AGENT_TYPE = "react"
 DEFAULT_INITIAL_CAPITAL = Decimal("10000")
+DEFAULT_PLACEHOLDER_ACCOUNT_NAME = "GPT"
 
 
 def parse_args() -> argparse.Namespace:
@@ -68,6 +70,21 @@ def ensure_user(db, username: str, UserModel):
     return user
 
 
+def cleanup_default_gpt_account(db, AccountModel, user_id: int, account_name: str = DEFAULT_PLACEHOLDER_ACCOUNT_NAME) -> Tuple[int, str]:
+    """
+    Remove default placeholder GPT account if exists for target user.
+    Returns (deleted_count, message).
+    """
+    deleted_count = (
+        db.query(AccountModel)
+        .filter(AccountModel.user_id == user_id, AccountModel.name == account_name)
+        .delete(synchronize_session=False)
+    )
+    if deleted_count > 0:
+        return deleted_count, f"Removed default placeholder account '{account_name}'"
+    return 0, f"No default placeholder account named '{account_name}' found"
+
+
 def main() -> int:
     args = parse_args()
 
@@ -95,6 +112,13 @@ def main() -> int:
     db = SessionLocal()
     try:
         user = ensure_user(db, args.user, User)
+        deleted_count, cleanup_message = cleanup_default_gpt_account(db, Account, user.id)
+        if deleted_count > 0:
+            db.commit()
+            print(f"[CLEANUP] {cleanup_message}")
+        else:
+            print(f"[CLEANUP] {cleanup_message}")
+
         for model in MODEL_LIST:
             name = model
             existing = (
@@ -109,6 +133,7 @@ def main() -> int:
                     existing.api_key = api_key
                     existing.account_type = "AI"
                     existing.agent_type = DEFAULT_AGENT_TYPE
+                    existing.tool_routing_enabled = "true"
                     existing.is_active = "true"
                     updated += 1
                     print(f"[UPDATED] {name} (model={model})")
@@ -123,6 +148,7 @@ def main() -> int:
                 name=name,
                 account_type="AI",
                 agent_type=DEFAULT_AGENT_TYPE,
+                tool_routing_enabled="true",
                 enable_rule_aware="false",
                 is_active="true",
                 model=model,

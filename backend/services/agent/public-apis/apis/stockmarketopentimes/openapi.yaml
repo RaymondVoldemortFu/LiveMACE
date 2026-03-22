@@ -1,0 +1,58 @@
+openapi: 3.0.0
+info:
+  title: Stock Market Open Times
+  version: '1'
+  description: >-
+    Stock Market Open Times is a simple tool for getting the open times of the
+    stock market. It returns the open times of the stock market for each day of
+    the week.
+  contact:
+    name: APIVerve
+    url: https://apiverve.com
+    email: support@apiverve.com
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+servers:
+  - url: https://api.apiverve.com
+    description: Production server
+security:
+  - ApiKeyAuth: []
+paths:
+  /v1/stockmarketopentimes:
+    get:
+      summary: Stock Market Open Times
+      description: >-
+        Stock Market Open Times is a simple tool for getting the open times of
+        the stock market. It returns the open times of the stock market for each
+        day of the week.
+      operationId: stockmarketopentimes
+      tags:
+        - 12
+      parameters: []
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  data:
+                    type: object
+        '400':
+          description: Bad Request - Invalid parameters
+        '401':
+          description: Unauthorized - Invalid or missing API key
+        '429':
+          description: Too Many Requests - Rate limit exceeded
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
+  schemas: {}

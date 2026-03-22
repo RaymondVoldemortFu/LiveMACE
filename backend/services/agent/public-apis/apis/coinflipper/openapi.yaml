@@ -1,0 +1,59 @@
+openapi: 3.0.0
+info:
+  title: Coin Flipper
+  version: '1'
+  description: >-
+    Coin Flipper is a tool for simulating coin flips. It can flip multiple coins
+    at once and provides statistics including heads/tails counts, percentages,
+    streaks, and fairness analysis for probability experiments and gaming.
+  contact:
+    name: APIVerve
+    url: https://apiverve.com
+    email: support@apiverve.com
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+servers:
+  - url: https://api.apiverve.com
+    description: Production server
+security:
+  - ApiKeyAuth: []
+paths:
+  /v1/coinflipper:
+    get:
+      summary: Coin Flipper
+      description: >-
+        Coin Flipper is a tool for simulating coin flips. It can flip multiple
+        coins at once and provides statistics including heads/tails counts,
+        percentages, streaks, and fairness analysis for probability experiments
+        and gaming.
+      operationId: coinflipper
+      tags:
+        - 27
+      parameters: []
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  data:
+                    type: object
+        '400':
+          description: Bad Request - Invalid parameters
+        '401':
+          description: Unauthorized - Invalid or missing API key
+        '429':
+          description: Too Many Requests - Rate limit exceeded
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
+  schemas: {}

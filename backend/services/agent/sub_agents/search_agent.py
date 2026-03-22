@@ -22,7 +22,7 @@ except ImportError:
 
 
 class SearchSubAgent:
-    def __init__(self, model: str = "gpt-4o-mini", api_key: str = None, base_url: str = None):
+    def __init__(self, model: str = "gpt-4o-mini", api_key: str = None, base_url: str = None, agent_name: Optional[str] = None):
         self.tavily_api_key = ToolConfig.tavily_api_key
         self.client = None
         if self.tavily_api_key:
@@ -42,6 +42,7 @@ class SearchSubAgent:
         self.model = model
         self.max_steps = ToolConfig.MAX_SEARCH_STEPS
         self.max_context_tokens = ToolConfig.MAX_CONTEXT_TOKENS
+        self.agent_name = agent_name or "SearchSubAgent"
         
         # Initialize tokenizer for accurate counting if available
         self.tokenizer = None
@@ -175,6 +176,146 @@ class SearchSubAgent:
             # Fallback: just keep system + last 3 messages
             return [system_msg] + messages[-3:]
 
+    def _collect_sources_from_messages(self, messages: List[Dict[str, Any]], max_sources: int = 5) -> List[Dict[str, str]]:
+        """
+        Collect source candidates from tool outputs already present in message history.
+        This is used as a safe fallback when the model fails to emit FINAL_RESPONSE in time.
+        """
+        sources: List[Dict[str, str]] = []
+        seen_urls = set()
+
+        for msg in reversed(messages):
+            if msg.get("role") != "tool":
+                continue
+
+            raw = msg.get("content")
+            if not raw:
+                continue
+
+            try:
+                payload = json.loads(raw)
+            except Exception:
+                continue
+
+            results = payload.get("results") if isinstance(payload, dict) else None
+            if not isinstance(results, list):
+                continue
+
+            for item in results:
+                if not isinstance(item, dict):
+                    continue
+                url = item.get("url")
+                if not url or url in seen_urls:
+                    continue
+
+                seen_urls.add(url)
+                title = item.get("title") or "Untitled Source"
+                snippet = item.get("content") or item.get("raw_content") or ""
+                snippet = (str(snippet)[:500] + "...") if len(str(snippet)) > 500 else str(snippet)
+                sources.append({"title": str(title), "url": str(url), "snippet": snippet})
+
+                if len(sources) >= max_sources:
+                    return sources
+
+        return sources
+
+    def _forced_final_response(self, messages: List[Dict[str, Any]], latest_content: str = "") -> Dict[str, Any]:
+        """
+        Build a non-error structured response when step budget is exhausted.
+        """
+        sources = self._collect_sources_from_messages(messages, max_sources=5)
+        summary = self._generate_forced_summary(messages, sources, latest_content)
+        if not summary:
+            if sources:
+                summary = (
+                    "Search completed but reached max internal steps before final formatting. "
+                    "Returning the key sources collected so far."
+                )
+            else:
+                summary = (
+                    "Search reached max internal steps before producing a final formatted answer, "
+                    "and no reliable sources were retained."
+                )
+
+        return {"summary": summary, "sources": sources}
+
+    def _extract_query_context(self, messages: List[Dict[str, Any]]) -> Dict[str, str]:
+        """
+        Recover the original query context from the initial user message in run().
+        """
+        context = {"query": "", "topic": "", "time_range": ""}
+        for msg in messages:
+            if msg.get("role") != "user":
+                continue
+            content = str(msg.get("content") or "")
+            if "Query:" not in content:
+                continue
+            for line in content.splitlines():
+                if line.startswith("Query:"):
+                    context["query"] = line.replace("Query:", "", 1).strip()
+                elif line.startswith("Topic:"):
+                    context["topic"] = line.replace("Topic:", "", 1).strip()
+                elif line.startswith("Time Range:"):
+                    context["time_range"] = line.replace("Time Range:", "", 1).strip()
+            break
+        return context
+
+    def _generate_forced_summary(
+        self,
+        messages: List[Dict[str, Any]],
+        sources: List[Dict[str, str]],
+        latest_content: str = "",
+    ) -> str:
+        """
+        Force one final summarization pass without tools when step budget is exhausted.
+        """
+        if not self.llm_client:
+            return latest_content.strip()
+
+        context = self._extract_query_context(messages)
+        condensed_sources = []
+        for s in sources[:5]:
+            condensed_sources.append({
+                "title": s.get("title", ""),
+                "url": s.get("url", ""),
+                "snippet": (s.get("snippet", "") or "")[:300]
+            })
+
+        summarization_messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are a financial news summarization assistant. "
+                    "Produce a concise, evidence-based final summary from provided sources only. "
+                    "Do not call tools. Do not fabricate facts. "
+                    "If evidence is weak or off-topic, state uncertainty explicitly."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    "We reached the internal step limit in a search agent.\n"
+                    "Please produce the final summary now.\n\n"
+                    f"Original query: {context.get('query', '')}\n"
+                    f"Topic: {context.get('topic', '')}\n"
+                    f"Time range: {context.get('time_range', '')}\n"
+                    f"Latest assistant draft (may be incomplete): {latest_content.strip()}\n\n"
+                    f"Collected sources (JSON): {json.dumps(condensed_sources, ensure_ascii=False)}\n\n"
+                    "Return plain text summary only."
+                ),
+            },
+        ]
+
+        try:
+            msg = self.llm_client.call(summarization_messages)
+            summary = LLMClient.extract_text_content(msg).strip()
+            if not summary and isinstance(msg, dict):
+                summary = str(msg.get("content") or "").strip()
+            return summary
+        except Exception as e:
+            logger.warning(f"Forced summary generation failed: {e}")
+            return latest_content.strip()
+
     def run(self, query: str, topic: str = "general", time_range: str = "none", 
             search_depth: str = "basic", max_results: int = 5) -> Dict[str, Any]:
         """
@@ -184,8 +325,9 @@ class SearchSubAgent:
         if not self.llm_client or not self.client:
             return {"error": "Sub-agent not fully initialized (missing LLM or Tavily key)."}
 
-        agent_logger.info(f"=== Starting Search Sub-Agent ===")
-        agent_logger.info(f"Query: {query}, Topic: {topic}, Time: {time_range}")
+        agent_name = self.agent_name
+        agent_logger.info(f"[{agent_name}] === Starting Search Sub-Agent ===")
+        agent_logger.info(f"[{agent_name}] Query: {query}, Topic: {topic}, Time: {time_range}")
 
         messages = [
             {"role": "system", "content": SUB_AGENT_SYSTEM_PROMPT.format(max_steps=self.max_steps)},
@@ -228,7 +370,7 @@ class SearchSubAgent:
         ]
 
         for step in range(self.max_steps):
-            agent_logger.info(f"--- Sub-Agent Step {step+1}/{self.max_steps} ---")
+            agent_logger.info(f"[{agent_name}] --- Sub-Agent Step {step+1}/{self.max_steps} ---")
             
             # Check token count before making request
             current_tokens = self._estimate_tokens(messages)
@@ -243,8 +385,8 @@ class SearchSubAgent:
             
             try:
                 # Log Request
-                llm_logger.info(f"--- Sub-Agent Step {step+1} Request ---")
-                llm_logger.info(json.dumps(messages, ensure_ascii=False, indent=2))
+                llm_logger.info(f"[{agent_name}] --- Sub-Agent Step {step+1} Request ---")
+                llm_logger.info(json.dumps({"agent": agent_name, "payload": messages}, ensure_ascii=False, indent=2))
 
                 msg = self.llm_client.call(messages, tools)
 
@@ -253,15 +395,23 @@ class SearchSubAgent:
                 messages.append(msg_dict)
 
                 # Log Response
-                llm_logger.info(f"--- Sub-Agent Step {step+1} Response ---")
-                llm_logger.info(json.dumps(msg_dict, ensure_ascii=False, indent=2))
-
-                agent_logger.info(f"Sub-Agent Content: {LLMClient.extract_text_content(msg)}")
+                llm_logger.info(f"[{agent_name}] --- Sub-Agent Step {step+1} Response ---")
+                llm_logger.info(json.dumps({"agent": agent_name, "payload": msg_dict}, ensure_ascii=False, indent=2))
+                content = LLMClient.extract_text_content(msg)
+                agent_logger.info(f"[{agent_name}] Sub-Agent Content: {content}")
 
                 # Check for tool calls
                 tool_calls = msg.tool_calls if hasattr(msg, 'tool_calls') else (msg_dict.get('tool_calls') or [])
                 if tool_calls:
-                    agent_logger.info(f"Sub-Agent requested {len(tool_calls)} tools")
+                    # Last step cannot safely execute more tools; force a structured final response.
+                    if step == self.max_steps - 1:
+                        agent_logger.warning(
+                            f"[{agent_name}] Max steps reached with pending tool calls; forcing structured final response"
+                        )
+                        content = LLMClient.extract_text_content(msg)
+                        return self._forced_final_response(messages, latest_content=content)
+
+                    agent_logger.info(f"[{agent_name}] Sub-Agent requested {len(tool_calls)} tools")
                     for tc in tool_calls:
                         # Support both object and dict formats
                         if isinstance(tc, dict):
@@ -298,7 +448,7 @@ class SearchSubAgent:
                             search_logger.info(json.dumps(result, ensure_ascii=False, indent=2))
                             
                             # In agent_logger, just note success
-                            agent_logger.info("Search completed (results logged to search_results.log)")
+                            agent_logger.info(f"[{agent_name}] Search completed (results logged to search_results.log)")
                             
                         elif func_name == "extract_tool":
                             url = args.get("url")
@@ -309,7 +459,7 @@ class SearchSubAgent:
                             search_logger.info(f"--- Extract Results for '{url}' ---")
                             search_logger.info(json.dumps(result, ensure_ascii=False, indent=2))
                             
-                            agent_logger.info("Extraction completed (results logged to search_results.log)")
+                            agent_logger.info(f"[{agent_name}] Extraction completed (results logged to search_results.log)")
                         
                         messages.append({
                             "role": "tool",
@@ -319,27 +469,32 @@ class SearchSubAgent:
                         })
                 else:
                     # No tool calls, check for final response in content
-                    content = LLMClient.extract_text_content(msg)
                     match = re.search(r"<FINAL_RESPONSE>(.*?)</FINAL_RESPONSE>", content, re.DOTALL)
                     if match:
                         try:
                             final_json = json.loads(match.group(1).strip())
-                            agent_logger.info(f"Sub-Agent Final Response: {json.dumps(final_json, ensure_ascii=False)}")
+                            agent_logger.info(f"[{agent_name}] Sub-Agent Final Response: {json.dumps(final_json, ensure_ascii=False)}")
                             return final_json
                         except json.JSONDecodeError:
                             logger.error("Failed to parse final JSON from sub-agent.")
-                            agent_logger.error("Failed to parse final JSON from sub-agent.")
+                            agent_logger.error(f"[{agent_name}] Failed to parse final JSON from sub-agent.")
                             return {"summary": content, "sources": []} # Fallback
                     
                     # If no final tag but loop is ending or just chatter?
                     # If it's the last step and no final response, try to return content
                     if step == self.max_steps - 1:
-                         agent_logger.warning("Max steps reached without <FINAL_RESPONSE>")
-                         return {"summary": content, "sources": []}
+                        agent_logger.warning(
+                            f"[{agent_name}] Max steps reached without <FINAL_RESPONSE>; forcing structured final response"
+                        )
+                        forced = self._forced_final_response(messages, latest_content=content)
+                        if isinstance(forced, dict) and forced:
+                            return forced
+                        return {"summary": content, "sources": []}
 
             except Exception as e:
                 logger.error(f"Sub-agent step failed: {e}")
-                agent_logger.error(f"Sub-agent step failed: {e}")
+                agent_logger.error(f"[{agent_name}] Sub-agent step failed: {e}")
                 return {"error": str(e)}
 
-        return {"error": "Max steps reached without final response."}
+        agent_logger.warning("Loop exited without final response; returning forced structured fallback")
+        return self._forced_final_response(messages, latest_content="")

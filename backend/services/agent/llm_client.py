@@ -52,7 +52,17 @@ class LLMClient:
                 self.client = OpenAI(api_key=api_key)
             self.is_gemini = False
 
-    def call(self, messages, tools=None, timeout: Optional[float] = None):
+    def is_gemini_model(self) -> bool:
+        model_name = (self.model or "").strip().lower()
+        return "gemini" in model_name
+
+    def call(
+        self,
+        messages,
+        tools=None,
+        timeout: Optional[float] = None,
+        response_format: Optional[dict] = None,
+    ):
         """
         统一的 LLM 调用入口，支持 tools（函数调用）
         直接返回 OpenAI 的 ChatCompletionMessage 对象，便于后续追加到 messages 历史中。
@@ -60,7 +70,7 @@ class LLMClient:
         if self.is_gemini:
             # Gemini 客户端返回 GeminiMessage，已兼容 OpenAI 格式
             return self.client.call(messages, tools)
-        kwargs = {
+        request_kwargs = {
             "model": self.model,
             "messages": messages,
             "tools": tools,
@@ -68,10 +78,12 @@ class LLMClient:
             "max_tokens": 4000,  # Increased from 800 to allow longer responses
         }
         if timeout is not None:
-            kwargs["timeout"] = timeout
+            request_kwargs["timeout"] = timeout
+        if response_format is not None:
+            request_kwargs["response_format"] = response_format
 
         response = self.client.chat.completions.create(
-            **kwargs
+            **request_kwargs,
         )
 
         return response.choices[0].message

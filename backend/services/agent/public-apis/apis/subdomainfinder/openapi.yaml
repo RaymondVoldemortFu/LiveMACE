@@ -1,0 +1,58 @@
+openapi: 3.0.0
+info:
+  title: Subdomain Finder
+  version: '1'
+  description: >-
+    Subdomain Finder is a simple tool for finding all the available subdomains
+    for a given domain. It returns a list of all the available subdomains for
+    the given domain.
+  contact:
+    name: APIVerve
+    url: https://apiverve.com
+    email: support@apiverve.com
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+servers:
+  - url: https://api.apiverve.com
+    description: Production server
+security:
+  - ApiKeyAuth: []
+paths:
+  /v1/subdomainfinder:
+    get:
+      summary: Subdomain Finder
+      description: >-
+        Subdomain Finder is a simple tool for finding all the available
+        subdomains for a given domain. It returns a list of all the available
+        subdomains for the given domain.
+      operationId: subdomainfinder
+      tags:
+        - 10
+      parameters: []
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  data:
+                    type: object
+        '400':
+          description: Bad Request - Invalid parameters
+        '401':
+          description: Unauthorized - Invalid or missing API key
+        '429':
+          description: Too Many Requests - Rate limit exceeded
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
+  schemas: {}

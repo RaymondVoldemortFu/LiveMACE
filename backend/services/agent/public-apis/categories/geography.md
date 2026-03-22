@@ -1,0 +1,138 @@
+# 📦 Geography
+
+> 13 APIs in this category
+
+[← Back to API Catalog](../)
+
+---
+
+## Cities Lookup
+
+<img src="https://apiverve.web.app/publicapis/logos/citieslookup.svg" width="60" height="60" />
+
+Cities Lookup is a simple tool for looking up city data. It returns the city name, population, and more.
+
+**[View Documentation →](https://apiverve.com/marketplace/citieslookup)** | **[OpenAPI Spec](../apis/citieslookup/openapi.yaml)** | **[Try in Postman](https://www.postman.com/apiverve/apiverve-workspace/collection/a6utjd8/apiverve-api-collection)**
+
+---
+
+## Coordinates Are Sea
+
+<img src="https://apiverve.web.app/publicapis/logos/coordinatesaresea.svg" width="60" height="60" />
+
+Coordinates are Sea is a simple tool for checking if coordinates are in the sea. It returns if the coordinates are in the sea or not.
+
+**[View Documentation →](https://apiverve.com/marketplace/coordinatesaresea)** | **[OpenAPI Spec](../apis/coordinatesaresea/openapi.yaml)** | **[Try in Postman](https://www.postman.com/apiverve/apiverve-workspace/collection/a6utjd8/apiverve-api-collection)**
+
+---
+
+## Country Borders
+
+<img src="https://apiverve.web.app/publicapis/logos/countryborders.svg" width="60" height="60" />
+
+Country Borders is a simple tool for getting the list of neighboring countries for a specific country. It returns the list of neighboring countries for the specified country.
+
+**[View Documentation →](https://apiverve.com/marketplace/countryborders)** | **[OpenAPI Spec](../apis/countryborders/openapi.yaml)** | **[Try in Postman](https://www.postman.com/apiverve/apiverve-workspace/collection/a6utjd8/apiverve-api-collection)**
+
+---
+
+## Country Boundaries
+
+<img src="https://apiverve.web.app/publicapis/logos/countryboundaries.svg" width="60" height="60" />
+
+Country Boundaries is a simple tool for getting the shape of a specific country's border. It returns the shape of the specified country's border.
+
+**[View Documentation →](https://apiverve.com/marketplace/countryboundaries)** | **[OpenAPI Spec](../apis/countryboundaries/openapi.yaml)** | **[Try in Postman](https://www.postman.com/apiverve/apiverve-workspace/collection/a6utjd8/apiverve-api-collection)**
+
+---
+
+## Country Flags
+
+<img src="https://apiverve.web.app/publicapis/logos/countryflags.svg" width="60" height="60" />
+
+Country Flag is a simple tool for getting the country's national flags. It returns the country's national flags.
+
+**[View Documentation →](https://apiverve.com/marketplace/countryflags)** | **[OpenAPI Spec](../apis/countryflags/openapi.yaml)** | **[Try in Postman](https://www.postman.com/apiverve/apiverve-workspace/collection/a6utjd8/apiverve-api-collection)**
+
+---
+
+## Country Languages
+
+<img src="https://apiverve.web.app/publicapis/logos/countrylanguages.svg" width="60" height="60" />
+
+Country Languages is a simple tool for getting the list of official and commonly spoken languages in a specific country.
+
+**[View Documentation →](https://apiverve.com/marketplace/countrylanguages)** | **[OpenAPI Spec](../apis/countrylanguages/openapi.yaml)** | **[Try in Postman](https://www.postman.com/apiverve/apiverve-workspace/collection/a6utjd8/apiverve-api-collection)**
+
+---
+
+## Country Lookup
+
+<img src="https://apiverve.web.app/publicapis/logos/countrylookup.svg" width="60" height="60" />
+
+Country Lookup is a simple tool for looking up country data. It returns the country name, capital, and more.
+
+**[View Documentation →](https://apiverve.com/marketplace/countrylookup)** | **[OpenAPI Spec](../apis/countrylookup/openapi.yaml)** | **[Try in Postman](https://www.postman.com/apiverve/apiverve-workspace/collection/a6utjd8/apiverve-api-collection)**
+
+---
+
+## County Data Lookup
+
+<img src="https://apiverve.web.app/publicapis/logos/countydata.svg" width="60" height="60" />
+
+County Data is a simple tool for getting data about US counties. It returns information such as average income, area, and more based on the county name provided.
+
+**[View Documentation →](https://apiverve.com/marketplace/countydata)** | **[OpenAPI Spec](../apis/countydata/openapi.yaml)** | **[Try in Postman](https://www.postman.com/apiverve/apiverve-workspace/collection/a6utjd8/apiverve-api-collection)**
+
+---
+
+## Distance Calculator
+
+<img src="https://apiverve.web.app/publicapis/logos/distancecalculator.svg" width="60" height="60" />
+
+Distance Calculator is a simple tool for calculating the distance between two locations. It returns the distance in miles and kilometers.
+
+**[View Documentation →](https://apiverve.com/marketplace/distancecalculator)** | **[OpenAPI Spec](../apis/distancecalculator/openapi.yaml)** | **[Try in Postman](https://www.postman.com/apiverve/apiverve-workspace/collection/a6utjd8/apiverve-api-collection)**
+
+---
+
+## Reverse Geocode
+
+<img src="https://apiverve.web.app/publicapis/logos/reversegeocode.svg" width="60" height="60" />
+
+Reverse Geocode is a simple tool for getting the location of a set of coordinates. Only supports USA and Canada Coordinates. It returns the city, state, and more.
+
+**[View Documentation →](https://apiverve.com/marketplace/reversegeocode)** | **[OpenAPI Spec](../apis/reversegeocode/openapi.yaml)** | **[Try in Postman](https://www.postman.com/apiverve/apiverve-workspace/collection/a6utjd8/apiverve-api-collection)**
+
+---
+
+## State Boundaries
+
+<img src="https://apiverve.web.app/publicapis/logos/stateboundaries.svg" width="60" height="60" />
+
+State Boundaries is a simple tool for getting the boundaries of a specific state's border. It returns the shape of the specified state's border.
+
+**[View Documentation →](https://apiverve.com/marketplace/stateboundaries)** | **[OpenAPI Spec](../apis/stateboundaries/openapi.yaml)** | **[Try in Postman](https://www.postman.com/apiverve/apiverve-workspace/collection/a6utjd8/apiverve-api-collection)**
+
+---
+
+## USDA Hardiness Zone
+
+<img src="https://apiverve.web.app/publicapis/logos/hardinesszone.svg" width="60" height="60" />
+
+Hardiness Zone is a simple tool for getting the USDA Plant Hardiness Zone for a given zip code
+
+**[View Documentation →](https://apiverve.com/marketplace/hardinesszone)** | **[OpenAPI Spec](../apis/hardinesszone/openapi.yaml)** | **[Try in Postman](https://www.postman.com/apiverve/apiverve-workspace/collection/a6utjd8/apiverve-api-collection)**
+
+---
+
+## Zip Codes Lookup
+
+<img src="https://apiverve.web.app/publicapis/logos/zipcodes.svg" width="60" height="60" />
+
+Zip Codes Lookup is a simple tool for looking up the zip codes of a city. It returns the zip codes of the city.
+
+**[View Documentation →](https://apiverve.com/marketplace/zipcodes)** | **[OpenAPI Spec](../apis/zipcodes/openapi.yaml)** | **[Try in Postman](https://www.postman.com/apiverve/apiverve-workspace/collection/a6utjd8/apiverve-api-collection)**
+
+---
+

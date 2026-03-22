@@ -12,7 +12,20 @@ class AgentConfig:
     # - "tool": default, agent executes trades via execute_trade tool and ends with termination token
     # - "final_json": legacy mode, agent returns one decision inside <FINAL_JSON>...</FINAL_JSON>
     TRADE_DECISION_PROTOCOL = os.getenv("TRADE_DECISION_PROTOCOL", "tool").strip().lower()
-    AGENT_TRADE_TERMINATION_TOKEN = os.getenv("AGENT_TRADE_TERMINATION_TOKEN", "<TRADE_DONE>")
+    # System prompt section switches:
+    # - True: include SIMULATION ENVIRONMENT NOTICE block
+    # - False: omit this block from trading system prompt
+    AGENT_INCLUDE_SIMULATION_NOTICE = os.getenv("AGENT_INCLUDE_SIMULATION_NOTICE", "false") == "true"
+    # Tool routing behavior:
+    # - True: agent should call `select_tools` to dynamically route tools by step
+    # - False: legacy mode without dynamic tool routing instructions
+    AGENT_ENABLE_TOOL_ROUTING = os.getenv("AGENT_ENABLE_TOOL_ROUTING", "true").strip().lower() in {"1", "true", "yes", "on"}
+
+    TOOL_SELECTOR_TOP_K = 30
+    TOOL_SELECTOR_MAX_RETRIES = 10
+    TOOL_SELECTOR_MIN_EXTRA = 5
+    TOOL_CALL_DUP_MAX = 5
+    TOOL_CALL_DUP_WARN = 10
 
     # Docker Configuration
     DOCKER_IMAGE_NAME = "agent-sandbox:latest"
@@ -39,12 +52,22 @@ class AgentConfig:
     # Memory Configuration
     # Note: Memory is now controlled per-account via account.memory_enabled field
     # Lightweight embedding model (384 dimensions)
-    MEMORY_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
-    # Memory backend: "local" (SQLite) or "chroma" (vector database)
-    MEMORY_BACKEND = "chroma"  # Options: "local", "chroma"
+    MEMORY_EMBEDDING_MODEL = "BAAI/bge-base-en-v1.5"
+    # Memory backend: "local" (SQLite), "chroma" (vector database), or "pinecone" (cloud)
+    MEMORY_BACKEND = "pinecone"  # Options: "local", "chroma", "pinecone"
     CHROMA_PERSIST_DIR = "./chroma_db"  # Directory for Chroma persistence
+    # Pinecone Configuration
+    PINECONE_API_KEY = os.getenv("PINECONE_API_KEY", "")
+    PINECONE_INDEX_NAME = "agent-memories"
+    PINECONE_ENVIRONMENT = "us-east-1"  # Free tier region
     # Similarity threshold for counting as effective retrieval (0.0-1.0)
     MEMORY_RETRIEVAL_THRESHOLD = 0.6
+    # Rerank: over-fetch top_k candidates, then rerank by score + time decay to get final limit
+    MEMORY_RERANK_TOP_K = 20
+    # Time decay half-life in days (memories older than this get 50% weight)
+    MEMORY_TIME_DECAY_HALF_LIFE_DAYS = 7
+    # Rerank formula: α × similarity + (1-α) × time_decay
+    MEMORY_RERANK_SIMILARITY_WEIGHT = 0.8
 
 
 class LLMConfig:

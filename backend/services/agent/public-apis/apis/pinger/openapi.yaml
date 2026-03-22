@@ -1,0 +1,56 @@
+openapi: 3.0.0
+info:
+  title: Domain and IP Pinger
+  version: '1'
+  description: >-
+    Pinger is a simple tool for checking if a URL is up. It returns a boolean
+    value indicating whether the URL is up or not.
+  contact:
+    name: APIVerve
+    url: https://apiverve.com
+    email: support@apiverve.com
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+servers:
+  - url: https://api.apiverve.com
+    description: Production server
+security:
+  - ApiKeyAuth: []
+paths:
+  /v1/pinger:
+    get:
+      summary: Domain and IP Pinger
+      description: >-
+        Pinger is a simple tool for checking if a URL is up. It returns a
+        boolean value indicating whether the URL is up or not.
+      operationId: pinger
+      tags:
+        - 17
+      parameters: []
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  data:
+                    type: object
+        '400':
+          description: Bad Request - Invalid parameters
+        '401':
+          description: Unauthorized - Invalid or missing API key
+        '429':
+          description: Too Many Requests - Rate limit exceeded
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
+  schemas: {}
