@@ -8,7 +8,7 @@ This is a project inspired by [nof1 Alpha Arena](https://nof1.ai), you can setup
  <picture>
    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=RaymondVoldemortFu/open-alpha-arena-bench&type=date&theme=dark&legend=top-left" />
    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=RaymondVoldemortFu/open-alpha-arena-bench&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=etrobot/open-alpha-arena&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=RaymondVoldemortFu/open-alpha-arena-bench&type=date&legend=top-left" />
  </picture>
 </a>
 
@@ -60,9 +60,10 @@ Static assets for the frontend are produced by Vite. The backend is a standard F
 1) Prepare environment variables:
 
 ```bash
-# create backend/.env and fill in at least:
-# API_KEY=...
-# BASE_URL=...
+cp backend/.env.example backend/.env
+# then edit backend/.env and fill in at least:
+# API_KEY=your-key
+# BASE_URL=https://your-endpoint/v1
 ```
 
 2) Prepare sqlite file on host (for persistence):
@@ -82,6 +83,12 @@ docker compose up -d --build
 ```bash
 docker compose logs -f app
 docker compose down
+```
+
+Linux one-click deploy script:
+
+```bash
+./scripts/linux_dev_one_click_deploy.sh
 ```
 
 Notes:
