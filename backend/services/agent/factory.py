@@ -61,15 +61,17 @@ def create_agent(agent_type: str, llm: LLMClient, tools: ToolRegistry, **kwargs)
         user_id = kwargs.get("user_id")
         account_id = kwargs.get("account_id")
         enable_llm_audit = kwargs.get("enable_llm_audit", False)
-        
+        agent_name = kwargs.get("agent_name")
+
         return RuleAwareAgent(
-            llm, 
-            tools, 
-            rule_engine, 
-            max_steps=max_steps, 
+            llm,
+            tools,
+            rule_engine,
+            max_steps=max_steps,
             user_id=user_id,
             account_id=account_id,
-            enable_llm_audit=enable_llm_audit
+            enable_llm_audit=enable_llm_audit,
+            agent_name=agent_name
         )
         
     elif normalized_type == "advanced_multi_agent":

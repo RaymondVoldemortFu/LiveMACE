@@ -146,6 +146,8 @@ class LocalMemory(MemoryInterface):
             logger.warning("Memory model not initialized. Cannot add memory.")
             return
 
+        _own_session = db is None
+        session = db or SessionLocal()
         try:
             # Compute embedding
             embedding = self._compute_embedding(content)
@@ -156,7 +158,6 @@ class LocalMemory(MemoryInterface):
             # Generate unique ID
             memory_id = str(uuid.uuid4())
 
-            # Use provided db session
             mem_entry = AgentMemory(
                 memory_id=memory_id,
                 account_id=int(account_id) if account_id.isdigit() else 0,
@@ -164,15 +165,18 @@ class LocalMemory(MemoryInterface):
                 trace_id=trace_id,
                 content=content,
                 metadata_json=metadata,
-                embedding=embedding  # Store as JSON array
+                embedding=embedding
             )
-            db.add(mem_entry)
-            db.commit()
+            session.add(mem_entry)
+            session.commit()
             logger.info(f"Memory saved to DB for account {account_id}: {content[:100]}...")
 
         except Exception as e:
             logger.error(f"Error adding memory: {e}")
-            db.rollback()
+            session.rollback()
+        finally:
+            if _own_session:
+                session.close()
 
     @staticmethod
     def _cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
@@ -191,6 +195,8 @@ class LocalMemory(MemoryInterface):
             logger.warning("Memory model not initialized. Cannot search.")
             return []
 
+        _own_session = db is None
+        session = db or SessionLocal()
         try:
             # Compute query embedding
             query_embedding = self._compute_embedding(query)
@@ -198,8 +204,7 @@ class LocalMemory(MemoryInterface):
                 logger.error("Failed to compute query embedding")
                 return []
 
-            # Use provided db session
-            memories = db.query(AgentMemory).filter(
+            memories = session.query(AgentMemory).filter(
                 AgentMemory.account_id == (int(account_id) if account_id.isdigit() else 0),
                 AgentMemory.market == market
             ).all()
@@ -236,7 +241,7 @@ class LocalMemory(MemoryInterface):
                 high_quality_ids = [r["id"] for r in top_results if r.get("similarity", 0) > AgentConfig.MEMORY_RETRIEVAL_THRESHOLD]
                 if high_quality_ids:
                     try:
-                        db.query(AgentMemory).filter(
+                        session.query(AgentMemory).filter(
                             AgentMemory.memory_id.in_(high_quality_ids)
                         ).update(
                             {
@@ -245,10 +250,10 @@ class LocalMemory(MemoryInterface):
                             },
                             synchronize_session=False
                         )
-                        db.commit()
+                        session.commit()
                     except Exception as db_error:
                         logger.error(f"Failed to update retrieval count: {db_error}")
-                        db.rollback()
+                        session.rollback()
 
             logger.info(f"Found {len(top_results)} relevant memories for account {account_id}")
             return top_results
@@ -256,6 +261,9 @@ class LocalMemory(MemoryInterface):
         except Exception as e:
             logger.error(f"Error searching memories: {e}")
             return []
+        finally:
+            if _own_session:
+                session.close()
 
     def get_all(self, account_id: str, limit: int = 100, db: Session = None) -> List[Dict]:
         """Get all memories for an account"""
