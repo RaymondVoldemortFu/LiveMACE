@@ -25,6 +25,7 @@ def run(params: dict) -> dict:
     prompt = (
         f"Generate {count} unique, available-style usernames (lowercase, letters and numbers only, no spaces). "
         + (f"Style: {style}. " if style else "Mix of creative and readable. ")
+        +
         'Respond with a JSON object with key "usernames" (array of strings).'
     )
 

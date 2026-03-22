@@ -27,6 +27,7 @@ def run(params: dict) -> dict:
         f"Wordle helper: pattern '{pattern}' (underscore = unknown letter). "
         + (f"Exclude these letters: {exclude}. " if exclude else "")
         + (f"Must include somewhere: {include}. " if include else "")
+        +
         "List up to 20 valid 5-letter English words that match. Respond with JSON: {\"words\": [\"word1\", ...]}."
     )
 

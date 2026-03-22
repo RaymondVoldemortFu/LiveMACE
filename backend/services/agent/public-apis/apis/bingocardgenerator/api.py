@@ -32,6 +32,20 @@ def _build_html(card: List[List[object]], headers: List[str]) -> str:
     return head + body
 
 
+def _parse_bool(value: object, *, field_name: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "y", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "n", "off"}:
+            return False
+    raise ValueError(
+        f"Invalid {field_name}: must be a boolean or one of true/false/1/0/yes/no/on/off"
+    )
+
+
 def run(params: dict) -> dict:
     params = params or {}
     size = params.get("size", 5)
@@ -45,7 +59,10 @@ def run(params: dict) -> dict:
     if size < 3 or size > 10:
         return _error("Invalid size: must be between 3 and 10")
 
-    free_space = bool(free_space)
+    try:
+        free_space = _parse_bool(free_space, field_name="freeSpace")
+    except ValueError as exc:
+        return _error(str(exc))
 
     card = _build_card(size, free_space)
     headers = list(string.ascii_uppercase[:size])

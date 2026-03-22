@@ -20,6 +20,7 @@ def run(params: dict) -> dict:
         "Generate one trivia question with 4 multiple-choice answers (A, B, C, D) and indicate the correct letter. "
         + (f"Category: {category}. " if category else "")
         + (f"Difficulty: {difficulty}. " if difficulty else "Mixed difficulty. ")
+        +
         'Respond with a JSON object with keys: "question", "options" (object with keys A, B, C, D), "answer" (letter A/B/C/D).'
     )
 

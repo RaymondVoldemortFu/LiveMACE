@@ -56,10 +56,10 @@ def run(params: dict) -> dict:
             "error": None,
             "data": {
                 "original_text": text,
-                "encoded": decoded,
+                "decoded": decoded,
                 "format": fmt,
                 "original_length": original_length,
-                "encoded_length": decoded_length,
+                "decoded_length": decoded_length,
                 "compression_ratio": ratio,
             },
         }

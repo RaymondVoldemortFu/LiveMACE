@@ -36,7 +36,7 @@ def run(params: dict) -> dict:
             "data": {
                 "action": "decode",
                 "original": text,
-                "encoded": decoded,
+                "decoded": decoded,
                 "length": len(decoded),
             },
         }
