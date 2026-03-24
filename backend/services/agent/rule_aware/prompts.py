@@ -151,6 +151,15 @@ Use these tools as needed to gather sufficient information for informed, complia
 
 ## 7. Current Context
 
+Tradable Universe (strictly follow):
+- Crypto: BTC, ETH, SOL, BNB, XRP, DOGE
+- US Stocks: AAPL, NVDA, GOOGL, META, AMZN, TSLA, PG, JNJ, UNH, JPM, V, BA, XOM, NEE, AMT, PLD, LIN
+
+Execution Rule:
+- If market is CRYPTO, symbol MUST be one of the Crypto list.
+- If market is US, symbol MUST be one of the US Stocks list.
+- Do not propose or execute symbols outside this universe.
+
 Current Time (UTC+8): {current_time}
 
 Portfolio State:
