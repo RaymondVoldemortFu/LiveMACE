@@ -243,6 +243,14 @@ def build_account_configs(mode: str) -> List[Tuple[str, Dict[str, str]]]:
     return _build_all_combinations_configs()
 
 
+def ensure_schema_ready(db_base, db_engine) -> None:
+    """
+    Ensure required tables exist for standalone script execution.
+    This avoids "no such table: users" when running before API startup.
+    """
+    db_base.metadata.create_all(bind=db_engine)
+
+
 def main() -> int:
     args = parse_args()
 
@@ -250,7 +258,7 @@ def main() -> int:
     backend_dir = Path(__file__).resolve().parent
     os.chdir(backend_dir)
 
-    from database.connection import SessionLocal
+    from database.connection import SessionLocal, engine, Base
     from database.models import Account, User
 
     # Load .env from current/parent dirs but do not override process env.
@@ -264,6 +272,8 @@ def main() -> int:
         raise SystemExit("Missing BASE_URL. Please set it in .env or environment variables.")
 
     account_configs = build_account_configs(mode=args.mode)
+
+    ensure_schema_ready(Base, engine)
 
     created = 0
     updated = 0
