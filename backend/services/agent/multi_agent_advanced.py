@@ -173,6 +173,9 @@ class AdvancedMultiAgent(BaseAgent):
             f"Trading objective:\n{objective}\n\n"
             f"Portfolio:\n{json.dumps(portfolio, ensure_ascii=False)}\n\n"
             f"Market Prices:\n{json.dumps(prices, ensure_ascii=False)}\n\n"
+            "Tradable Universe (strict):\n"
+            "- Crypto: BTC, ETH, SOL, BNB, XRP, DOGE\n"
+            "- US Stocks: AAPL, NVDA, GOOGL, META, AMZN, TSLA, PG, JNJ, UNH, JPM, V, BA, XOM, NEE, AMT, PLD, LIN\n\n"
             f"Evidence Book (use evidence IDs when citing prior findings):\n{self._format_evidence_book()}\n\n"
             f"Current Context:\n{context_str}\n\n"
             f"Known Conflicts/Tensions:\n{self._format_conflicts()}\n\n"
@@ -345,12 +348,12 @@ class AdvancedMultiAgent(BaseAgent):
     def _default_instruction(self, agent_name: str, objective: str) -> str:
         if agent_name == "TradingAgent":
             return (
-                "Review technical setup, exposure, and actionable levels for BTC/ETH/SOL. "
+                "Review technical setup, exposure, and actionable levels across the tradable universe. "
                 f"Objective: {objective}"
             )
         if agent_name == "NewsAgent":
             return (
-                "Collect recent market-moving events and sentiment for BTC/ETH/SOL and explain directional impact. "
+                "Collect recent market-moving events and sentiment across the tradable universe and explain directional impact. "
                 f"Objective: {objective}"
             )
         if agent_name == "CoderAgent":

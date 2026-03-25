@@ -89,6 +89,46 @@ class LLMClient:
         return response.choices[0].message
 
     @staticmethod
+    def build_message_dict(resp) -> dict:
+        """
+        Safely serialize a ChatCompletionMessage (or GeminiMessage) to a plain dict
+        that can be appended to the conversation history.
+
+        Preserves provider-specific extra fields (e.g. Gemini's thought_signature on
+        each tool_call) that model_dump() may silently drop when the Pydantic model
+        has no schema slot for them.
+        """
+        if hasattr(resp, "model_dump"):
+            msg = resp.model_dump()
+        else:
+            msg = dict(resp)
+
+        # Merge top-level model_extra (e.g. Gemini adds thought_signature here too)
+        if hasattr(resp, "model_extra") and resp.model_extra:
+            for k, v in resp.model_extra.items():
+                msg.setdefault(k, v)
+
+        # Re-serialize tool_calls preserving per-call model_extra fields
+        tool_calls = getattr(resp, "tool_calls", None)
+        if tool_calls:
+            tool_calls_out = []
+            for tc in tool_calls:
+                tc_dict = {
+                    "id": tc.id,
+                    "type": getattr(tc, "type", "function"),
+                    "function": {
+                        "name": tc.function.name,
+                        "arguments": tc.function.arguments,
+                    },
+                }
+                if hasattr(tc, "model_extra") and tc.model_extra:
+                    tc_dict.update(tc.model_extra)
+                tool_calls_out.append(tc_dict)
+            msg["tool_calls"] = tool_calls_out
+
+        return msg
+
+    @staticmethod
     def extract_text_content(message: Any) -> str:
         """
         兼容不同 SDK/供应商响应格式，尽量提取可展示的文本。

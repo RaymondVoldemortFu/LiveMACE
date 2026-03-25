@@ -152,9 +152,9 @@ def update_schema():
             for table_name in tables_to_check:
                 result = conn.execute(text(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{table_name}'"))
                 if result.fetchone():
-                    print(f"✓ Table {table_name} exists")
+                    print(f"[OK] Table {table_name} exists")
                 else:
-                    print(f"✗ Table {table_name} not found")
+                    print(f"[MISSING] Table {table_name} not found")
 
             # 8. Add volatility column to AgentPeriodCheckpoint if it doesn't exist
             print("Checking for volatility column in agent_period_checkpoints...")
@@ -167,7 +167,26 @@ def update_schema():
                 print("Column volatility added.")
             else:
                 print("Column volatility already exists.")
-                
+
+            # 9. Add missing columns to agent_memories (new local-embedding schema)
+            print("\nChecking for new columns in agent_memories...")
+            result = conn.execute(text("PRAGMA table_info(agent_memories)"))
+            columns = [row[1] for row in result]
+
+            agent_memories_new_columns = {
+                "market":            "VARCHAR(10) NOT NULL DEFAULT 'CRYPTO'",
+                "embedding":         "JSON",
+                "retrieval_count":   "INTEGER NOT NULL DEFAULT 0",
+                "last_retrieved_at": "DATETIME",
+            }
+            for col_name, col_def in agent_memories_new_columns.items():
+                if col_name not in columns:
+                    print(f"Adding {col_name} column to agent_memories...")
+                    conn.execute(text(f"ALTER TABLE agent_memories ADD COLUMN {col_name} {col_def}"))
+                    print(f"Column {col_name} added.")
+                else:
+                    print(f"Column {col_name} already exists in agent_memories.")
+
         except Exception as e:
             print(f"Error updating schema: {e}")
 

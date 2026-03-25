@@ -31,12 +31,12 @@ def register_default_tools(registry, db: Session, account_id: int, trace_id: str
     registry.register(
         Tool(
             name="get_market_snapshot",
-            description="获取某个币种/股票的最新行情数据",
+            description="Get the latest market snapshot for a crypto symbol or US stock.",
             parameters={
                 "type": "object",
                 "properties": {
                     "symbol": {"type": "string"},
-                    "market": {"type": "string", "description": "CRYPTO 或 US", "default": "CRYPTO"}
+                    "market": {"type": "string", "description": "Market type: CRYPTO or US", "default": "CRYPTO"}
                 },
                 "required": ["symbol"]
             },
@@ -56,31 +56,31 @@ def register_default_tools(registry, db: Session, account_id: int, trace_id: str
     registry.register(
         Tool(
             name="get_kline_history",
-            description="获取指定币种/股票在指定时间范围内的K线数据并保存到虚拟环境的文件中。返回文件路径和读取建议。",
+            description="Fetch kline (candlestick) history for a symbol within a time range and save it to a file in the sandbox. Returns file path and reading suggestions.",
             parameters={
                 "type": "object",
                 "properties": {
                     "symbol": {
                         "type": "string",
-                        "description": "交易对符号, e.g. BTC"
+                        "description": "Trading symbol, e.g. BTC or AAPL"
                     },
                     "market": {
                         "type": "string",
-                        "description": "市场标识, CRYPTO 或 US",
+                        "description": "Market identifier: CRYPTO or US",
                         "default": "CRYPTO"
                     },
                     "interval": {
                         "type": "string",
                         "enum": ["1m", "5m", "15m", "30m", "1h", "4h", "1d"],
-                        "description": "时间分辨率"
+                        "description": "Time interval"
                     },
                     "start_time": {
                         "type": "string",
-                        "description": "开始时间 (ISO 8601格式, e.g. 2023-01-01T00:00:00)"
+                        "description": "Start time (ISO 8601), e.g. 2023-01-01T00:00:00"
                     },
                     "end_time": {
                         "type": "string",
-                        "description": "结束时间 (ISO 8601格式), 可选"
+                        "description": "End time (ISO 8601), optional"
                     }
                 },
                 "required": ["symbol", "interval", "start_time"]
@@ -96,7 +96,7 @@ def register_default_tools(registry, db: Session, account_id: int, trace_id: str
     registry.register(
         Tool(
             name="get_account_state",
-            description="获取当前账户的资金和持仓",
+            description="Get current account balances and open positions.",
             parameters={"type": "object", "properties": {}},
             func=lambda: {
                 "account": _serialize_account(get_account(db, account_id)),
@@ -117,33 +117,33 @@ def register_default_tools(registry, db: Session, account_id: int, trace_id: str
     registry.register(
         Tool(
             name="consult_search_agent",
-            description="网络搜索工具。当需要获取最新的市场新闻、宏观经济数据、项目动态或特定币种的非价格信息时使用。返回包含搜索结果摘要和来源的结构化数据。",
+            description="Web search tool. Use it to retrieve latest market news, macroeconomic data, project updates, or non-price information for specific symbols. Returns structured summaries with sources.",
             parameters={
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "具体的搜索查询语句。"
+                        "description": "Specific search query."
                     },
                     "topic": {
                         "type": "string",
                         "enum": ["general", "news", "finance"],
-                        "description": "搜索主题类别。"
+                        "description": "Search topic category."
                     },
                     "time_range": {
                         "type": "string",
                         "enum": ["day", "week", "month", "year", "none"],
-                        "description": "搜索时间范围。"
+                        "description": "Search time range."
                     },
                     "search_depth": {
                         "type": "string",
                         "enum": ["basic", "advanced"],
-                        "description": "搜索深度。basic较快但结果较少，advanced较慢但结果更详细。",
+                        "description": "Search depth. basic is faster with fewer results; advanced is slower with more detailed results.",
                         "default": "basic"
                     },
                     "max_results": {
                         "type": "integer",
-                        "description": "返回结果的最大数量。",
+                        "description": "Maximum number of results to return.",
                         "default": 5
                     }
                 },
@@ -157,11 +157,11 @@ def register_default_tools(registry, db: Session, account_id: int, trace_id: str
     registry.register(
         Tool(
             name="execute_shell_command",
-            description="在虚拟Linux环境中执行Shell命令。返回(exit_code, output)。",
+            description="Execute a shell command inside the sandboxed Linux environment. Returns (exit_code, output).",
             parameters={
                 "type": "object",
                 "properties": {
-                    "command": {"type": "string", "description": "要执行的Shell命令"}
+                    "command": {"type": "string", "description": "Shell command to execute"}
                 },
                 "required": ["command"]
             },
@@ -173,11 +173,11 @@ def register_default_tools(registry, db: Session, account_id: int, trace_id: str
     registry.register(
         Tool(
             name="read_file",
-            description="读取虚拟环境中的文件内容。内容长度受限。",
+            description="Read file content from the sandboxed environment. Output length is limited.",
             parameters={
                 "type": "object",
                 "properties": {
-                    "file_path": {"type": "string", "description": "文件绝对路径"}
+                    "file_path": {"type": "string", "description": "Absolute file path"}
                 },
                 "required": ["file_path"]
             },
@@ -189,12 +189,12 @@ def register_default_tools(registry, db: Session, account_id: int, trace_id: str
     registry.register(
         Tool(
             name="write_file",
-            description="向虚拟环境中的文件写入内容。如果文件不存在会自动创建，如果目录不存在也会创建。",
+            description="Write content to a file in the sandboxed environment. Missing files or directories will be created automatically.",
             parameters={
                 "type": "object",
                 "properties": {
-                    "file_path": {"type": "string", "description": "文件绝对路径"},
-                    "content": {"type": "string", "description": "写入的内容"}
+                    "file_path": {"type": "string", "description": "Absolute file path"},
+                    "content": {"type": "string", "description": "Content to write"}
                 },
                 "required": ["file_path", "content"]
             },
@@ -206,15 +206,15 @@ def register_default_tools(registry, db: Session, account_id: int, trace_id: str
     registry.register(
         Tool(
             name="run_python_script",
-            description="执行 Python 脚本。参数必须是 JSON 对象："
-            "{\"script_content\": \"<python code>\"}。"
-            "script_content 中可以包含正常的 Python 代码、单双引号、换行和缩进。"
-            "脚本不会自动显示最后一个表达式的值，请使用 print() 输出结果。"
-            "对于较长脚本，优先使用写文件后再执行的方式。",
+            description="Execute a Python script. Parameters must be a JSON object: "
+            "{\"script_content\": \"<python code>\"}. "
+            "script_content may include normal Python code, quotes, newlines, and indentation. "
+            "The script will not automatically display the last expression value, so use print() to output results. "
+            "For long scripts, prefer writing to a file and executing it.",
             parameters={
                 "type": "object",
                 "properties": {
-                    "script_content": {"type": "string", "description": "Python脚本内容。务必包含 print() 语句来输出分析结果。"}
+                    "script_content": {"type": "string", "description": "Python script content. Include print() statements to output analysis results."}
                 },
                 "required": ["script_content"]
             },
@@ -234,11 +234,11 @@ def register_default_tools(registry, db: Session, account_id: int, trace_id: str
         Tool(
             name="execute_trade",
             description=(
-                "执行真实交易（会立即下单）。支持多种决策模式："
-                "1) size_mode=portion + target_portion_of_balance（按比例）；"
-                "2) size_mode=usd + usd_amount（按美元）；"
-                "3) operation=all_in（全仓买入/做空）；"
-                "4) operation=close_all（清仓）。"
+                "Execute a real trade immediately. Supports multiple decision modes: "
+                "1) size_mode=portion + target_portion_of_balance (ratio-based); "
+                "2) size_mode=usd + usd_amount (USD-based); "
+                "3) operation=all_in (full-position entry); "
+                "4) operation=close_all (full liquidation)."
             ),
             parameters={
                 "type": "object",
@@ -246,52 +246,52 @@ def register_default_tools(registry, db: Session, account_id: int, trace_id: str
                     "operation": {
                         "type": "string",
                         "enum": ["open", "close", "hold", "all_in", "close_all"],
-                        "description": "交易操作"
+                        "description": "Trading operation"
                     },
                     "symbol": {
                         "type": "string",
-                        "description": "交易标的，close_all 且清全部时可省略"
+                        "description": "Trading symbol. Can be omitted when using close_all for all positions."
                     },
                     "market": {
                         "type": "string",
                         "enum": ["CRYPTO", "US"],
                         "default": "CRYPTO",
-                        "description": "市场类型"
+                        "description": "Market type"
                     },
                     "direction": {
                         "type": "string",
                         "enum": ["long", "short"],
                         "default": "long",
-                        "description": "方向"
+                        "description": "Direction"
                     },
                     "size_mode": {
                         "type": "string",
                         "enum": ["portion", "usd", "all_in", "close_all"],
                         "default": "portion",
-                        "description": "仓位计算方式"
+                        "description": "Position sizing mode"
                     },
                     "target_portion_of_balance": {
                         "type": "number",
-                        "description": "比例模式下的仓位比例 [0,1]"
+                        "description": "Target position ratio in portion mode [0,1]"
                     },
                     "usd_amount": {
                         "type": "number",
-                        "description": "美元模式下的交易金额"
+                        "description": "Trade amount in USD mode"
                     },
                     "close_ratio": {
                         "type": "number",
-                        "description": "平仓比例 [0,1]，用于 close + portion"
+                        "description": "Close ratio [0,1], used for close + portion"
                     },
                     "leverage": {
                         "type": "integer",
                         "minimum": 1,
                         "maximum": 10,
                         "default": 1,
-                        "description": "杠杆倍数（US 市场会自动使用 1）"
+                        "description": "Leverage multiplier (US market will always use 1)"
                     },
                     "reason": {
                         "type": "string",
-                        "description": "本次执行原因（用于日志）"
+                        "description": "Execution reason (for logging)"
                     }
                 },
                 "required": ["operation"]
