@@ -102,6 +102,9 @@ From `backend/`:
 uv run python create_accounts_from_env.py
 ```
 
+Note:
+- The script auto-initializes missing database tables (including `users` / `accounts`) on first run.
+
 Optional flags:
 - Update existing same-name accounts:
 
