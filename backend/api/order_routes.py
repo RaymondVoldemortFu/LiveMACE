@@ -11,6 +11,7 @@ import logging
 
 from database.connection import SessionLocal
 from database.models import User, Order, Account
+from config.api_feature_config import ApiFeatureConfig
 from schemas.order import OrderCreate, OrderOut
 from services.order_matching import create_order, check_and_execute_order, get_pending_orders, cancel_order, process_all_pending_orders
 from repositories.user_repo import verify_user_password, user_has_password, set_user_password, verify_auth_session
@@ -69,6 +70,12 @@ async def create_new_order(request: OrderCreateRequest, db: Session = Depends(ge
         Created order information
     """
     try:
+        if not ApiFeatureConfig.ENABLE_MANUAL_ORDER_API:
+            raise HTTPException(
+                status_code=403,
+                detail="Manual order API is disabled by deployment configuration",
+            )
+
         # Get user
         user = db.query(User).filter(User.id == request.user_id).first()
         if not user:

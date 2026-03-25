@@ -4,25 +4,25 @@ Create AI trading accounts in batch using API credentials from .env.
 
 Examples:
 1) Create preset model accounts:
-   python create_accounts_from_env.py
+   python script/create_accounts_from_env.py
 
 2) Update existing same-name accounts instead of skipping:
-   python create_accounts_from_env.py --update-existing
+   python script/create_accounts_from_env.py --update-existing
 
 3) Create all model accounts for account config combinations from .env:
-   python create_accounts_from_env.py --mode all-combinations
+   python script/create_accounts_from_env.py --mode all-combinations
 
 Optional env vars:
 - API_KEY / BASE_URL (required)
 - ACCOUNT_DEFAULT_* (used by single mode defaults)
-- ACCOUNT_COMBO_ROW_* (used by all-combinations mode)
+- ACCOUNT_COMBO_CSV_PATH (used by all-combinations mode)
 """
 
 from __future__ import annotations
 
 import argparse
+import csv
 import os
-import re
 from decimal import Decimal
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -77,7 +77,7 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Account creation mode: "
             "'single' creates one account per model using API_KEY/BASE_URL; "
-            "'all-combinations' creates one account per model for each ACCOUNT_COMBO_ROW_* row from .env."
+            "'all-combinations' creates one account per model for each row in ACCOUNT_COMBO_CSV_PATH."
         ),
     )
     return parser.parse_args()
@@ -107,11 +107,6 @@ def cleanup_default_gpt_account(db, AccountModel, user_id: int, account_name: st
     if deleted_count > 0:
         return deleted_count, f"Removed default placeholder account '{account_name}'"
     return 0, f"No default placeholder account named '{account_name}' found"
-
-
-def _sanitize_env_suffix(raw: str) -> str:
-    normalized = re.sub(r"[^a-zA-Z0-9_-]+", "-", raw.strip().lower()).strip("-")
-    return normalized or "default"
 
 
 def _normalize_bool_text(value: str) -> str:
@@ -160,80 +155,54 @@ def _normalize_account_config(config: Dict[str, str]) -> Dict[str, str]:
     return normalized
 
 
-def _parse_combo_row_value(row_value: str, base_config: Dict[str, str]) -> Dict[str, str]:
-    value = (row_value or "").strip()
-    if not value:
-        raise SystemExit("ACCOUNT_COMBO_ROW_* cannot be empty.")
-
-    # Row supports two formats:
-    # 1) Positional CSV:
-    #    account_type,agent_type,memory_enabled,tool_routing_enabled,enable_rule_aware,is_active
-    # 2) Key-value:
-    #    account_type=AI;agent_type=react;memory_enabled=false;tool_routing_enabled=true;enable_rule_aware=false;is_active=true
-    if "=" in value:
-        config = dict(base_config)
-        parts = [p.strip() for p in re.split(r"[;,]", value) if p.strip()]
-        for part in parts:
-            if "=" not in part:
-                raise SystemExit(
-                    f"Invalid key-value combo segment '{part}'. Expected key=value."
-                )
-            key, raw_val = part.split("=", 1)
-            key = key.strip()
-            if key not in ACCOUNT_FIELD_KEYS:
-                allowed = ", ".join(ACCOUNT_FIELD_KEYS)
-                raise SystemExit(f"Unknown combo key '{key}'. Allowed keys: {allowed}.")
-            config[key] = raw_val.strip()
-        return _normalize_account_config(config)
-
-    parts = [p.strip() for p in value.split(",")]
-    if len(parts) != len(ACCOUNT_FIELD_KEYS):
+def _resolve_combo_csv_path() -> Path:
+    raw_path = (os.getenv("ACCOUNT_COMBO_CSV_PATH") or "").strip()
+    if not raw_path:
         raise SystemExit(
-            "Positional ACCOUNT_COMBO_ROW_* must have exactly 6 columns: "
-            "account_type,agent_type,memory_enabled,tool_routing_enabled,enable_rule_aware,is_active."
+            "Missing ACCOUNT_COMBO_CSV_PATH. Please set it in .env when using --mode all-combinations."
         )
-    config = dict(base_config)
-    config.update({key: part for key, part in zip(ACCOUNT_FIELD_KEYS, parts)})
-    return _normalize_account_config(config)
 
-
-def _get_combo_row_items() -> List[Tuple[str, str]]:
-    items: List[Tuple[str, str, int]] = []
-    prefix = "ACCOUNT_COMBO_ROW_"
-    for key, value in os.environ.items():
-        if not key.startswith(prefix):
-            continue
-        suffix = key[len(prefix):]
-        order = int(suffix) if suffix.isdigit() else 10**9
-        items.append((key, (value or "").strip(), order))
-
-    items.sort(key=lambda x: (x[2], x[0]))
-    return [(key, value) for key, value, _ in items]
+    csv_path = Path(raw_path).expanduser()
+    if not csv_path.is_absolute():
+        csv_path = (Path.cwd() / csv_path).resolve()
+    if not csv_path.exists():
+        raise SystemExit(f"ACCOUNT_COMBO_CSV_PATH not found: {csv_path}")
+    if not csv_path.is_file():
+        raise SystemExit(f"ACCOUNT_COMBO_CSV_PATH is not a file: {csv_path}")
+    return csv_path
 
 
 def _build_all_combinations_configs() -> List[Tuple[str, Dict[str, str]]]:
-    row_items = _get_combo_row_items()
-    if not row_items:
-        raise SystemExit(
-            "No ACCOUNT_COMBO_ROW_* found. Please define rows in .env for --mode all-combinations."
-        )
-
-    base_config = _build_single_mode_config()
+    csv_path = _resolve_combo_csv_path()
     combinations: List[Tuple[str, Dict[str, str]]] = []
-    for idx, (_, row_value) in enumerate(row_items, start=1):
-        config = _parse_combo_row_value(row_value=row_value, base_config=base_config)
-        combo_name = "__".join(
-            [
-                f"row-{idx:03d}",
-                f"at-{_sanitize_env_suffix(config['account_type'])}",
-                f"ag-{_sanitize_env_suffix(config['agent_type'])}",
-                f"mem-{config['memory_enabled']}",
-                f"tr-{config['tool_routing_enabled']}",
-                f"ra-{config['enable_rule_aware']}",
-                f"ia-{config['is_active']}",
-            ]
-        )
-        combinations.append((combo_name, config))
+
+    with csv_path.open("r", encoding="utf-8", newline="") as file:
+        reader = csv.DictReader(file)
+        if not reader.fieldnames:
+            raise SystemExit(
+                f"CSV file has no header: {csv_path}. "
+                f"Expected columns: {', '.join(ACCOUNT_FIELD_KEYS)}"
+            )
+
+        header_columns = {h.strip() for h in reader.fieldnames if h}
+        missing_columns = [col for col in ACCOUNT_FIELD_KEYS if col not in header_columns]
+        if missing_columns:
+            raise SystemExit(
+                f"CSV missing required columns: {', '.join(missing_columns)}. "
+                f"File: {csv_path}"
+            )
+
+        for row_num, row in enumerate(reader, start=2):
+            if not row:
+                continue
+            raw_values = {k: (row.get(k) or "").strip() for k in ACCOUNT_FIELD_KEYS}
+            if not any(raw_values.values()):
+                continue
+            config = _normalize_account_config(raw_values)
+            combinations.append((f"csv-row-{row_num - 1:03d}", config))
+
+    if not combinations:
+        raise SystemExit(f"No valid combination rows found in CSV: {csv_path}")
     return combinations
 
 
@@ -241,6 +210,49 @@ def build_account_configs(mode: str) -> List[Tuple[str, Dict[str, str]]]:
     if mode == DEFAULT_CREATE_MODE:
         return [("default", _build_single_mode_config())]
     return _build_all_combinations_configs()
+
+
+def build_account_name(model: str, account_config: Dict[str, str]) -> str:
+    """
+    Naming rule:
+    - base: <model>-<agent_type>
+    - suffix: append -tool / -memory / -rule when enabled
+    """
+    base = f"{(model or '').strip()}-{(account_config.get('agent_type') or DEFAULT_AGENT_TYPE).strip()}"
+    suffixes: List[str] = []
+    if account_config.get("tool_routing_enabled") == "true":
+        suffixes.append("tool")
+    if account_config.get("memory_enabled") == "true":
+        suffixes.append("memory")
+    if account_config.get("enable_rule_aware") == "true":
+        suffixes.append("rule")
+    return "-".join([base, *suffixes]) if suffixes else base
+
+
+def validate_unique_account_names(
+    account_configs: List[Tuple[str, Dict[str, str]]], models: List[str]
+) -> None:
+    """
+    Guard against naming collisions in all-combinations mode.
+    With the new naming rule, combinations that only differ on account_type/is_active
+    will produce the same account name.
+    """
+    seen: Dict[str, str] = {}
+    duplicates: List[str] = []
+    for config_name, account_config in account_configs:
+        for model in models:
+            account_name = build_account_name(model, account_config)
+            if account_name in seen and seen[account_name] != config_name:
+                duplicates.append(account_name)
+                continue
+            seen[account_name] = config_name
+
+    if duplicates:
+        dup_text = ", ".join(sorted(set(duplicates)))
+        raise SystemExit(
+            "Account naming collision detected under current rules. "
+            f"Please adjust your account-combinations CSV to avoid duplicate names: {dup_text}"
+        )
 
 
 def ensure_schema_ready(db_base, db_engine) -> None:
@@ -255,7 +267,7 @@ def main() -> int:
     args = parse_args()
 
     # Ensure sqlite relative path always points to backend/data.db.
-    backend_dir = Path(__file__).resolve().parent
+    backend_dir = Path(__file__).resolve().parent.parent
     os.chdir(backend_dir)
 
     from database.connection import SessionLocal, engine, Base
@@ -272,6 +284,8 @@ def main() -> int:
         raise SystemExit("Missing BASE_URL. Please set it in .env or environment variables.")
 
     account_configs = build_account_configs(mode=args.mode)
+    if args.mode == "all-combinations":
+        validate_unique_account_names(account_configs, MODEL_LIST)
 
     ensure_schema_ready(Base, engine)
 
@@ -291,7 +305,7 @@ def main() -> int:
 
         for config_name, account_config in account_configs:
             for model in MODEL_LIST:
-                name = model if args.mode == DEFAULT_CREATE_MODE else f"{model}__{config_name}"
+                name = build_account_name(model, account_config)
                 existing = (
                     db.query(Account)
                     .filter(Account.user_id == user.id, Account.name == name)
@@ -309,7 +323,7 @@ def main() -> int:
                         existing.enable_rule_aware = account_config["enable_rule_aware"]
                         existing.is_active = account_config["is_active"]
                         updated += 1
-                        print(f"[UPDATED] {name} (model={model})")
+                        print(f"[UPDATED] {name} (model={model}, combo={config_name})")
                     else:
                         skipped += 1
                         print(f"[SKIPPED] {name} already exists")
@@ -334,7 +348,7 @@ def main() -> int:
                 )
                 db.add(account)
                 created += 1
-                print(f"[CREATED] {name} (model={model})")
+                print(f"[CREATED] {name} (model={model}, combo={config_name})")
 
         db.commit()
     finally:

@@ -3,9 +3,9 @@
 Remove default placeholder GPT account for a target user.
 
 Usage:
-  python remove_default_gpt_account.py
-  python remove_default_gpt_account.py --user default
-  python remove_default_gpt_account.py --name GPT
+  python script/remove_default_gpt_account.py
+  python script/remove_default_gpt_account.py --user default
+  python script/remove_default_gpt_account.py --name GPT
 """
 
 from __future__ import annotations
@@ -34,12 +34,12 @@ def main() -> int:
     args = parse_args()
 
     # Ensure sqlite relative path points to backend/data.db
-    backend_dir = Path(__file__).resolve().parent
+    backend_dir = Path(__file__).resolve().parent.parent
     os.chdir(backend_dir)
 
     from database.connection import SessionLocal
     from database.models import Account, User
-    from create_accounts_from_env import cleanup_default_gpt_account
+    from script.create_accounts_from_env import cleanup_default_gpt_account
 
     db = SessionLocal()
     try:

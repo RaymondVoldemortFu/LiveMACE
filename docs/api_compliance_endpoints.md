@@ -275,4 +275,4 @@ const getTrendData = async (accountId: number) => {
 - `accounts`: 存储LLM审计的累计统计（llm_audit_*字段）
 - `ai_decision_logs`: 存储交易决策记录
 
-确保已运行 `python backend/update_db_schema.py` 初始化这些表。
+确保已运行 `python backend/script/update_db_schema.py` 初始化这些表。

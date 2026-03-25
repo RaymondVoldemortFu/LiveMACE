@@ -99,7 +99,7 @@ Notes:
 From `backend/`:
 
 ```bash
-uv run python create_accounts_from_env.py
+uv run python script/create_accounts_from_env.py
 ```
 
 Note:
@@ -109,26 +109,21 @@ Optional flags:
 - Update existing same-name accounts:
 
 ```bash
-uv run python create_accounts_from_env.py --update-existing
+uv run python script/create_accounts_from_env.py --update-existing
 ```
 
 - Create all model accounts for all account-config combinations from `.env`:
 
 ```bash
-uv run python create_accounts_from_env.py --mode all-combinations
+uv run python script/create_accounts_from_env.py --mode all-combinations
 ```
 
-Combination mode env naming:
+Combination mode config:
 - Runtime API config still uses `API_KEY` and `BASE_URL`.
-- Account param combinations come from `.env` rows:
-  - `ACCOUNT_COMBO_ROW_1`
-  - `ACCOUNT_COMBO_ROW_2`
-  - ...
-- One row equals one combination (2D list style), then script creates one account per model for each row.
-- Row positional format:
+- Account combinations come from CSV via `.env` var `ACCOUNT_COMBO_CSV_PATH`.
+- One CSV row equals one combination, then script creates one account per model for each row.
+- Required CSV columns:
   - `account_type,agent_type,memory_enabled,tool_routing_enabled,enable_rule_aware,is_active`
-- Optional row key-value format:
-  - `account_type=AI;agent_type=react;memory_enabled=false;tool_routing_enabled=true;enable_rule_aware=false;is_active=true`
 
 ## License
 MIT
