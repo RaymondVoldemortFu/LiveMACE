@@ -6,6 +6,7 @@ services:
     env_file:
       - ./backend/.env
     ports:
+      - "80:5611"
       - "5611:5611"
     volumes:
       # Persist sqlite database used by DATABASE_URL=sqlite:///./data.db

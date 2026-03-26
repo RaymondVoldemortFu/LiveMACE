@@ -137,6 +137,8 @@ async def create_new_order(request: OrderCreateRequest, db: Session = Depends(ge
         logger.info(f"User {user.username} created order: {order.order_no}")
         return order
         
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:

@@ -322,9 +322,9 @@ export default function AgentStatusView({ accounts }: AgentStatusViewProps) {
                         </div>
                     </CardTitle>
                 </CardHeader>
-                <CardContent className="flex-1 overflow-auto p-4" ref={scrollRef}>
+                <CardContent className="flex-1 overflow-auto p-4 min-w-0" ref={scrollRef}>
                     {trace ? (
-                        <div className="space-y-4 min-w-[960px]">
+                        <div className="space-y-4 w-full min-w-0 max-w-full">
                             {trace.steps.map(renderStep)}
                         </div>
                     ) : (
