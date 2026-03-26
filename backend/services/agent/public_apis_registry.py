@@ -4,6 +4,7 @@ import importlib.util
 import json
 import logging
 import sys
+import copy
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -54,6 +55,48 @@ def _make_public_api_func(name: str):
     return _call
 
 
+def _normalize_json_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Normalize generated JSON schema to satisfy strict tool validators.
+    Specifically ensure every array-typed schema has an `items` field.
+    """
+    normalized = copy.deepcopy(schema)
+
+    def _walk(node: Any) -> None:
+        if isinstance(node, dict):
+            node_type = node.get("type")
+            is_array_type = (
+                node_type == "array"
+                or (isinstance(node_type, list) and "array" in node_type)
+            )
+            if is_array_type and "items" not in node:
+                # Keep items broad to avoid changing runtime behavior.
+                node["items"] = {}
+
+            for key in ("properties",):
+                sub = node.get(key)
+                if isinstance(sub, dict):
+                    for value in sub.values():
+                        _walk(value)
+
+            for key in ("items", "additionalProperties"):
+                sub = node.get(key)
+                if isinstance(sub, (dict, list)):
+                    _walk(sub)
+
+            for key in ("anyOf", "allOf", "oneOf"):
+                sub = node.get(key)
+                if isinstance(sub, list):
+                    for value in sub:
+                        _walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                _walk(item)
+
+    _walk(normalized)
+    return normalized
+
+
 def register_public_api_tools(registry, limit: Optional[int] = None) -> int:
     """
     Register public-apis tools into ToolRegistry using tools_schema.json.
@@ -81,6 +124,14 @@ def register_public_api_tools(registry, limit: Optional[int] = None) -> int:
             "properties": {},
             "additionalProperties": True,
         }
+        if isinstance(parameters, dict):
+            parameters = _normalize_json_schema(parameters)
+        else:
+            parameters = {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": True,
+            }
 
         registry.register(
             Tool(

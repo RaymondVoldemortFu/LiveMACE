@@ -456,6 +456,7 @@ def _build_tool_entry(api_name: str) -> dict:
     description = _extract_description(openapi, api_name)
     source = (APIS_DIR / api_name / "api.py").read_text(encoding="utf-8")
     inferred_parameters = ParamInferer(api_name, source).infer()
+    _normalize_schema_for_tool_validation(inferred_parameters)
     return {
         "type": "function",
         "function": {
@@ -464,6 +465,56 @@ def _build_tool_entry(api_name: str) -> dict:
             "parameters": inferred_parameters,
         },
     }
+
+
+def _normalize_schema_for_tool_validation(schema: Dict[str, Any]) -> None:
+    """
+    Make inferred schemas compatible with strict tool validators:
+    - array type must define `items`
+    - object type should define `properties` or `additionalProperties`
+    """
+
+    def _type_includes(node_type: Any, expected: str) -> bool:
+        if isinstance(node_type, str):
+            return node_type == expected
+        if isinstance(node_type, list):
+            return expected in node_type
+        return False
+
+    def _walk(node: Any) -> None:
+        if isinstance(node, dict):
+            node_type = node.get("type")
+
+            if _type_includes(node_type, "array") and "items" not in node:
+                node["items"] = {}
+
+            if (
+                _type_includes(node_type, "object")
+                and "properties" not in node
+                and "additionalProperties" not in node
+            ):
+                node["additionalProperties"] = True
+
+            properties = node.get("properties")
+            if isinstance(properties, dict):
+                for sub_schema in properties.values():
+                    _walk(sub_schema)
+
+            for key in ("items", "additionalProperties"):
+                sub_schema = node.get(key)
+                if isinstance(sub_schema, (dict, list)):
+                    _walk(sub_schema)
+
+            for key in ("anyOf", "oneOf", "allOf"):
+                variants = node.get(key)
+                if isinstance(variants, list):
+                    for variant in variants:
+                        _walk(variant)
+        elif isinstance(node, list):
+            for sub in node:
+                _walk(sub)
+
+    _walk(schema)
 
 
 def main() -> None:
