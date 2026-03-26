@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { PieChart, Settings, TrendingUp, BarChart3, Bot, Brain, Shield } from 'lucide-react'
+import { PieChart, Settings, BarChart3, Bot, Brain, Shield, Table2 } from 'lucide-react'
 import SettingsDialog from './SettingsDialog'
 
 interface SidebarProps {
@@ -26,6 +26,18 @@ export default function Sidebar({ currentPage = 'comprehensive', onPageChange, o
             title="同花顺Bench"
           >
             <BarChart3 className="w-5 h-5" />
+          </button>
+
+          <button
+            className={`flex items-center justify-center w-10 h-10 rounded-lg transition-colors ${
+              currentPage === 'comprehensive-details'
+                ? 'bg-secondary/80 text-secondary-foreground'
+                : 'hover:bg-muted text-muted-foreground'
+            }`}
+            onClick={() => onPageChange?.('comprehensive-details')}
+            title="Bench Details"
+          >
+            <Table2 className="w-5 h-5" />
           </button>
 
           <button
@@ -137,15 +149,15 @@ export default function Sidebar({ currentPage = 'comprehensive', onPageChange, o
           </button>
           <button
             className={`flex flex-col items-center justify-center w-12 h-12 rounded-lg transition-colors ${
-              currentPage === 'asset-curve'
+              currentPage === 'comprehensive-details'
                 ? 'bg-secondary/80 text-secondary-foreground'
                 : 'hover:bg-muted text-muted-foreground'
             }`}
-            onClick={() => onPageChange?.('asset-curve')}
-            title="Asset Curve"
+            onClick={() => onPageChange?.('comprehensive-details')}
+            title="Bench Details"
           >
-            <TrendingUp className="w-5 h-5" />
-            <span className="text-xs mt-1">Curve</span>
+            <Table2 className="w-5 h-5" />
+            <span className="text-xs mt-1">Detail</span>
           </button>
 
           <button

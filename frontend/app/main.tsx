@@ -16,7 +16,8 @@ const resolveWsUrl = () => {
 import Header from '@/components/layout/Header'
 import Sidebar from '@/components/layout/Sidebar'
 import Portfolio from '@/components/portfolio/Portfolio'
-import ComprehensiveView from '@/components/portfolio/ComprehensiveView'
+import ComprehensiveCurveView from '@/components/portfolio/ComprehensiveCurveView'
+import ComprehensiveDetailsView from '@/components/portfolio/ComprehensiveDetailsView'
 import AgentStatusView from '@/components/agent/AgentStatusView'
 import { MemoryView } from '@/components/memory/MemoryView'
 import ComplianceDashboard from '@/components/compliance/ComplianceDashboard'
@@ -60,7 +61,8 @@ interface Trade { id: number; order_id: number; account_id: number; symbol: stri
 
 const PAGE_TITLES: Record<string, string> = {
   portfolio: 'Crypto Paper Trading',
-  comprehensive: '同花顺Bench',
+  comprehensive: '同花顺Bench - 曲线总览',
+  'comprehensive-details': '同花顺Bench - 数据明细',
   memory: 'Memory System',
   compliance: 'Rule Compliance',
 }
@@ -216,21 +218,6 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accountRefreshTrigger])
 
-  const placeOrder = (payload: any) => {
-    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-      console.warn('WS not connected, cannot place order')
-      toast.error('Not connected to server')
-      return
-    }
-    try {
-      wsRef.current.send(JSON.stringify({ type: 'place_order', ...payload }))
-      toast('Placing order...', { icon: '📝' })
-    } catch (e) {
-      console.error(e)
-      toast.error('Failed to send order')
-    }
-  }
-
   const switchUser = (username: string) => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
       console.warn('WS not connected, cannot switch user')
@@ -301,7 +288,15 @@ function App() {
           )}
           
           {currentPage === 'comprehensive' && (
-            <ComprehensiveView
+            <ComprehensiveCurveView
+              data={allAssetCurves}
+              accounts={accounts}
+              wsRef={wsRef}
+            />
+          )}
+
+          {currentPage === 'comprehensive-details' && (
+            <ComprehensiveDetailsView
               overview={overview}
               positions={positions}
               orders={orders}
@@ -309,7 +304,6 @@ function App() {
               aiDecisions={aiDecisions}
               allAssetCurves={allAssetCurves}
               wsRef={wsRef}
-              onSwitchUser={switchUser}
               onSwitchAccount={switchAccount}
               onRefreshData={refreshData}
               accountRefreshTrigger={accountRefreshTrigger}
@@ -348,7 +342,7 @@ function App() {
           title={pageTitle}
           currentUser={user}
           currentAccount={account}
-          showAccountSelector={currentPage === 'portfolio' || currentPage === 'comprehensive'}
+          showAccountSelector={currentPage === 'portfolio' || currentPage === 'comprehensive-details'}
           onUserChange={switchUser}
         />
         {renderMainContent()}
