@@ -30,7 +30,7 @@ class AgentConfig:
     # Docker Configuration
     DOCKER_IMAGE_NAME = "agent-sandbox:latest"
     # Minimum baseline pool size
-     = 3
+    DOCKER_POOL_SIZE = 3
     # Dynamic pool sizing based on active AI accounts
     DOCKER_POOL_DYNAMIC_BY_ACTIVE_ACCOUNTS = os.getenv("DOCKER_POOL_DYNAMIC_BY_ACTIVE_ACCOUNTS", "true").strip().lower() in {"1", "true", "yes", "on"}
     # Optional hard cap for dynamic base pool (0 means no cap)
