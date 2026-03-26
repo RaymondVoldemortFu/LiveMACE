@@ -101,7 +101,6 @@ TRADE EXECUTION TOOL:
 - For `close`, ensure the symbol exists in current positions.
 - Always keep leverage within allowed limits and consistent with hard-rule constraints.
 - Do NOT end the process without outputting `<TRADE_DONE>`.
-- Do NOT output `<FINAL_JSON>` in this protocol.
 
 ## 5. Critical Requirements
 

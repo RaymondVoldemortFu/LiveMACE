@@ -24,11 +24,11 @@ from database.connection import SessionLocal
 from database.models import Account, Position, Trade
 from services.time_source import now_utc
 from services.agent.llm_client import LLMClient
-from config.agent_config import AgentConfig
 from config.api_feature_config import ApiFeatureConfig
 from services.agent.prompts.system_prompts import get_trade_agent_prompt
 from services.agent.prompts.multi_agent_prompts import MANAGER_PROMPT as MULTI_AGENT_MANAGER_PROMPT
 from services.agent.prompts.advanced_multi_agent_prompts import Advanced_MANAGER_PROMPT
+from services.security.api_key_security import encrypt_api_key, mask_api_key_for_display
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +68,7 @@ async def list_all_accounts(db: Session = Depends(get_db)):
                 "frozen_cash": float(account.frozen_cash),
                 "model": account.model,
                 "base_url": account.base_url,
-                "api_key": account.api_key,
+                "api_key": mask_api_key_for_display(account.api_key),
                 "is_active": account.is_active == "true"
             })
         
@@ -167,8 +167,6 @@ async def get_account_system_prompt(account_id: int, db: Session = Depends(get_d
         agent_type = (getattr(account, "agent_type", "react") or "react").strip().lower()
         memory_enabled = (getattr(account, "memory_enabled", "false") == "true")
         tool_routing_enabled = (getattr(account, "tool_routing_enabled", "true") == "true")
-        decision_protocol = (getattr(AgentConfig, "TRADE_DECISION_PROTOCOL", "tool") or "tool").strip().lower()
-        termination_token = "<TRADE_DONE>" if decision_protocol == "tool" else "<FINAL_JSON>"
 
         if agent_type == "react":
             system_prompt = get_trade_agent_prompt(
@@ -193,8 +191,8 @@ async def get_account_system_prompt(account_id: int, db: Session = Depends(get_d
             "agent_type": agent_type,
             "memory_enabled": memory_enabled,
             "tool_routing_enabled": tool_routing_enabled,
-            "decision_protocol": decision_protocol,
-            "termination_token": termination_token,
+            "decision_protocol": "tool",
+            "termination_token": "<TRADE_DONE>",
             "system_prompt": system_prompt,
         }
     except HTTPException:
@@ -283,7 +281,7 @@ async def create_new_account(payload: dict, db: Session = Depends(get_db)):
         
         model = (payload.get("model") or "").strip() or None
         base_url = (payload.get("base_url") or "").strip() or None
-        api_key = (payload.get("api_key") or "").strip() or None
+        api_key = encrypt_api_key((payload.get("api_key") or "").strip() or None)
 
         # Create new account
         enable_rule_aware_value = "true" if payload.get("enable_rule_aware") is True else "false"
@@ -336,7 +334,7 @@ async def create_new_account(payload: dict, db: Session = Depends(get_db)):
             "frozen_cash": float(new_account.frozen_cash),
             "model": new_account.model,
             "base_url": new_account.base_url,
-            "api_key": new_account.api_key,
+            "api_key": mask_api_key_for_display(new_account.api_key),
             "is_active": new_account.is_active == "true"
         }
     except HTTPException:
@@ -399,8 +397,11 @@ async def update_account_settings(account_id: int, payload: dict, db: Session = 
             logger.info(f"Updated base_url to: {account.base_url}")
         
         if "api_key" in payload:
-            account.api_key = payload["api_key"]
-            logger.info(f"Updated api_key (length: {len(payload['api_key']) if payload['api_key'] else 0})")
+            incoming_api_key = (payload["api_key"] or "").strip() if payload["api_key"] is not None else None
+            account.api_key = encrypt_api_key(incoming_api_key)
+            logger.info(
+                f"Updated api_key (input_length: {len(incoming_api_key) if incoming_api_key else 0}, stored_as_encrypted: {bool(incoming_api_key)})"
+            )
         
         db.commit()
         db.refresh(account)
@@ -432,7 +433,7 @@ async def update_account_settings(account_id: int, payload: dict, db: Session = 
             "frozen_cash": float(account.frozen_cash),
             "model": account.model,
             "base_url": account.base_url,
-            "api_key": account.api_key,
+            "api_key": mask_api_key_for_display(account.api_key),
             "is_active": account.is_active == "true"
         }
     except HTTPException:

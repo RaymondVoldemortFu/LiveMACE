@@ -121,6 +121,8 @@ def _update_uniform(
     new_base_url: Optional[str],
     dry_run: bool,
 ) -> int:
+    from services.security.api_key_security import encrypt_api_key
+
     _print_preview(rows, new_api_key, new_base_url)
     if dry_run:
         print("[DRY-RUN] No rows updated.")
@@ -128,7 +130,7 @@ def _update_uniform(
 
     updated = 0
     for r in rows:
-        api_key = r["api_key"] if new_api_key is None else new_api_key
+        api_key = r["api_key"] if new_api_key is None else encrypt_api_key(new_api_key)
         base_url = r["base_url"] if new_base_url is None else new_base_url
         conn.execute(
             """
@@ -165,6 +167,8 @@ def _resolve_account_id(conn: sqlite3.Connection, item: Dict) -> int:
 
 
 def _update_mapping(conn: sqlite3.Connection, mappings: List[Dict], dry_run: bool) -> int:
+    from services.security.api_key_security import encrypt_api_key
+
     updates: List[Tuple[int, Optional[str], Optional[str]]] = []
     for item in mappings:
         account_id = _resolve_account_id(conn, item)
@@ -175,7 +179,7 @@ def _update_mapping(conn: sqlite3.Connection, mappings: List[Dict], dry_run: boo
         if not cur:
             raise ValueError(f"Account id not found: {account_id}")
 
-        next_key = item.get("api_key", cur["api_key"])
+        next_key = encrypt_api_key(item.get("api_key")) if "api_key" in item else cur["api_key"]
         next_url = item.get("base_url", cur["base_url"])
         print(
             f"- id={cur['id']} name={cur['name']} | "

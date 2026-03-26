@@ -25,17 +25,10 @@ from services.agent.tools import *
 from services.agent.public_apis_registry import register_public_api_tools
 from services.agent.history_tool import HistoryTool
 from services.container_service import ContainerService
+from services.security.api_key_security import is_default_api_key, resolve_runtime_api_key
 
 
 logger = logging.getLogger(__name__)
-
-#  mode API keys that should be skipped
-DEMO_API_KEYS = {
-    "default-key-please-update-in-settings",
-    "default",
-    "",
-    None
-}
 
 SUPPORTED_SYMBOLS: Dict[str, str] = {
     "BTC": "Bitcoin",
@@ -48,7 +41,7 @@ SUPPORTED_SYMBOLS: Dict[str, str] = {
 
 def _is_default_api_key(api_key: str) -> bool:
     """Check if the API key is a default/placeholder key that should be skipped"""
-    return api_key in DEMO_API_KEYS
+    return is_default_api_key(api_key)
 
 
 def _get_portfolio_data(db: Session, account: Account) -> Dict:
@@ -81,7 +74,8 @@ def _get_portfolio_data(db: Session, account: Account) -> Dict:
 def call_ai_for_decision(account: Account, portfolio: Dict, prices: Dict[str, float]) -> Optional[Dict]:
     """Call AI model API to get trading decision"""
     # Check if this is a default API key
-    if _is_default_api_key(account.api_key):
+    runtime_api_key = resolve_runtime_api_key(account.api_key)
+    if _is_default_api_key(runtime_api_key):
         logger.info(f"Skipping AI trading for account {account.name} - using default API key")
         return None
 
@@ -136,7 +130,7 @@ Rules:
 
         headers = {
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {account.api_key}"
+            "Authorization": f"Bearer {runtime_api_key}"
         }
 
         # Use OpenAI-compatible chat completions format
@@ -542,7 +536,7 @@ def call_agent_for_decision(
     account_name = getattr(account, "name", f"account_{account_id}")
     account_type = getattr(account, "agent_type", "react")
     account_model = account.model
-    account_api_key = account.api_key
+    account_api_key = resolve_runtime_api_key(account.api_key)
     account_base_url = account.base_url
 
     if _is_default_api_key(account_api_key):
@@ -648,7 +642,7 @@ def call_agent_for_decision(
         )
 
         registry = ToolRegistry()
-        register_default_tools(registry, db, account_id, trace_id=trace_id)
+        register_default_tools(registry, db, account_id, trace_id=trace_id, runtime_api_key=account_api_key)
 
         # Register public-apis tools only when tool routing is enabled.
         # Rule-aware agents also skip public-apis to avoid tool namespace pollution and provider limits.

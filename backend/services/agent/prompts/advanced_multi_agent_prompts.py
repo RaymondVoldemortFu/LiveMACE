@@ -146,7 +146,6 @@ Important protocol:
 - execution_plan is ordered. Execute it in sequence.
 - If execution_plan has N executable items, complete N execute_trade calls before finishing.
 - Use execute_trade directly for any trade action.
-- Do not output <FINAL_JSON>.
 - Do not end without <TRADE_DONE>.
 """
 

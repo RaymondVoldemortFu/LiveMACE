@@ -472,9 +472,9 @@ class SearchSubAgent:
                     match = re.search(r"<FINAL_RESPONSE>(.*?)</FINAL_RESPONSE>", content, re.DOTALL)
                     if match:
                         try:
-                            final_json = json.loads(match.group(1).strip())
-                            agent_logger.info(f"[{agent_name}] Sub-Agent Final Response: {json.dumps(final_json, ensure_ascii=False)}")
-                            return final_json
+                            final_response = json.loads(match.group(1).strip())
+                            agent_logger.info(f"[{agent_name}] Sub-Agent Final Response: {json.dumps(final_response, ensure_ascii=False)}")
+                            return final_response
                         except json.JSONDecodeError:
                             logger.error("Failed to parse final JSON from sub-agent.")
                             agent_logger.error(f"[{agent_name}] Failed to parse final JSON from sub-agent.")

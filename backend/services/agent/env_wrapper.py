@@ -10,6 +10,7 @@ from services.container_service import ContainerService
 from config.agent_config import AgentConfig
 from .memory_tools import create_memory_tools
 from services.agent.trade_execution_tool import execute_trade_tool
+from services.security.api_key_security import resolve_runtime_api_key
 
 
 def map_operation_side(operation: str, direction: str):
@@ -26,7 +27,7 @@ def map_operation_side(operation: str, direction: str):
     return None
 
 
-def register_default_tools(registry, db: Session, account_id: int, trace_id: str = None):
+def register_default_tools(registry, db: Session, account_id: int, trace_id: str = None, runtime_api_key: str = None):
     # === 行情工具 ===
     registry.register(
         Tool(
@@ -107,9 +108,10 @@ def register_default_tools(registry, db: Session, account_id: int, trace_id: str
 
     # === 搜索工具 (Sub-Agent) ===
     account = get_account(db, account_id)
+    search_agent_api_key = runtime_api_key or resolve_runtime_api_key(account.api_key)
     search_agent = SearchSubAgent(
         model=account.model,
-        api_key=account.api_key,
+        api_key=search_agent_api_key,
         base_url=account.base_url,
         agent_name=account.name
     )

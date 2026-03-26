@@ -46,6 +46,6 @@ classDiagram
     SearchSubAgent --> LLMClient : uses
     
     %% 决策流程备注
-    note for TradingAgent "核心循环:\n1. 分析 Portfolio/Prices\n2. 调用 LLM\n3. 执行工具(含子智能体)\n4. 解析 <FINAL_JSON>"
+    note for TradingAgent "核心循环:\n1. 分析 Portfolio/Prices\n2. 调用 LLM\n3. 执行工具(含子智能体)\n4. 识别 <TRADE_DONE>"
     note for SearchSubAgent "子循环:\n1. 分析查询意图\n2. 调用搜索/提取工具\n3. 总结信息 <FINAL_RESPONSE>"
 

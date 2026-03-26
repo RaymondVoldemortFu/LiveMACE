@@ -37,7 +37,7 @@ MODEL_LIST = [
     # google
     "gemini-3-pro-preview",
     # xai
-    "grok-420-agents-all",
+    "grok-420-thinking-all",    # gork agent model doesn't support tool calling, switch to thinking
     # qwen
     "qwen3-max",
 ]
@@ -292,6 +292,7 @@ def main() -> int:
 
     # Load .env from current/parent dirs but do not override process env.
     dotenv.load_dotenv(dotenv.find_dotenv(usecwd=True), override=False)
+    from services.security.api_key_security import encrypt_api_key
     # Import DB modules only after .env is loaded so DATABASE_URL takes effect.
     from database.connection import SessionLocal, engine, Base
     from database.models import (
@@ -309,6 +310,8 @@ def main() -> int:
     )
 
     api_key = (os.getenv("API_KEY") or "").strip()
+    encrypted_api_key = encrypt_api_key(api_key)
+
     base_url = (os.getenv("BASE_URL") or "").strip()
 
     if not api_key:
@@ -363,7 +366,7 @@ def main() -> int:
                     if args.update_existing:
                         existing.model = model
                         existing.base_url = base_url
-                        existing.api_key = api_key
+                        existing.api_key = encrypted_api_key
                         existing.account_type = account_config["account_type"]
                         existing.agent_type = account_config["agent_type"]
                         existing.memory_enabled = account_config["memory_enabled"]
@@ -389,7 +392,7 @@ def main() -> int:
                     is_active=account_config["is_active"],
                     model=model,
                     base_url=base_url,
-                    api_key=api_key,
+                    api_key=encrypted_api_key,
                     initial_capital=DEFAULT_INITIAL_CAPITAL,
                     current_cash=DEFAULT_INITIAL_CAPITAL,
                     frozen_cash=Decimal("0"),

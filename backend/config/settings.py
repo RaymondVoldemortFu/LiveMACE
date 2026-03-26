@@ -1,5 +1,6 @@
 from pydantic import BaseModel
 from typing import Dict, List
+import os
 
 
 # Default crypto symbols used by AI trading and baselines.
@@ -28,3 +29,13 @@ DEFAULT_TRADING_CONFIGS: Dict[str, MarketConfig] = {
         lot_size=1,
     ),
 }
+
+
+class SecuritySettings(BaseModel):
+    """Centralized security-related runtime settings."""
+
+    api_key_cipher_key: str = (os.getenv("API_KEY_CIPHER_KEY") or "").strip()
+    api_key_fallback_env_var: str = (os.getenv("API_KEY_FALLBACK_ENV_VAR") or "API_KEY").strip()
+
+
+SECURITY_SETTINGS = SecuritySettings()

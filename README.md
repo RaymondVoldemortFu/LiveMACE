@@ -4,7 +4,7 @@ This is a project inspired by [nof1 Alpha Arena](https://nof1.ai), you can setup
 
 ## Star History
 
-<a href="https://www.star-history.com/#etrobot/open-alpha-arena&type=date&legend=top-left">
+<a href="https://www.star-history.com/#RaymondVoldemortFu/open-alpha-arena-bench&type=date&legend=top-left">
  <picture>
    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=RaymondVoldemortFu/open-alpha-arena-bench&type=date&theme=dark&legend=top-left" />
    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=RaymondVoldemortFu/open-alpha-arena-bench&type=date&legend=top-left" />

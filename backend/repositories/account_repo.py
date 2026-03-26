@@ -2,6 +2,7 @@ from sqlalchemy.orm import Session
 from typing import Optional, List
 from database.models import Account, User
 from decimal import Decimal
+from services.security.api_key_security import encrypt_api_key
 
 
 def list_active_ai_accounts(db: Session) -> List[Account]:
@@ -30,7 +31,7 @@ def create_account(
         account_type=account_type,
         model=model if account_type == "AI" else None,
         base_url=base_url if account_type == "AI" else None,
-        api_key=api_key if account_type == "AI" else None,
+        api_key=encrypt_api_key(api_key) if account_type == "AI" else None,
         initial_capital=initial_capital,
         current_cash=initial_capital,
         frozen_cash=0.0,
@@ -103,7 +104,7 @@ def update_account(
     if base_url is not None:
         account.base_url = base_url
     if api_key is not None:
-        account.api_key = api_key
+        account.api_key = encrypt_api_key(api_key)
     
     db.commit()
     db.refresh(account)

@@ -19,6 +19,7 @@ from repositories.user_repo import verify_auth_session, get_user
 from schemas.account import (
     AccountCreate, AccountUpdate, AccountOut, AccountOverview
 )
+from services.security.api_key_security import mask_api_key_for_display
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,7 @@ async def list_user_accounts(session_token: str, db: Session = Depends(get_db)):
                 name=account.name,
                 model=account.model,
                 base_url=account.base_url,
-                api_key="****" + account.api_key[-4:] if account.api_key else "",  # Mask API key
+                api_key=mask_api_key_for_display(account.api_key),
                 initial_capital=float(account.initial_capital),
                 current_cash=float(account.current_cash),
                 frozen_cash=float(account.frozen_cash),
@@ -111,7 +112,7 @@ async def create_trading_account(
             name=account.name,
             model=account.model,
             base_url=account.base_url,
-            api_key="****" + account.api_key[-4:] if account.api_key else "",
+            api_key=mask_api_key_for_display(account.api_key),
             initial_capital=float(account.initial_capital),
             current_cash=float(account.current_cash),
             frozen_cash=float(account.frozen_cash),
@@ -149,7 +150,7 @@ async def get_account_details(
             name=account.name,
             model=account.model,
             base_url=account.base_url,
-            api_key="****" + account.api_key[-4:] if account.api_key else "",
+            api_key=mask_api_key_for_display(account.api_key),
             initial_capital=float(account.initial_capital),
             current_cash=float(account.current_cash),
             frozen_cash=float(account.frozen_cash),
@@ -210,7 +211,7 @@ async def update_trading_account(
             name=updated_account.name,
             model=updated_account.model,
             base_url=updated_account.base_url,
-            api_key="****" + updated_account.api_key[-4:] if updated_account.api_key else "",
+            api_key=mask_api_key_for_display(updated_account.api_key),
             initial_capital=float(updated_account.initial_capital),
             current_cash=float(updated_account.current_cash),
             frozen_cash=float(updated_account.frozen_cash),
@@ -268,7 +269,7 @@ async def get_or_create_default(
             name=account.name,
             model=account.model,
             base_url=account.base_url,
-            api_key="****" + account.api_key[-4:] if account.api_key else "",
+            api_key=mask_api_key_for_display(account.api_key),
             initial_capital=float(account.initial_capital),
             current_cash=float(account.current_cash),
             frozen_cash=float(account.frozen_cash),

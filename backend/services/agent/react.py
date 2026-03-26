@@ -56,7 +56,8 @@ Rules:
 - Keep at most one <CALL_TOOL> block per response.
 - `tool_name` must exactly match one of the currently available tools.
 - If tool routing is enabled, use `select_tools` whenever you need the router to update the available tool set.
-- Final decision must still use <FINAL_JSON>...</FINAL_JSON>.
+- Execute real trades via `execute_trade`.
+- When all trading actions are complete, output ONLY: <TRADE_DONE>
 """
 
 class ReActAgent(BaseAgent):
@@ -148,6 +149,23 @@ class ReActAgent(BaseAgent):
             return None
         return parsed if isinstance(parsed, dict) else None
 
+    @staticmethod
+    def _is_trade_done_message(text: str) -> bool:
+        if not text:
+            return False
+        normalized = text.strip().replace("`", "")
+        if normalized == "<TRADE_DONE>":
+            return True
+        if re.search(r"<\s*TRADE_DONE\s*>", normalized, re.IGNORECASE):
+            return True
+        squashed = re.sub(r"\s+", "", normalized).upper()
+        # Be tolerant to near-miss variants seen in provider outputs.
+        if squashed in {"<TRADE_DONE>", "TRADE_DONE>", "<TRADE_DONE", "TRADE_DONE"}:
+            return True
+        if "TRADE_DONE" in squashed and len(squashed) <= 32:
+            return True
+        return False
+
     def _run_gemini_compatible(
         self,
         system_prompt_with_time: str,
@@ -180,7 +198,7 @@ class ReActAgent(BaseAgent):
                         "Available tools for this step:\n"
                         f"{self._available_tools_text()}\n\n"
                         "If you need a tool, append one <CALL_TOOL>{...}</CALL_TOOL> block. "
-                        "If you can finish, output <FINAL_JSON>...</FINAL_JSON>."
+                        "If you can finish, output ONLY: <TRADE_DONE>."
                     ),
                 }
             )
@@ -212,25 +230,24 @@ class ReActAgent(BaseAgent):
                 agent_logger.warning(warning_msg)
                 messages.append({
                     "role": "user",
-                    "content": "Your previous response was empty. Please continue with reasoning, a <CALL_TOOL> block, or <FINAL_JSON>.",
+                    "content": "Your previous response was empty. Please continue with reasoning, a <CALL_TOOL> block, or output ONLY <TRADE_DONE>.",
                 })
                 continue
 
-            if content:
-                match = re.search(r"<FINAL_JSON>(.*?)</FINAL_JSON>", content, re.DOTALL)
-                if match:
-                    json_str = match.group(1).strip()
-                    try:
-                        decision = self._normalize_decision(json.loads(json_str))
-                        logger.info(f"Gemini compatibility final decision: {decision.get('operation')} {decision.get('symbol', '')}")
-                        agent_logger.info(f"Final Decision Parsed: {json.dumps(decision, ensure_ascii=False)}")
-                        break
-                    except json.JSONDecodeError:
-                        messages.append({
-                            "role": "user",
-                            "content": "Your <FINAL_JSON> block was invalid JSON. Please retry with valid JSON.",
-                        })
-                        continue
+            if self._is_trade_done_message(content):
+                decision = {
+                    "operation": "hold",
+                    "symbol": "",
+                    "direction": "long",
+                    "target_portion_of_balance": 0.0,
+                    "leverage": 1,
+                    "reason": "Tool-mode terminated by token <TRADE_DONE>",
+                    "protocol": "tool",
+                    "executed_trades": [],
+                }
+                logger.info("Gemini compatibility loop terminated by <TRADE_DONE>")
+                agent_logger.info(f"Tool-mode final summary: {json.dumps(decision, ensure_ascii=False)}")
+                break
 
             command = self._extract_call_tool_command(content)
             if command:
@@ -337,8 +354,7 @@ class ReActAgent(BaseAgent):
         tz_utc_8 = timezone(timedelta(hours=8))
         current_time = now_in_tz(tz_utc_8).strftime("%Y-%m-%d %H:%M:%S")
 
-        decision_protocol = (getattr(AgentConfig, "TRADE_DECISION_PROTOCOL", "tool") or "tool").strip().lower()
-        termination_token = "<TRADE_DONE>" if decision_protocol == "tool" else "<FINAL_JSON>"
+        termination_token = "<TRADE_DONE>"
 
         # Only inject time context. Runtime protocol is now rendered in get_trade_agent_prompt().
         system_prompt_with_time = f"{system_prompt}\n\nCurrent Time (UTC+8): {current_time}"
@@ -392,8 +408,6 @@ class ReActAgent(BaseAgent):
                 reminder_text = (
                     f"Reminder: You have {remaining_steps} steps remaining. "
                     f"You must output {termination_token} before running out of steps."
-                    if decision_protocol == "tool"
-                    else f"Reminder: You have {remaining_steps} steps remaining. You must output <FINAL_JSON> before running out of steps."
                 )
                 request_messages.append({
                     "role": "user",
@@ -554,80 +568,39 @@ class ReActAgent(BaseAgent):
 
             # 2) 没有工具调用，按协议处理最终输出
             text_content = content or ""
-            if decision_protocol == "tool":
-                if text_content and text_content.strip() == termination_token:
-                    decision = {
-                        "operation": "hold",
-                        "symbol": "",
-                        "direction": "long",
-                        "target_portion_of_balance": 0.0,
-                        "leverage": 1,
-                        "reason": f"Tool-mode terminated by token {termination_token}",
-                        "protocol": "tool",
-                        "executed_trades": executed_trades,
+            if self._is_trade_done_message(text_content):
+                decision = {
+                    "operation": "hold",
+                    "symbol": "",
+                    "direction": "long",
+                    "target_portion_of_balance": 0.0,
+                    "leverage": 1,
+                    "reason": f"Tool-mode terminated by token {termination_token}",
+                    "protocol": "tool",
+                    "executed_trades": executed_trades,
+                }
+                logger.info(
+                    f"Agent terminated tool-mode loop with token. executed_trade_calls={len(executed_trades)}"
+                )
+                agent_logger.info(f"Tool-mode final summary: {json.dumps(decision, ensure_ascii=False)}")
+                break
+
+            if not text_content:
+                error_msg = "LLM returned empty content and no tool calls"
+                logger.warning(error_msg)
+                agent_logger.warning(error_msg)
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "Your previous response was empty. "
+                            f"Please continue by either calling the next tool or outputting {termination_token}."
+                        ),
                     }
-                    logger.info(
-                        f"Agent terminated tool-mode loop with token. executed_trade_calls={len(executed_trades)}"
-                    )
-                    agent_logger.info(f"Tool-mode final summary: {json.dumps(decision, ensure_ascii=False)}")
-                    break
-
-                if not text_content:
-                    error_msg = "LLM returned empty content and no tool calls in tool mode"
-                    logger.warning(error_msg)
-                    agent_logger.warning(error_msg)
-                    messages.append(
-                        {
-                            "role": "user",
-                            "content": (
-                                "Your previous response was empty. "
-                                f"Please continue by either calling the next tool or outputting {termination_token}."
-                            ),
-                        }
-                    )
-                    continue
-
-                logger.info("Tool mode: waiting for termination token, continue next step.")
+                )
                 continue
 
-            # Legacy FINAL_JSON mode
-            if text_content:
-                match = re.search(r"<FINAL_JSON>(.*?)</FINAL_JSON>", text_content, re.DOTALL)
-                if match:
-                    json_str = match.group(1).strip()
-                    try:
-                        decision = json.loads(json_str)
-
-                        logger.info(f"Agent reached final decision: {decision.get('operation')} {decision.get('symbol', '')}")
-                        agent_logger.info(f"Final Decision Parsed: {json.dumps(decision, ensure_ascii=False)}")
-
-                        # Keep compatibility with previous decision handling
-                        if "leverage" not in decision or not decision["leverage"]:
-                            decision["leverage"] = 1
-                        if "direction" not in decision or not decision["direction"]:
-                            decision["direction"] = "long"
-                        else:
-                            decision["direction"] = decision["direction"].lower()
-                        break
-                    except json.JSONDecodeError as e:
-                        logger.error(f"Failed to parse decision JSON within <FINAL_JSON>: {e}. Returning fallback HOLD.")
-                        agent_logger.error(f"JSON Parse Error in <FINAL_JSON>: {e}. Content: {json_str}")
-                        decision = {
-                            "operation": "hold",
-                            "symbol": "",
-                            "direction": "long",
-                            "target_portion_of_balance": 0.0,
-                            "leverage": 1,
-                            "reason": "JSON Parse Error in <FINAL_JSON>, fallback hold",
-                        }
-                        break
-            else:
-                error_msg = "LLM returned empty content and no tool calls"
-                logger.error(error_msg)
-                agent_logger.error(error_msg)
-                raise ValueError(error_msg)
-
-            logger.info("No tool calls and no <FINAL_JSON> found. Continuing conversation (thought step).")
+            logger.info("Tool mode: waiting for termination token, continue next step.")
             continue
 
         # If loop finished without break (max steps reached)
@@ -643,8 +616,7 @@ class ReActAgent(BaseAgent):
                 "leverage": 1,
                 "reason": "max_steps reached, fallback hold",
             }
-            if decision_protocol == "tool":
-                decision["protocol"] = "tool"
-                decision["executed_trades"] = executed_trades
+            decision["protocol"] = "tool"
+            decision["executed_trades"] = executed_trades
 
         return decision

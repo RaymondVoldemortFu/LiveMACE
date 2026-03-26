@@ -96,6 +96,22 @@ class RuleAwareAgent(BaseAgent):
         # Log loaded rules
         rule_summary = self.rule_engine.get_rule_summary()
         logger.info(f"Rule-Aware Agent initialized with rules: {rule_summary}")
+
+    @staticmethod
+    def _is_trade_done_message(text: str) -> bool:
+        if not text:
+            return False
+        normalized = text.strip().replace("`", "")
+        if normalized == "<TRADE_DONE>":
+            return True
+        if re.search(r"<\s*TRADE_DONE\s*>", normalized, re.IGNORECASE):
+            return True
+        squashed = re.sub(r"\s+", "", normalized).upper()
+        if squashed in {"<TRADE_DONE>", "TRADE_DONE>", "<TRADE_DONE", "TRADE_DONE"}:
+            return True
+        if "TRADE_DONE" in squashed and len(squashed) <= 32:
+            return True
+        return False
     
     def run(
         self, 
@@ -221,40 +237,10 @@ class RuleAwareAgent(BaseAgent):
                 full_content = accumulated_content if accumulated_content else msg_content
 
                 # ── NEW PROTOCOL: agent uses execute_trade tool then outputs <TRADE_DONE> ──
-                if "<TRADE_DONE>" in full_content:
+                if self._is_trade_done_message(full_content):
                     logger.info("TRADE_DONE signal detected — ending multi-trade session")
                     trade_done_detected = True
                     break
-
-                # ── LEGACY PROTOCOL: agent outputs <FINAL_JSON>...</FINAL_JSON> ──
-                if "<FINAL_JSON>" in full_content and "</FINAL_JSON>" in full_content:
-                    logger.info("Final decision detected in agent output (legacy FINAL_JSON protocol)")
-
-                    # Parse the full output for compliance audit
-                    parsed_output = self.compliance_auditor.parse_agent_output(full_content)
-
-                    # Extract JSON decision
-                    try:
-                        start = full_content.index("<FINAL_JSON>") + len("<FINAL_JSON>")
-                        end = full_content.index("</FINAL_JSON>")
-                        json_str = full_content[start:end].strip()
-                        logger.info(f"Extracted JSON string ({len(json_str)} chars): {json_str[:200]}...")
-
-                        decision = json.loads(json_str)
-                        logger.info(f"Parsed decision: operation={decision.get('operation')}, symbol={decision.get('symbol')}, direction={decision.get('direction')}")
-
-                        # Validate decision format
-                        decision = self._validate_decision_format(decision)
-                        logger.info(f"Decision after validation: {decision}")
-
-                        decision = self._attach_compliance_audit(decision, portfolio, prices, full_content, parsed_output)
-
-                        break
-
-                    except (json.JSONDecodeError, ValueError) as e:
-                        logger.error(f"Failed to parse final JSON: {e}")
-                        agent_logger.error(f"JSON parse error: {e}")
-                        continue
 
                 # ── Handle tool calls ──
                 if tool_calls:
@@ -307,7 +293,7 @@ class RuleAwareAgent(BaseAgent):
                     accumulated_content = ""
 
                 # If no tool calls and no decision/signal, this is intermediate reasoning
-                if not tool_calls and "<FINAL_JSON>" not in full_content and "<TRADE_DONE>" not in full_content:
+                if not tool_calls and not self._is_trade_done_message(full_content):
                     logger.debug(f"Agent provided reasoning without tool calls or decision (accumulated: {len(accumulated_content)} chars)")
                     # Don't reset accumulated_content here - it will be used in next iteration
 
@@ -350,7 +336,7 @@ class RuleAwareAgent(BaseAgent):
     ) -> Dict[str, Any]:
         """
         Run the compliance audit against *decision* and attach the results.
-        Used by both FINAL_JSON (legacy) and tool-mode (TRADE_DONE) paths.
+        Used by tool-mode (TRADE_DONE) decisions.
         """
         if parsed_output is None:
             parsed_output = self.compliance_auditor.parse_agent_output(full_content)

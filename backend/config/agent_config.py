@@ -8,10 +8,6 @@ class AgentConfig:
     AGENT_TYPE = "react"  # default agent architecture
     MAX_STEPS = 100
     STEP_REMINDER_THRESHOLD = 5
-    # Decision protocol:
-    # - "tool": default, agent executes trades via execute_trade tool and ends with termination token
-    # - "final_json": legacy mode, agent returns one decision inside <FINAL_JSON>...</FINAL_JSON>
-    TRADE_DECISION_PROTOCOL = os.getenv("TRADE_DECISION_PROTOCOL", "tool").strip().lower()
     # System prompt section switches:
     # - True: include SIMULATION ENVIRONMENT NOTICE block
     # - False: omit this block from trading system prompt

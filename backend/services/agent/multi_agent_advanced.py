@@ -466,6 +466,8 @@ class AdvancedMultiAgent(BaseAgent):
         normalized = text.strip().replace("`", "")
         if normalized == self.TERMINATION_TOKEN:
             return True
+        if re.search(r"<\s*TRADE_DONE\s*>", normalized, re.IGNORECASE):
+            return True
         squashed = re.sub(r"\s+", "", normalized).upper()
         # Be tolerant to near-miss variants seen in production traces.
         if squashed in {"<TRADE_DONE>", "TRADE_DONE>", "<TRADE_DONE", "TRADE_DONE"}:

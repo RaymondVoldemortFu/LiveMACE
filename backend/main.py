@@ -9,6 +9,12 @@ import os
 from config.logging_config import setup_logging
 # Initialize logging configuration
 setup_logging()
+from services.security.api_key_security import (
+    encrypt_api_key,
+    is_default_api_key,
+    is_hashed_api_key,
+    is_encrypted_api_key,
+)
 
 from database.connection import engine, Base, SessionLocal
 from database.models import TradingConfig, User, Account, SystemConfig
@@ -125,6 +131,18 @@ def on_startup():
             account.base_url = None
             account.api_key = None
         if placeholder_accounts:
+            db.commit()
+
+        # Migrate legacy plain-text api_key to encrypted-at-rest storage.
+        account_rows = db.query(Account).all()
+        migrated_count = 0
+        for account in account_rows:
+            key = account.api_key
+            if not key or is_default_api_key(key) or is_hashed_api_key(key) or is_encrypted_api_key(key):
+                continue
+            account.api_key = encrypt_api_key(key)
+            migrated_count += 1
+        if migrated_count:
             db.commit()
         
         # Ensure default user has at least one account

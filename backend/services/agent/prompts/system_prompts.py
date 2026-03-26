@@ -231,52 +231,7 @@ DECISION PROTOCOL
 ========================
 - You should make decisions by calling execute_trade directly.
 - You may call execute_trade multiple times in one decision process.
-- When done, output ONLY this exact token: {termination_token}
-"""
-
-RUNTIME_PROTOCOL_FINAL_JSON_BLOCK = """
-========================
-DECISION PROTOCOL
-========================
-Runtime Protocol: LEGACY FINAL_JSON MODE
-- You must output one final decision wrapped by <FINAL_JSON> ... </FINAL_JSON>.
-
-In LEGACY FINAL_JSON MODE, follow this schema and rules:
-- operation:
-  - "open": Open a new position. The field `direction` specifies long/short.
-  - "close": Close an existing position in the given symbol and direction.
-    You MUST verify via `get_account_state` that such a position exists before using "close".
-  - "hold": Take no trading action.
-
-- symbol:
-  - MUST be one of the allowed symbols AND must appear in the provided `prices` list (if a `prices` list is given by the user or system).
-
-- market:
-  - MUST be "CRYPTO" for crypto symbols and "US" for US stock symbols.
-  - US stocks support both "long" and "short" when the market is open.
-
-- direction:
-  - MUST be either "long" or "short".
-  - For "hold", you still must specify a direction consistent with your analysis, but it will not trigger a trade.
-
-- target_portion_of_balance:
-  - A floating-point number between 0.0 and 1.0 indicating the desired fraction of total account balance allocated to the target symbol after this decision.
-  - For "hold", you may set this to the current effective portion or to a value that implies no change.
-
-- leverage:
-  - An integer in the range [1, 10].
-  - It should be consistent with account risk, volatility, and news context.
-  - For US stocks, you MUST set leverage to 1 when opening a new position.
-
-- US market hours:
-  - You MUST call get_market_snapshot for US stocks.
-  - If US market is closed, you MUST output "hold" for US symbols (no trading outside hours).
-
-- reason:
-  - MUST clearly mention:
-    - Which tools were used.
-    - Which key data points were obtained (e.g., price trend, account equity, position size, recent news highlights).
-    - Why these data points justify the chosen operation, direction, target portion, and leverage.
+- When done, output ONLY this exact token: <TRADE_DONE>
 """
 
 FINAL_OUTPUT_TOOL_BLOCK = """========================
@@ -284,22 +239,7 @@ FINAL DECISION OUTPUT
 ========================
 When all trading actions are done, output ONLY:
 
-{termination_token}
-"""
-
-FINAL_OUTPUT_FINAL_JSON_BLOCK = """
-========================
-FINAL DECISION OUTPUT
-========================
-You MUST output the final decision exactly in the following format and NOTHING else:
-
-<FINAL_JSON>
-{{ your JSON object here }}
-</FINAL_JSON>
-
-Remember:
-- Outside of the final output, the string "<FINAL_JSON>" MUST NOT appear.
-- Inside the tags, the content MUST be valid JSON.
+<TRADE_DONE>
 """
 
 TRADE_AGENT_PROMPT_TEMPLATE = r"""
@@ -374,8 +314,6 @@ def get_trade_agent_prompt(memory_enabled: bool = False, tool_routing_enabled: b
     """
     Get trading agent prompt with dynamic memory/protocol sections.
     """
-    decision_protocol = (getattr(AgentConfig, "TRADE_DECISION_PROTOCOL", "tool") or "tool").strip().lower()
-    termination_token = "<TRADE_DONE>" if decision_protocol == "tool" else "<FINAL_JSON>"
     include_simulation_notice = bool(getattr(AgentConfig, "AGENT_INCLUDE_SIMULATION_NOTICE", False))
     enable_tool_routing = (
         bool(getattr(AgentConfig, "AGENT_ENABLE_TOOL_ROUTING", True))
@@ -408,11 +346,7 @@ def get_trade_agent_prompt(memory_enabled: bool = False, tool_routing_enabled: b
         ).strip(),
         memory_system_block=(MEMORY_SYSTEM_BLOCK if memory_enabled else "").strip(),
         memory_checklist_block=(MEMORY_CHECKLIST_BLOCK if memory_enabled else "").strip(),
-        runtime_protocol_block=(
-            RUNTIME_PROTOCOL_TOOL_BLOCK if decision_protocol == "tool" else RUNTIME_PROTOCOL_FINAL_JSON_BLOCK
-        ).format(termination_token=termination_token).strip(),
-        final_output_block=(
-            FINAL_OUTPUT_TOOL_BLOCK if decision_protocol == "tool" else FINAL_OUTPUT_FINAL_JSON_BLOCK
-        ).format(termination_token=termination_token).strip(),
+        runtime_protocol_block=RUNTIME_PROTOCOL_TOOL_BLOCK.strip(),
+        final_output_block=FINAL_OUTPUT_TOOL_BLOCK.strip(),
     ).strip()
 
