@@ -91,9 +91,9 @@ async def get_specific_account_overview(account_id: int, db: Session = Depends(g
         if not account:
             raise HTTPException(status_code=404, detail="Account not found")
         
-        # Calculate positions value for this specific account
-        from services.asset_calculator import calc_positions_value
-        positions_value = float(calc_positions_value(db, account.id) or 0.0)
+        # Calculate positions equity (NOT notional exposure)
+        from services.asset_calculator import calc_positions_market_value
+        positions_value = float(calc_positions_market_value(db, account.id) or 0.0)
         
         # Count positions and pending orders for this account
         positions_count = db.query(Position).filter(
@@ -213,9 +213,9 @@ async def get_account_overview(db: Session = Depends(get_db)):
         if not account:
             raise HTTPException(status_code=404, detail="No active account found")
         
-        # Calculate positions value
-        from services.asset_calculator import calc_positions_value
-        positions_value = float(calc_positions_value(db, account.id) or 0.0)
+        # Calculate positions equity (NOT notional exposure)
+        from services.asset_calculator import calc_positions_market_value
+        positions_value = float(calc_positions_market_value(db, account.id) or 0.0)
         
         # Count positions and pending orders
         positions_count = db.query(Position).filter(
