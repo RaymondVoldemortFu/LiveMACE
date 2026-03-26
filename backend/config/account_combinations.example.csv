@@ -1,3 +1,6 @@
 account_type,agent_type,memory_enabled,tool_routing_enabled,enable_rule_aware,is_active
 AI,react,false,true,false,true
 AI,react,false,false,true,true
+AI,react,true,false,false,true
+AI,react,false,false,false,true
+AI,advanced_multi_agent,false,false,false,true

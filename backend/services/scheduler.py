@@ -603,8 +603,8 @@ def reset_auto_trading_job():
     import threading
     import os
 
-    # Define interval (default 15 minutes, configurable via env)
-    AI_TRADE_INTERVAL_SECONDS = int(os.getenv("AI_TRADE_INTERVAL_SECONDS", "900"))
+    # Define interval (default 4 hours, configurable via env)
+    AI_TRADE_INTERVAL_SECONDS = int(os.getenv("AI_TRADE_INTERVAL_SECONDS", "14400"))
 
     def _setup_job_async():
         try:

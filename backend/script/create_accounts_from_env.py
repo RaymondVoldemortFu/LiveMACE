@@ -37,7 +37,7 @@ MODEL_LIST = [
     # google
     "gemini-3-pro-preview",
     # xai
-    # "grok-420-agents-all", # TODO: waiting for api provider to fix bug in their service
+    "grok-420-agents-all",
     # qwen
     "qwen3-max",
 ]
