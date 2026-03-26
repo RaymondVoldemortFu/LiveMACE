@@ -37,7 +37,9 @@ MODEL_LIST = [
     # google
     "gemini-3-pro-preview",
     # xai
-    "grok-420-thinking-all",    # gork agent model doesn't support tool calling, switch to thinking
+    # "grok-420-thinking-all",    # gork agent model doesn't support tool calling, switch to thinking
+    # grok tool calling doesn't work, suspect that the api provider have issue with it
+    # temporarily disable grok-420-thinking-all
     # qwen
     "qwen3-max",
 ]
