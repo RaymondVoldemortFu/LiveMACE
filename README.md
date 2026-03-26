@@ -66,19 +66,13 @@ cp backend/.env.example backend/.env
 # BASE_URL=https://your-endpoint/v1
 ```
 
-2) Prepare sqlite file on host (for persistence):
-
-```bash
-touch backend/data.db
-```
-
-3) Build and start service:
+2) Build and start service:
 
 ```bash
 docker compose up -d --build
 ```
 
-4) View logs / stop:
+3) View logs / stop:
 
 ```bash
 docker compose logs -f app
@@ -92,14 +86,15 @@ Linux one-click deploy script:
 ```
 
 Notes:
-- `docker-compose.yml` mounts `./backend/data.db` to `/app/data.db`, matching `DATABASE_URL=sqlite:///./data.db`.
+- `docker-compose.yml` starts a MySQL service by default and injects `DATABASE_URL` into app container.
+- `backend/.env.example` includes DB pool parameters for 25+ concurrent agents.
 - The compose file also mounts `/var/run/docker.sock` so backend sandbox container features can work.
 
 ### Batch Account Initialization
 From `backend/`:
 
 ```bash
-uv run python script/create_accounts_from_env.py
+uv run python script/create_accounts_from_env.py --mode all-combinations
 ```
 
 Note:

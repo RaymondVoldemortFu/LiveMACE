@@ -261,9 +261,10 @@ class AgentTrace(Base):
     account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False)
     step_number = Column(Integer, nullable=False)
     role = Column(String(20), nullable=False)  # user, assistant, tool, system
-    content = Column(String(50000), nullable=True)  # Large text content
-    tool_calls = Column(String(50000), nullable=True)  # JSON string
-    tool_output = Column(String(50000), nullable=True)  # JSON string
+    # Use TEXT for MySQL compatibility (VARCHAR(50000) exceeds row limits under utf8mb4).
+    content = Column(Text, nullable=True)
+    tool_calls = Column(Text, nullable=True)
+    tool_output = Column(Text, nullable=True)
     created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
 
     account = relationship("Account")

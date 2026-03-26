@@ -36,11 +36,11 @@ def register_default_tools(registry, db: Session, account_id: int, trace_id: str
                 "type": "object",
                 "properties": {
                     "symbol": {"type": "string"},
-                    "market": {"type": "string", "description": "Market type: CRYPTO or US", "default": "CRYPTO"}
+                    "market": {"type": "string", "description": "Market type: CRYPTO or US"}
                 },
-                "required": ["symbol"]
+                "required": ["symbol", "market"]
             },
-            func=lambda symbol, market="CRYPTO": {
+            func=lambda symbol, market: {
                 "symbol": symbol,
                 "market": market,
                 "price": float(get_last_price(symbol, market)),
@@ -66,8 +66,7 @@ def register_default_tools(registry, db: Session, account_id: int, trace_id: str
                     },
                     "market": {
                         "type": "string",
-                        "description": "Market identifier: CRYPTO or US",
-                        "default": "CRYPTO"
+                        "description": "Market identifier: CRYPTO or US"
                     },
                     "interval": {
                         "type": "string",
@@ -83,9 +82,9 @@ def register_default_tools(registry, db: Session, account_id: int, trace_id: str
                         "description": "End time (ISO 8601), optional"
                     }
                 },
-                "required": ["symbol", "interval", "start_time"]
+                "required": ["symbol", "market", "interval", "start_time"]
             },
-            func=lambda symbol, interval, start_time, end_time=None, market="CRYPTO": _get_kline_and_save(
+            func=lambda symbol, market, interval, start_time, end_time=None: _get_kline_and_save(
                 container_service, account_id, symbol, interval, start_time, end_time, market
             ),
             metadata={"tier": "required"}

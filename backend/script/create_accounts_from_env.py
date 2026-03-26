@@ -25,7 +25,7 @@ import csv
 import os
 from decimal import Decimal
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Sequence, Type
 
 import dotenv
 
@@ -94,11 +94,31 @@ def ensure_user(db, username: str, UserModel):
     return user
 
 
-def cleanup_default_gpt_account(db, AccountModel, user_id: int, account_name: str = DEFAULT_PLACEHOLDER_ACCOUNT_NAME) -> Tuple[int, str]:
+def cleanup_default_gpt_account(
+    db,
+    AccountModel,
+    user_id: int,
+    account_name: str = DEFAULT_PLACEHOLDER_ACCOUNT_NAME,
+    dependent_models: Sequence[Type] | None = None,
+) -> Tuple[int, str]:
     """
     Remove default placeholder GPT account if exists for target user.
     Returns (deleted_count, message).
     """
+    target_account_ids = [
+        row[0]
+        for row in db.query(AccountModel.id)
+        .filter(AccountModel.user_id == user_id, AccountModel.name == account_name)
+        .all()
+    ]
+    if not target_account_ids:
+        return 0, f"No default placeholder account named '{account_name}' found"
+
+    for model in dependent_models or []:
+        if not hasattr(model, "account_id"):
+            continue
+        db.query(model).filter(model.account_id.in_(target_account_ids)).delete(synchronize_session=False)
+
     deleted_count = (
         db.query(AccountModel)
         .filter(AccountModel.user_id == user_id, AccountModel.name == account_name)
@@ -106,7 +126,7 @@ def cleanup_default_gpt_account(db, AccountModel, user_id: int, account_name: st
     )
     if deleted_count > 0:
         return deleted_count, f"Removed default placeholder account '{account_name}'"
-    return 0, f"No default placeholder account named '{account_name}' found"
+    return 0, f"Default placeholder account '{account_name}' was not removed"
 
 
 def _normalize_bool_text(value: str) -> str:
@@ -270,11 +290,24 @@ def main() -> int:
     backend_dir = Path(__file__).resolve().parent.parent
     os.chdir(backend_dir)
 
-    from database.connection import SessionLocal, engine, Base
-    from database.models import Account, User
-
     # Load .env from current/parent dirs but do not override process env.
     dotenv.load_dotenv(dotenv.find_dotenv(usecwd=True), override=False)
+    # Import DB modules only after .env is loaded so DATABASE_URL takes effect.
+    from database.connection import SessionLocal, engine, Base
+    from database.models import (
+        Account,
+        User,
+        Position,
+        Order,
+        Trade,
+        AIDecisionLog,
+        AgentTrace,
+        AgentPeriodCheckpoint,
+        AgentMemory,
+        AccountSnapshot,
+        RuleEvaluationResult,
+    )
+
     api_key = (os.getenv("API_KEY") or "").strip()
     base_url = (os.getenv("BASE_URL") or "").strip()
 
@@ -296,7 +329,22 @@ def main() -> int:
     db = SessionLocal()
     try:
         user = ensure_user(db, args.user, User)
-        deleted_count, cleanup_message = cleanup_default_gpt_account(db, Account, user.id)
+        deleted_count, cleanup_message = cleanup_default_gpt_account(
+            db,
+            Account,
+            user.id,
+            dependent_models=[
+                Trade,
+                Order,
+                Position,
+                AIDecisionLog,
+                AgentTrace,
+                AgentPeriodCheckpoint,
+                AgentMemory,
+                AccountSnapshot,
+                RuleEvaluationResult,
+            ],
+        )
         if deleted_count > 0:
             db.commit()
             print(f"[CLEANUP] {cleanup_message}")

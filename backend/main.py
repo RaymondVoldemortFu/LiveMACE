@@ -44,23 +44,24 @@ def on_startup():
 
     # Lightweight schema migration for SQLite: add new columns if missing.
     # create_all() does not ALTER existing tables.
-    with engine.begin() as conn:
-        cols = [row[1] for row in conn.execute(text("PRAGMA table_info(agent_period_checkpoints)"))]
-        if "volatility" not in cols:
-            conn.execute(
-                text(
-                    "ALTER TABLE agent_period_checkpoints "
-                    "ADD COLUMN volatility FLOAT DEFAULT 0.0 NOT NULL"
+    if engine.dialect.name == "sqlite":
+        with engine.begin() as conn:
+            cols = [row[1] for row in conn.execute(text("PRAGMA table_info(agent_period_checkpoints)"))]
+            if "volatility" not in cols:
+                conn.execute(
+                    text(
+                        "ALTER TABLE agent_period_checkpoints "
+                        "ADD COLUMN volatility FLOAT DEFAULT 0.0 NOT NULL"
+                    )
                 )
-            )
-        account_cols = [row[1] for row in conn.execute(text("PRAGMA table_info(accounts)"))]
-        if "tool_routing_enabled" not in account_cols:
-            conn.execute(
-                text(
-                    "ALTER TABLE accounts "
-                    "ADD COLUMN tool_routing_enabled VARCHAR(10) DEFAULT 'true' NOT NULL"
+            account_cols = [row[1] for row in conn.execute(text("PRAGMA table_info(accounts)"))]
+            if "tool_routing_enabled" not in account_cols:
+                conn.execute(
+                    text(
+                        "ALTER TABLE accounts "
+                        "ADD COLUMN tool_routing_enabled VARCHAR(10) DEFAULT 'true' NOT NULL"
+                    )
                 )
-            )
     # Seed trading configs if empty
     db: Session = SessionLocal()
     try:

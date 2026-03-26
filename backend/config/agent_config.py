@@ -42,7 +42,7 @@ class AgentConfig:
     DOCKERFILE_PATH = os.path.join(os.path.dirname(__file__), "../services/agent/docker")
 
     # Agent execution concurrency
-    AGENT_MAX_CONCURRENCY = 99
+    AGENT_MAX_CONCURRENCY = max(1, int(os.getenv("AGENT_MAX_CONCURRENCY", "25")))
 
     # US stock data source behavior (Alpaca)
     # True: force feed=IEX

@@ -5,6 +5,7 @@ import logging
 import random
 import json
 import time
+import os
 from decimal import Decimal
 from typing import Dict, Optional, List, Any
 
@@ -653,8 +654,14 @@ def call_agent_for_decision(
         # Rule-aware agents also skip public-apis to avoid tool namespace pollution and provider limits.
         if tool_routing_enabled and not is_rule_aware:
             try:
-                registered_count = register_public_api_tools(registry)
-                logger.info(f"Registered {registered_count} public-apis tools")
+                public_api_tool_limit = max(0, int(os.getenv("PUBLIC_API_TOOL_LIMIT", "80")))
+                public_api_limit = public_api_tool_limit or None
+                registered_count = register_public_api_tools(registry, limit=public_api_limit)
+                logger.info(
+                    "Registered %s public-apis tools (limit=%s)",
+                    registered_count,
+                    public_api_limit if public_api_limit is not None else "unlimited",
+                )
             except Exception as e:
                 logger.warning(f"Failed to register public-apis tools: {e}")
         else:

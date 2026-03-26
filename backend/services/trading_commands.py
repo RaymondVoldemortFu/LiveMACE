@@ -47,10 +47,22 @@ AGENT_DECISION_TYPES = {"react", "multi_agent", "advanced_multi_agent", "rule_aw
 
 def _infer_market(symbol: str, decision_market: Optional[str]) -> str:
     if decision_market:
-        return decision_market.upper()
-    if symbol.upper() in US_TRADING_SYMBOLS:
+        return str(decision_market).strip().upper()
+    symbol_norm = str(symbol or "").strip().upper()
+    if symbol_norm in US_TRADING_SYMBOLS:
         return "US"
     return "CRYPTO"
+
+
+def _validate_decision_symbol_market(symbol: str, market: str) -> None:
+    symbol_norm = str(symbol or "").strip().upper()
+    market_norm = str(market or "").strip().upper()
+    if market_norm == "US" and symbol_norm not in US_TRADING_SYMBOLS:
+        raise ValueError(f"Invalid decision params: symbol '{symbol_norm}' is not a supported US stock")
+    if market_norm == "CRYPTO" and symbol_norm in US_TRADING_SYMBOLS:
+        raise ValueError(
+            f"Invalid decision params: symbol '{symbol_norm}' is US stock but decision market is CRYPTO"
+        )
 
 
 def _log_trade_execution(operation: str, symbol: str, target_portion: float, price: float, leverage: int, executed: bool, reason: str = ""):
@@ -240,6 +252,14 @@ def _process_account_decision_payload(db: Session, payload: Dict, prices: Dict[s
         if operation not in ["open", "close", "hold"]:
             logger.warning(f"Invalid operation '{operation}' from AI for {account.name}, skipping")
             _log_trade_execution(operation, symbol, target_portion, price, leverage, False, f"Invalid operation: {operation}")
+            save_ai_decision(db, account.id, decision, portfolio, executed=False)
+            return
+
+        try:
+            _validate_decision_symbol_market(symbol, market)
+        except Exception as market_err:
+            logger.warning(f"Invalid symbol/market decision for {account.name}: {market_err}")
+            _log_trade_execution(operation, symbol, target_portion, price, leverage, False, str(market_err))
             save_ai_decision(db, account.id, decision, portfolio, executed=False)
             return
 
