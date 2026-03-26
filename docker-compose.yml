@@ -3,7 +3,6 @@ services:
     image: mysql:8.4
     container_name: usmover-mysql
     restart: unless-stopped
-    command: --default-authentication-plugin=mysql_native_password
     environment:
       MYSQL_DATABASE: ${MYSQL_DATABASE:-alpha_arena}
       MYSQL_USER: ${MYSQL_USER:-alpha}
