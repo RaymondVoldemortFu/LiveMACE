@@ -18,9 +18,11 @@ services:
       timeout: 5s
       retries: 10
 
-  app:
-    build: .
-    container_name: usmover
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: open-alpha-backend
     restart: unless-stopped
     env_file:
       - ./backend/.env
@@ -34,11 +36,21 @@ services:
       mysql:
         condition: service_healthy
     ports:
-      - "80:5611"
       - "5611:5611"
     volumes:
       # Required by backend/services/container_service.py to manage sandbox containers
       - /var/run/docker.sock:/var/run/docker.sock
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: open-alpha-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "80:80"
 
 volumes:
   mysql-data:

@@ -66,7 +66,7 @@ cp backend/.env.example backend/.env
 # BASE_URL=https://your-endpoint/v1
 ```
 
-2) Build and start service:
+2) Build and start services:
 
 ```bash
 docker compose up -d --build
@@ -75,7 +75,7 @@ docker compose up -d --build
 3) View logs / stop:
 
 ```bash
-docker compose logs -f app
+docker compose logs -f frontend backend
 docker compose down
 ```
 
@@ -86,9 +86,11 @@ Linux one-click deploy script:
 ```
 
 Notes:
-- `docker-compose.yml` starts a MySQL service by default and injects `DATABASE_URL` into app container.
+- `docker-compose.yml` starts three services: `frontend` (Nginx), `backend` (FastAPI), and `mysql`.
+- Frontend and backend are deployed in separate containers; frontend proxies `/api` and `/ws` to backend internally.
+- `DATABASE_URL` is injected into backend container.
 - `backend/.env.example` includes DB pool parameters for 25+ concurrent agents.
-- The compose file also mounts `/var/run/docker.sock` so backend sandbox container features can work.
+- The compose file mounts `/var/run/docker.sock` to backend so sandbox container features can work.
 
 ### Batch Account Initialization
 From `backend/`:
