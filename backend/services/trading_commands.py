@@ -42,7 +42,7 @@ _buy_hold_baseline = BuyHoldBaseline()
 _grid_baseline = GridBaseline()
 
 US_TRADING_SYMBOLS = list(US_TRADING_SYMBOLS)
-AGENT_DECISION_TYPES = {"react", "multi_agent", "advanced_multi_agent"}
+AGENT_DECISION_TYPES = {"react", "multi_agent", "advanced_multi_agent", "rule_aware"}
 
 
 def _infer_market(symbol: str, decision_market: Optional[str]) -> str:

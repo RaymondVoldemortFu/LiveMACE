@@ -9,6 +9,7 @@ import logging
 
 from database.connection import SessionLocal
 from database.models import Account
+from config.api_feature_config import ApiFeatureConfig
 from repositories.account_repo import (
     create_account, get_account, get_accounts_by_user,
     update_account, update_account_cash, deactivate_account,
@@ -79,6 +80,12 @@ async def create_trading_account(
 ):
     """Create a new trading account"""
     try:
+        if not ApiFeatureConfig.ENABLE_ACCOUNT_CREATION_API:
+            raise HTTPException(
+                status_code=403,
+                detail="Account creation API is disabled by deployment configuration",
+            )
+
         user_id = await get_current_user_id(session_token, db)
         
         # Check if account name exists for this user
@@ -166,6 +173,12 @@ async def update_trading_account(
 ):
     """Update trading account"""
     try:
+        if not ApiFeatureConfig.ENABLE_ACCOUNT_UPDATE_API:
+            raise HTTPException(
+                status_code=403,
+                detail="Account update API is disabled by deployment configuration",
+            )
+
         user_id = await get_current_user_id(session_token, db)
         account = get_account(db, account_id)
         

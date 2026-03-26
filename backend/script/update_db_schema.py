@@ -1,8 +1,8 @@
 import sys
 import os
 
-# Add current directory to path so imports work
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+# Add backend directory to path so imports work.
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from database.connection import engine, Base
 from database.models import (

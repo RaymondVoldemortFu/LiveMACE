@@ -5,19 +5,19 @@ Batch update accounts.api_key / accounts.base_url in SQLite DB.
 Usage examples:
 
 1) Update ALL accounts to same credentials:
-   python update_account_credentials.py --all --api-key "sk-xxx" --base-url "https://api.openai.com/v1"
+   python script/update_account_credentials.py --all --api-key "sk-xxx" --base-url "https://api.openai.com/v1"
 
 2) Update selected accounts by id:
-   python update_account_credentials.py --ids 1,2,3 --api-key "sk-xxx"
+   python script/update_account_credentials.py --ids 1,2,3 --api-key "sk-xxx"
 
 3) Update selected accounts by name:
-   python update_account_credentials.py --names GPT,Qwen --base-url "https://example.com/v1"
+   python script/update_account_credentials.py --names GPT,Qwen --base-url "https://example.com/v1"
 
 4) Dry-run (preview only):
-   python update_account_credentials.py --all --api-key "sk-xxx" --dry-run
+   python script/update_account_credentials.py --all --api-key "sk-xxx" --dry-run
 
 5) Mapping mode (different values per account):
-   python update_account_credentials.py --mapping-json mappings.json
+   python script/update_account_credentials.py --mapping-json mappings.json
 
    mappings.json example:
    [

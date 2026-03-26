@@ -25,6 +25,7 @@ from database.models import Account, Position, Trade
 from services.time_source import now_utc
 from services.agent.llm_client import LLMClient
 from config.agent_config import AgentConfig
+from config.api_feature_config import ApiFeatureConfig
 from services.agent.prompts.system_prompts import get_trade_agent_prompt
 from services.agent.prompts.multi_agent_prompts import MANAGER_PROMPT as MULTI_AGENT_MANAGER_PROMPT
 from services.agent.prompts.advanced_multi_agent_prompts import Advanced_MANAGER_PROMPT
@@ -257,6 +258,12 @@ async def get_account_overview(db: Session = Depends(get_db)):
 async def create_new_account(payload: dict, db: Session = Depends(get_db)):
     """Create a new account for the default user (for paper trading demo)"""
     try:
+        if not ApiFeatureConfig.ENABLE_ACCOUNT_CREATION_API:
+            raise HTTPException(
+                status_code=403,
+                detail="Account creation API is disabled by deployment configuration",
+            )
+
         from database.models import User
         
         # Log incoming payload for debugging
@@ -343,6 +350,12 @@ async def create_new_account(payload: dict, db: Session = Depends(get_db)):
 async def update_account_settings(account_id: int, payload: dict, db: Session = Depends(get_db)):
     """Update account settings (for paper trading demo)"""
     try:
+        if not ApiFeatureConfig.ENABLE_ACCOUNT_UPDATE_API:
+            raise HTTPException(
+                status_code=403,
+                detail="Account update API is disabled by deployment configuration",
+            )
+
         logger.info(f"Updating account {account_id} with payload: {payload}")
         
         account = db.query(Account).filter(

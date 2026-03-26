@@ -673,7 +673,8 @@
         "properties": {
           "datasets": {
             "type": "array",
-            "description": "Inferred from API implementation."
+            "description": "Inferred from API implementation.",
+            "items": {}
           },
           "format": {
             "default": "png",
@@ -685,11 +686,13 @@
           },
           "labels": {
             "type": "array",
-            "description": "Inferred from API implementation."
+            "description": "Inferred from API implementation.",
+            "items": {}
           },
           "options": {
             "type": "object",
-            "description": "Inferred from API implementation."
+            "description": "Inferred from API implementation.",
+            "additionalProperties": true
           },
           "title": {
             "type": "boolean",
@@ -1560,7 +1563,8 @@
               "array",
               "string"
             ],
-            "description": "Inferred from API implementation."
+            "description": "Inferred from API implementation.",
+            "items": {}
           }
         },
         "required": [
@@ -2676,7 +2680,8 @@
           },
           "items": {
             "type": "array",
-            "description": "Inferred from API implementation."
+            "description": "Inferred from API implementation.",
+            "items": {}
           },
           "notes": {
             "default": 0,
@@ -2814,7 +2819,8 @@
               "array",
               "string"
             ],
-            "description": "Inferred from API implementation."
+            "description": "Inferred from API implementation.",
+            "items": {}
           },
           "delimiter": {
             "default": ",",
@@ -3181,7 +3187,8 @@
               "array",
               "string"
             ],
-            "description": "Inferred from API implementation."
+            "description": "Inferred from API implementation.",
+            "items": {}
           }
         },
         "required": [
@@ -3326,11 +3333,13 @@
           },
           "headers": {
             "type": "array",
-            "description": "Inferred from API implementation."
+            "description": "Inferred from API implementation.",
+            "items": {}
           },
           "rows": {
             "type": "array",
-            "description": "Inferred from API implementation."
+            "description": "Inferred from API implementation.",
+            "items": {}
           }
         },
         "required": [
@@ -4392,21 +4401,24 @@
               "object",
               "string"
             ],
-            "description": "Aliases: params, query."
+            "description": "Aliases: params, query.",
+            "additionalProperties": true
           },
           "params": {
             "type": [
               "object",
               "string"
             ],
-            "description": "Aliases: object, query."
+            "description": "Aliases: object, query.",
+            "additionalProperties": true
           },
           "query": {
             "type": [
               "object",
               "string"
             ],
-            "description": "Aliases: object, params."
+            "description": "Aliases: object, params.",
+            "additionalProperties": true
           },
           "query_string": {
             "type": "string",
@@ -6825,11 +6837,13 @@
           },
           "utm": {
             "type": "object",
-            "description": "Aliases: utm_params."
+            "description": "Aliases: utm_params.",
+            "additionalProperties": true
           },
           "utm_params": {
             "type": "object",
-            "description": "Aliases: utm."
+            "description": "Aliases: utm.",
+            "additionalProperties": true
           }
         },
         "required": [
