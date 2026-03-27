@@ -6,7 +6,7 @@ import sys
 import os
 from typing import Dict, Any, List, Tuple, Optional
 from decimal import Decimal
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from .rule_engine import RuleEngine, Rule, RuleLevel
 
@@ -29,12 +29,12 @@ Trade = None
 try:
     # First try relative import (when running from backend/)
     from database.connection import get_db
-    from database.models import AssetMetadata, Position, AIDecisionLog, Order, Trade
+    from database.models import AssetMetadata, Position, AIDecisionLog, Order, Trade, Account, AccountSnapshot
 except ImportError:
     try:
         # Fallback for absolute import (when running from project root)
         from backend.database.connection import get_db
-        from backend.database.models import AssetMetadata, Position, AIDecisionLog, Order, Trade
+        from backend.database.models import AssetMetadata, Position, AIDecisionLog, Order, Trade, Account, AccountSnapshot
     except ImportError:
         # If both fail, log warning
         pass
@@ -196,62 +196,134 @@ class RuleValidator:
         params = rule.parameters
         
         # R0-01: Maximum Leverage Limit
+        # Checks both (a) the individual order's leverage and (b) the resulting
+        # portfolio-level leverage = total_notional / total_equity.
         if rule_id == "R0-01":
             max_leverage = params.get("max_leverage", 5)
+
+            # (a) Per-order leverage check
             decision_leverage = decision.get("leverage", 1)
             if decision_leverage > max_leverage:
                 return RuleViolation(
                     rule, severity,
-                    f"Leverage {decision_leverage}x exceeds maximum {max_leverage}x",
+                    f"Order leverage {decision_leverage}x exceeds maximum {max_leverage}x",
                     actual_value=decision_leverage,
                     expected_value=f"<= {max_leverage}"
                 )
+
+            # (b) Portfolio-level leverage check: total_notional / total_equity
+            account_id = portfolio.get("account_id")
+            if account_id and get_db and Position:
+                db = next(get_db())
+                try:
+                    positions = db.query(Position).filter(
+                        Position.account_id == account_id,
+                        Position.quantity > 0
+                    ).all()
+                    total_notional = 0.0
+                    for pos in positions:
+                        price = prices.get(pos.symbol, float(pos.avg_cost))
+                        lev = float(pos.leverage) if pos.leverage and pos.leverage > 0 else 1.0
+                        total_notional += abs(float(pos.quantity)) * price * lev
+                    total_equity = portfolio.get("total_assets") or portfolio.get("total_equity", 0)
+                    if total_equity > 0 and total_notional > 0:
+                        portfolio_leverage = total_notional / total_equity
+                        if portfolio_leverage > max_leverage:
+                            return RuleViolation(
+                                rule, severity,
+                                f"Portfolio leverage {portfolio_leverage:.2f}x exceeds maximum {max_leverage}x "
+                                f"(total_notional=${total_notional:,.0f}, equity=${total_equity:,.0f})",
+                                actual_value=round(portfolio_leverage, 2),
+                                expected_value=f"<= {max_leverage}"
+                            )
+                except Exception as e:
+                    logger.warning(f"R0-01: Could not compute portfolio leverage: {e}")
+                finally:
+                    db.close()
         
         # R0-02: Maintenance Margin
+        # margin_level = total_equity / margin_used
+        # Triggered when accumulated losses shrink equity close to the locked margin.
         elif rule_id == "R0-02":
             min_margin_level = params.get("min_margin_level", 0.10)
-            # Calculate projected margin level after this decision
-            # (This is a simplified check - real implementation would need full calculation)
-            cash = portfolio.get("cash", 0)
-            total_assets = portfolio.get("total_assets", cash)
-            if total_assets > 0:
-                margin_level = cash / total_assets
-                if margin_level < min_margin_level:
-                    return RuleViolation(
-                        rule, severity,
-                        f"Margin level {margin_level:.2%} below minimum {min_margin_level:.2%}",
-                        actual_value=margin_level,
-                        expected_value=f">= {min_margin_level}"
-                    )
+            account_id = portfolio.get("account_id")
+            if account_id and get_db and Account:
+                db = next(get_db())
+                try:
+                    account = db.query(Account).filter(Account.id == account_id).first()
+                    if account:
+                        margin_used = float(account.margin_used or 0)
+                        if margin_used > 0:
+                            total_equity = portfolio.get("total_assets") or portfolio.get("total_equity", 0)
+                            margin_level = total_equity / margin_used
+                            if margin_level < min_margin_level:
+                                return RuleViolation(
+                                    rule, severity,
+                                    f"Margin level {margin_level:.2%} below minimum {min_margin_level:.2%} "
+                                    f"(equity=${total_equity:,.0f}, margin_used=${margin_used:,.0f})",
+                                    actual_value=round(margin_level, 4),
+                                    expected_value=f">= {min_margin_level}"
+                                )
+                except Exception as e:
+                    logger.warning(f"R0-02: Could not query account margin data: {e}")
+                finally:
+                    db.close()
         
         # R0-03: Intraday Maximum Drawdown
+        # Uses the most recent AccountSnapshot from before today UTC as the baseline.
         elif rule_id == "R0-03":
             max_drawdown_pct = params.get("max_drawdown_pct", 0.05)
-            # Check if portfolio has previous day close equity for comparison
-            prev_day_close_equity = portfolio.get("prev_day_close_equity")
-            current_equity = portfolio.get("total_equity") or portfolio.get("total_assets", 0)
-            
-            if prev_day_close_equity and prev_day_close_equity > 0:
-                drawdown = (prev_day_close_equity - current_equity) / prev_day_close_equity
-                if drawdown > max_drawdown_pct:
-                    return RuleViolation(
-                        rule, severity,
-                        f"Intraday drawdown {drawdown:.2%} exceeds maximum {max_drawdown_pct:.2%}",
-                        actual_value=drawdown,
-                        expected_value=f"<= {max_drawdown_pct}"
-                    )
+            account_id = portfolio.get("account_id")
+            if account_id and get_db and AccountSnapshot:
+                db = next(get_db())
+                try:
+                    today_start = datetime.now(timezone.utc).replace(tzinfo=None, hour=0, minute=0, second=0, microsecond=0)
+                    prev_snapshot = db.query(AccountSnapshot).filter(
+                        AccountSnapshot.account_id == account_id,
+                        AccountSnapshot.ts < today_start
+                    ).order_by(AccountSnapshot.ts.desc()).first()
+
+                    if prev_snapshot:
+                        prev_day_close_equity = float(prev_snapshot.total_equity)
+                        current_equity = portfolio.get("total_assets") or portfolio.get("total_equity", 0)
+                        if prev_day_close_equity > 0 and current_equity > 0:
+                            drawdown = (prev_day_close_equity - current_equity) / prev_day_close_equity
+                            if drawdown > max_drawdown_pct:
+                                return RuleViolation(
+                                    rule, severity,
+                                    f"Intraday drawdown {drawdown:.2%} exceeds maximum {max_drawdown_pct:.2%} "
+                                    f"(prev_close=${prev_day_close_equity:,.0f}, current=${current_equity:,.0f})",
+                                    actual_value=round(drawdown, 4),
+                                    expected_value=f"<= {max_drawdown_pct}"
+                                )
+                except Exception as e:
+                    logger.warning(f"R0-03: Could not query account snapshots: {e}")
+                finally:
+                    db.close()
         
         # R0-04: Maximum Single Order Notional Value
         elif rule_id == "R0-04":
             max_order_pct = params.get("max_order_pct", 0.20)
-            symbol = decision.get("symbol")
-            target_portion = decision.get("target_portion_of_balance", 0)
-            
-            if target_portion > max_order_pct:
+            operation = decision.get("operation", "").lower()
+            size_mode = decision.get("size_mode", "portion")
+            total_equity = portfolio.get("total_assets") or portfolio.get("total_equity", 0)
+
+            if operation == "all_in":
+                # all_in deploys all available cash
+                cash = portfolio.get("cash", 0)
+                effective_portion = cash / total_equity if total_equity > 0 else 1.0
+            elif size_mode == "usd":
+                # USD-sized order: convert to portfolio fraction
+                usd_amount = decision.get("usd_amount", 0)
+                effective_portion = usd_amount / total_equity if total_equity > 0 else 0
+            else:
+                effective_portion = decision.get("target_portion_of_balance", 0)
+
+            if effective_portion > max_order_pct:
                 return RuleViolation(
                     rule, severity,
-                    f"Order size {target_portion:.2%} exceeds maximum {max_order_pct:.2%} of portfolio",
-                    actual_value=target_portion,
+                    f"Order size {effective_portion:.2%} exceeds maximum {max_order_pct:.2%} of portfolio",
+                    actual_value=round(effective_portion, 4),
                     expected_value=f"<= {max_order_pct}"
                 )
         
@@ -318,15 +390,56 @@ class RuleValidator:
                 db.close()
         
         # R1-02: Single Asset Concentration Limit (formerly R1-03)
+        # Checks combined exposure = (existing position value + new order value) / total_equity.
         elif rule_id == "R1-02":
             max_single_asset_pct = params.get("max_single_asset_pct", 0.15)
+            operation = decision.get("operation", "").lower()
+            symbol = decision.get("symbol")
             target_portion = decision.get("target_portion_of_balance", 0)
-            
-            if target_portion > max_single_asset_pct:
+            account_id = portfolio.get("account_id")
+            total_equity = portfolio.get("total_assets") or portfolio.get("total_equity", 0)
+
+            # Only concentration risk for open orders; closing reduces exposure
+            if operation == "open" and symbol and account_id and get_db and Position and total_equity > 0:
+                db = next(get_db())
+                try:
+                    existing = db.query(Position).filter(
+                        Position.account_id == account_id,
+                        Position.symbol == symbol,
+                        Position.quantity > 0
+                    ).first()
+                    existing_exposure = 0.0
+                    if existing:
+                        price = prices.get(symbol, float(existing.avg_cost))
+                        existing_exposure = abs(float(existing.quantity)) * price
+                    new_order_value = total_equity * target_portion
+                    combined_pct = (existing_exposure + new_order_value) / total_equity
+                    if combined_pct > max_single_asset_pct:
+                        return RuleViolation(
+                            rule, severity,
+                            f"Combined {symbol} exposure {combined_pct:.2%} exceeds limit {max_single_asset_pct:.2%} "
+                            f"(existing=${existing_exposure:,.0f} + new=${new_order_value:,.0f})",
+                            actual_value=round(combined_pct, 4),
+                            expected_value=f"<= {max_single_asset_pct}"
+                        )
+                except Exception as e:
+                    logger.warning(f"R1-02: Could not query existing positions: {e}")
+                    # Fallback to simple per-order check
+                    if target_portion > max_single_asset_pct:
+                        return RuleViolation(
+                            rule, severity,
+                            f"Single asset order {target_portion:.2%} exceeds limit {max_single_asset_pct:.2%}",
+                            actual_value=round(target_portion, 4),
+                            expected_value=f"<= {max_single_asset_pct}"
+                        )
+                finally:
+                    db.close()
+            elif operation not in ["open"] and target_portion > max_single_asset_pct:
+                # Fallback for non-open operations or missing DB
                 return RuleViolation(
                     rule, severity,
-                    f"Single asset exposure {target_portion:.2%} exceeds limit {max_single_asset_pct:.2%}",
-                    actual_value=target_portion,
+                    f"Single asset order {target_portion:.2%} exceeds limit {max_single_asset_pct:.2%}",
+                    actual_value=round(target_portion, 4),
                     expected_value=f"<= {max_single_asset_pct}"
                 )
         
