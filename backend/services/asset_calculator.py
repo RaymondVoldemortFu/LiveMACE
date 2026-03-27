@@ -12,8 +12,12 @@ def calc_positions_market_value(db: Session, account_id: int) -> float:
     but rather the entry margin plus unrealized profit/loss.
     
     Equity = Entry Margin + Unrealized P&L
-           = (entry_notional / leverage) + (quantity * (current_price - avg_cost))
-           = (avg_cost * quantity / leverage) + pnl
+                     = (entry_notional / leverage) + side_aware_unrealized_pnl
+                     = (avg_cost * quantity / leverage) + pnl
+
+        where:
+            - LONG pnl  = quantity * (current_price - avg_cost)
+            - SHORT pnl = quantity * (avg_cost - current_price)
 
     NOTE:
     Do NOT use current market value / leverage as margin here. Doing so adds an
