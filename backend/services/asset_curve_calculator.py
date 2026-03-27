@@ -386,22 +386,21 @@ def _create_account_timeline(
                             quantity_dec = Decimal(str(pos.quantity))
                             avg_cost_dec = Decimal(str(pos.avg_cost))
                             leverage_dec = Decimal(str(pos.leverage)) if pos.leverage and pos.leverage > 0 else Decimal("1")
-                            
-                            # Market value of position
-                            market_value = quantity_dec * price_dec
-                            
-                            # For leveraged positions, only count margin + unrealized P&L
+
+                            # Keep curve equity consistent with settlement/checkpoint logic:
+                            # leverage > 1: entry margin + direction-aware unrealized PnL
+                            # leverage == 1: quantity * current price
                             if leverage_dec > 1:
-                                # Initial margin used
-                                initial_margin = market_value / leverage_dec
-                                # Unrealized P&L
-                                unrealized_pnl = quantity_dec * (price_dec - avg_cost_dec)
-                                # Position equity = margin + P&L
-                                position_equity = initial_margin + unrealized_pnl
+                                entry_margin = (quantity_dec * avg_cost_dec) / leverage_dec
+                                side = (getattr(pos, "side", None) or "LONG").upper()
+                                if side == "SHORT":
+                                    unrealized_pnl = quantity_dec * (avg_cost_dec - price_dec)
+                                else:
+                                    unrealized_pnl = quantity_dec * (price_dec - avg_cost_dec)
+                                position_equity = entry_margin + unrealized_pnl
                             else:
-                                # Non-leveraged position: equity = market value
-                                position_equity = market_value
-                            
+                                position_equity = quantity_dec * price_dec
+
                             positions_value += float(position_equity)
                     except Exception as e:
                         logging.warning(f"Could not get price for {pos.symbol}.{pos.market}: {e}")
