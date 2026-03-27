@@ -9,10 +9,16 @@ def calc_positions_market_value(db: Session, account_id: int) -> float:
     Calculate total equity in positions (for leveraged positions: margin + unrealized P&L).
     
     For leveraged positions, the equity is NOT the full market value (quantity * price),
-    but rather the margin used plus unrealized profit/loss.
+    but rather the entry margin plus unrealized profit/loss.
     
-    Equity = Initial Margin + Unrealized P&L
-           = (market_value / leverage) + (quantity * (current_price - avg_cost))
+    Equity = Entry Margin + Unrealized P&L
+           = (entry_notional / leverage) + (quantity * (current_price - avg_cost))
+           = (avg_cost * quantity / leverage) + pnl
+
+    NOTE:
+    Do NOT use current market value / leverage as margin here. Doing so adds an
+    extra term proportional to price change, which effectively re-introduces
+    leverage into PnL during settlement/checkpoint equity calculation.
 
     Args:
         db: Database session
@@ -34,10 +40,11 @@ def calc_positions_market_value(db: Session, account_id: int) -> float:
             # Market value of position
             market_value = quantity * price
             
-            # For leveraged positions, only count margin + unrealized P&L, not full market value
+            # For leveraged positions, count entry margin + unrealized P&L
+            # (entry margin must be based on avg_cost, not current price).
             if leverage > 1:
-                # Initial margin used
-                initial_margin = market_value / leverage
+                # Entry initial margin used
+                entry_margin = (quantity * avg_cost) / leverage
                 # Unrealized P&L (direction-aware)
                 side = getattr(p, 'side', None) or "LONG"
                 if side.upper() == "SHORT":
@@ -45,7 +52,7 @@ def calc_positions_market_value(db: Session, account_id: int) -> float:
                 else:
                     unrealized_pnl = quantity * (price - avg_cost)
                 # Position equity = margin + P&L
-                position_equity = initial_margin + unrealized_pnl
+                position_equity = entry_margin + unrealized_pnl
             else:
                 # Non-leveraged position: equity = market value
                 position_equity = market_value

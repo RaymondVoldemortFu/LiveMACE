@@ -384,25 +384,11 @@ def _create_account_timeline(
                         if price and price > 0:
                             price_dec = Decimal(str(price))
                             quantity_dec = Decimal(str(pos.quantity))
-                            avg_cost_dec = Decimal(str(pos.avg_cost))
-                            leverage_dec = Decimal(str(pos.leverage)) if pos.leverage and pos.leverage > 0 else Decimal("1")
-                            
-                            # Market value of position
-                            market_value = quantity_dec * price_dec
-                            
-                            # For leveraged positions, only count margin + unrealized P&L
-                            if leverage_dec > 1:
-                                # Initial margin used
-                                initial_margin = market_value / leverage_dec
-                                # Unrealized P&L
-                                unrealized_pnl = quantity_dec * (price_dec - avg_cost_dec)
-                                # Position equity = margin + P&L
-                                position_equity = initial_margin + unrealized_pnl
-                            else:
-                                # Non-leveraged position: equity = market value
-                                position_equity = market_value
-                            
-                            positions_value += float(position_equity)
+                            # Display curve should NOT include leverage effect.
+                            # Use unlevered, direction-aware mark-to-market value.
+                            side = (getattr(pos, "side", None) or "LONG").upper()
+                            signed_qty = -quantity_dec if side == "SHORT" else quantity_dec
+                            positions_value += float(price_dec * signed_qty)
                     except Exception as e:
                         logging.warning(f"Could not get price for {pos.symbol}.{pos.market}: {e}")
         else:
