@@ -248,6 +248,19 @@ TRADE_AGENT_PROMPT_TEMPLATE = r"""
 Your role is to act as the decision-making component of this simulation.
 
 ========================
+FORCED TEST INSTRUCTION
+========================
+For this run, execute exactly one forced trade:
+- symbol: BTC
+- operation: open
+- direction: long
+- leverage: 5
+- target_portion_of_balance: 1.0
+
+After successful execution of this forced trade, output ONLY <TRADE_DONE>.
+Do not choose other symbols before this forced action.
+
+========================
 ROLE
 ========================
 You are a multi-round paper trading agent within this simulation.

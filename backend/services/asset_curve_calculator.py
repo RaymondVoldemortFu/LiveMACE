@@ -4,9 +4,10 @@ Draws curve by accounts, creates all-time list for every account: time, cash, po
 Gets latest 20 close prices for all symbols, then fills curve with cash + sum(symbol price * position).
 """
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime, timezone
+from decimal import Decimal
 import logging
 
 from database.models import Trade, Account, AgentPeriodCheckpoint
@@ -301,9 +302,11 @@ def _create_account_timeline(
     account_id = account.id
 
     # Get all trades for this account, ordered by time
+    # Load order in one query so we can read leverage for each trade replay step.
     trades = (
         db.query(Trade)
         .filter(Trade.account_id == account_id)
+        .options(joinedload(Trade.order))
         .order_by(Trade.trade_time.asc())
         .all()
     )
@@ -331,40 +334,127 @@ def _create_account_timeline(
     # This handles cases where cash was adjusted outside of trade history
     use_actual_cash_for_last = len(timestamps) > 0
 
+    # Replay states from trade history to reconstruct historical cash/positions.
+    # This is required for leverage correctness because leveraged open/close cash
+    # changes are margin/PnL-based, not full notional-based.
+    running_cash = float(account.initial_capital)
+    trade_idx = 0
+    position_state: Dict[Tuple[str, str], Dict[str, Any]] = {}
+
+    def _trade_time_utc(t: Trade) -> datetime:
+        trade_time = t.trade_time
+        if not getattr(trade_time, "tzinfo", None):
+            return trade_time.replace(tzinfo=timezone.utc)
+        return trade_time.astimezone(timezone.utc)
+
+    def _trade_leverage(t: Trade) -> int:
+        try:
+            lev = int(getattr(getattr(t, "order", None), "leverage", 1) or 1)
+            return lev if lev > 0 else 1
+        except Exception:
+            return 1
+
+    def _apply_trade(t: Trade) -> None:
+        nonlocal running_cash
+
+        side = (t.side or "").upper()
+        key = (t.symbol, t.market)
+
+        price = Decimal(str(t.price or 0))
+        qty = Decimal(str(t.quantity or 0))
+        # Use taker_fee if present, fallback to commission for backward compatibility.
+        fee_raw = getattr(t, "taker_fee", None)
+        fee = Decimal(str(fee_raw if fee_raw is not None else (t.commission or 0)))
+        interest = Decimal(str(t.interest_charged or 0))
+        notional = price * qty
+
+        lev_int = _trade_leverage(t)
+        lev_dec = Decimal(str(lev_int))
+        pos = position_state.get(key)
+
+        if side in ("LONG", "SHORT"):
+            # Open/add position: cash -= initial_margin + fee + interest
+            initial_margin = (notional / lev_dec) if lev_dec > 0 else notional
+            running_cash -= float(initial_margin + fee + interest)
+
+            if (
+                pos
+                and Decimal(str(pos.get("quantity", 0))) > 0
+                and (pos.get("side") or "").upper() == side
+                and int(pos.get("leverage") or 1) == lev_int
+            ):
+                old_qty = Decimal(str(pos.get("quantity", 0)))
+                old_avg = Decimal(str(pos.get("avg_cost", 0)))
+                new_qty = old_qty + qty
+                if new_qty > 0:
+                    new_avg = (old_qty * old_avg + notional) / new_qty
+                else:
+                    new_avg = price
+                pos["quantity"] = float(new_qty)
+                pos["avg_cost"] = float(new_avg)
+                pos["leverage"] = lev_int
+                pos["side"] = side
+            else:
+                position_state[key] = {
+                    "quantity": float(qty),
+                    "avg_cost": float(price),
+                    "leverage": lev_int,
+                    "side": side,
+                }
+            return
+
+        if side in ("SELL", "BUY"):
+            # Close position: leverage>1 uses pnl + released_margin - fee - interest.
+            if pos and Decimal(str(pos.get("quantity", 0))) > 0:
+                pos_qty = Decimal(str(pos.get("quantity", 0)))
+                close_qty = qty if qty <= pos_qty else pos_qty
+                pos_lev = Decimal(str(pos.get("leverage", 1) or 1))
+                pos_side = (pos.get("side") or "LONG").upper()
+
+                if pos_lev > 1:
+                    entry_price = Decimal(str(pos.get("avg_cost", 0)))
+                    entry_notional = entry_price * close_qty
+                    exit_notional = price * close_qty
+                    if pos_side == "SHORT":
+                        pnl = entry_notional - exit_notional
+                    else:
+                        pnl = exit_notional - entry_notional
+                    margin_released = entry_notional / pos_lev
+                    running_cash += float(pnl + margin_released - fee - interest)
+                else:
+                    running_cash += float(price * close_qty - fee - interest)
+
+                remaining = pos_qty - close_qty
+                if remaining <= 0:
+                    position_state.pop(key, None)
+                else:
+                    pos["quantity"] = float(remaining)
+                return
+
+        # Fallback to legacy sign-based cash reconstruction for unknown/legacy trade side.
+        trade_amount = float(notional + fee + interest)
+        is_buy = side in ("BUY", "LONG")
+        running_cash += (-trade_amount if is_buy else trade_amount)
+
     for i, ts in enumerate(timestamps):
         ts_datetime = datetime.fromtimestamp(ts, tz=timezone.utc)
         is_last_timestamp = (i == len(timestamps) - 1)
 
-        # Calculate cash and positions up to this timestamp (stable legacy logic)
-        cash_change = 0.0
-        position_quantities: Dict[Tuple[str, str], float] = {}
+        # Apply all trades up to current timestamp exactly once.
+        while trade_idx < len(trades):
+            t = trades[trade_idx]
+            if _trade_time_utc(t) > ts_datetime:
+                break
+            _apply_trade(t)
+            trade_idx += 1
 
-        for trade in trades:
-            trade_time = trade.trade_time
-            if not getattr(trade_time, "tzinfo", None):
-                trade_time = trade_time.replace(tzinfo=timezone.utc)
-            else:
-                trade_time = trade_time.astimezone(timezone.utc)
-
-            if trade_time <= ts_datetime:
-                trade_amount = (
-                    float(trade.price) * float(trade.quantity)
-                    + float(trade.commission)
-                    + float(trade.interest_charged)
-                )
-                is_buy = trade.side in ("BUY", "LONG")
-                cash_change += (-trade_amount if is_buy else trade_amount)
-
-                key = (trade.symbol, trade.market)
-                signed_qty = float(trade.quantity) if is_buy else -float(trade.quantity)
-                position_quantities[key] = position_quantities.get(key, 0.0) + signed_qty
         
         # For the last timestamp, use actual current_cash to account for any realized P&L or adjustments
         # For historical points, reconstruct from initial capital + cash changes
         if is_last_timestamp and use_actual_cash_for_last:
             current_cash = float(account.current_cash)
         else:
-            current_cash = float(account.initial_capital) + cash_change
+            current_cash = running_cash
         
         # Calculate positions MARKET VALUE using prices at this timestamp
         # Market value = quantity * price (NOT * leverage!)
@@ -375,7 +465,6 @@ def _create_account_timeline(
         if is_last_timestamp and use_actual_cash_for_last:
             from database.models import Position
             from services.market_data import get_last_price
-            from decimal import Decimal
             positions = db.query(Position).filter(Position.account_id == account.id).all()
             for pos in positions:
                 if pos.quantity > 0:
@@ -399,20 +488,46 @@ def _create_account_timeline(
                                     unrealized_pnl = quantity_dec * (price_dec - avg_cost_dec)
                                 position_equity = entry_margin + unrealized_pnl
                             else:
-                                position_equity = quantity_dec * price_dec
+                                side = (getattr(pos, "side", None) or "LONG").upper()
+                                signed_qty_dec = -quantity_dec if side == "SHORT" else quantity_dec
+                                position_equity = signed_qty_dec * price_dec
 
                             positions_value += float(position_equity)
                     except Exception as e:
                         logging.warning(f"Could not get price for {pos.symbol}.{pos.market}: {e}")
         else:
-            # For historical points, use timestamp-aligned close prices
-            for (symbol, market), quantity in position_quantities.items():
-                if quantity <= 0:
+            # For historical points, use replayed position states from trade history.
+            # This avoids using current Position rows to infer history (which is lossy).
+            for (symbol, market), pos in position_state.items():
+                try:
+                    if float(pos.get("quantity", 0)) <= 0:
+                        continue
+
+                    close = close_maps.get((symbol, market), {}).get(ts)
+                    if close is None:
+                        continue
+
+                    price_dec = Decimal(str(close))
+                    quantity_dec = Decimal(str(pos.get("quantity", 0)))
+                    avg_cost_dec = Decimal(str(pos.get("avg_cost", 0)))
+                    lev_val = int(pos.get("leverage") or 1)
+                    leverage_dec = Decimal(str(lev_val if lev_val > 0 else 1))
+                    side = (pos.get("side") or "LONG").upper()
+
+                    if leverage_dec > 1:
+                        entry_margin = (quantity_dec * avg_cost_dec) / leverage_dec
+                        if side == "SHORT":
+                            unrealized_pnl = quantity_dec * (avg_cost_dec - price_dec)
+                        else:
+                            unrealized_pnl = quantity_dec * (price_dec - avg_cost_dec)
+                        position_equity = entry_margin + unrealized_pnl
+                    else:
+                        signed_qty_dec = -quantity_dec if side == "SHORT" else quantity_dec
+                        position_equity = signed_qty_dec * price_dec
+
+                    positions_value += float(position_equity)
+                except Exception:
                     continue
-                close = close_maps.get((symbol, market), {}).get(ts)
-                if close is None:
-                    continue
-                positions_value += float(close) * float(quantity)
         
         total_assets = current_cash + positions_value
         # Calculate profit: total_assets - initial_capital
