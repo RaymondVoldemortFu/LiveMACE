@@ -476,6 +476,9 @@ class ReActAgent(BaseAgent):
                         }
                     else:
                         cache_key = f"{name}:{json.dumps(args, sort_keys=True)}"
+                        # Tool selector updates active tool set dynamically.
+                        # Its result must always reflect latest context, so skip cache.
+                        should_cache_tool_result = name != META_TOOL_NAME
                         tool_call_counts[cache_key] = tool_call_counts.get(cache_key, 0) + 1
                         dup_count = tool_call_counts[cache_key]
                         dup_limit = getattr(AgentConfig, "TOOL_CALL_DUP_MAX", 5)
@@ -493,7 +496,7 @@ class ReActAgent(BaseAgent):
                                     "Repeated identical tool calls exceeded 10 times. "
                                     "Consider selecting other tools, use select-tools to get more tools according to your need, or changing parameters."
                                 )
-                        elif cache_key in tool_call_cache:
+                        elif should_cache_tool_result and cache_key in tool_call_cache:
                             result = tool_call_cache[cache_key]
                             logger.info(f"Using cached result for tool: {name}")
                             agent_logger.info(f"Using cached result for tool '{name}' with args: {args_str}")
@@ -510,7 +513,8 @@ class ReActAgent(BaseAgent):
                                     }
                                 else:
                                     result = tool(**args)
-                                    tool_call_cache[cache_key] = result
+                                    if should_cache_tool_result:
+                                        tool_call_cache[cache_key] = result
                                     # Meta tool handling, optional for special tools
                                     if name == META_TOOL_NAME and isinstance(result, dict):
                                         llm_trace = result.pop("_llm_trace", None)

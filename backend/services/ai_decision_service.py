@@ -562,6 +562,7 @@ def call_agent_for_decision(
 
     trace_id = str(uuid.uuid4())
     step_counter = 0
+    created_local_round = False
 
     def on_step(message: Dict[str, Any]):
         nonlocal step_counter
