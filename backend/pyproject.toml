@@ -27,6 +27,7 @@ dependencies = [
     "pinecone",
     "tiktoken>=0.12.0",
     "brightdata-sdk>=2.3.0",
+    "redis",
 ]
 
 [[tool.uv.index]]
@@ -42,6 +43,7 @@ dev = [
     "pytest",
     "black",
     "ruff",
+    "fakeredis>=2.34.1",
 ]
 
 [tool.hatch.build.targets.wheel]

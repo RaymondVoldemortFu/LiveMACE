@@ -18,6 +18,8 @@ from database.connection import SessionLocal
 from database.models import MarketKline
 from services.time_source import now_timestamp
 from repositories.kline_repo import KlineRepository
+from config.tool_cache_config import ToolCacheConfig
+from services.tool_cache import tool_cache
 
 logger = logging.getLogger(__name__)
 US_STOCK_SYMBOLS = {str(symbol).upper() for symbol in SUPPORTED_STOCKS}
@@ -214,26 +216,65 @@ def get_last_price(symbol: str, market: str = "CRYPTO") -> float:
 def get_kline_data(symbol: str, market: str = "CRYPTO", period: str = "1d", count: int = 100, start_time: Any = None, end_time: Any = None) -> List[Dict[str, Any]]:
     symbol_norm, market_norm = _resolve_market(symbol, market)
     key = f"{symbol_norm}.{market_norm}"
+    round_id = tool_cache.get_current_round_id()
+    cache_args = {
+        "symbol": symbol_norm,
+        "market": market_norm,
+        "period": period,
+        "count": count,
+        "start_time": start_time,
+        "end_time": end_time,
+    }
 
     try:
+        cached_tool_data = tool_cache.get_json("get_kline_data", cache_args, round_id=round_id)
+        if isinstance(cached_tool_data, list):
+            logger.debug(f"Using Redis tool cache for K-line data: {key} period={period} count={count}")
+            return cached_tool_data
+
         if start_time is None and end_time is None:
             cached = _get_cached_klines(symbol_norm, market_norm, period, count)
             if cached:
+                tool_cache.set_json(
+                    "get_kline_data",
+                    cache_args,
+                    cached,
+                    ttl_seconds=ToolCacheConfig.kline_ttl_seconds,
+                    round_id=round_id,
+                )
                 return cached
 
-        if market_norm == "US":
-            source = "Alpaca"
-            data = get_kline_data_from_alpaca(symbol_norm, period, count, start_time, end_time)
-        else:
-            source = "Hyperliquid"
-            data = get_kline_data_from_hyperliquid(symbol_norm, period, count, start_time, end_time)
-        if data is not None:
-            logger.info(f"Got K-line data for {key} from {source}, total {len(data)} items")
-            _save_klines(symbol_norm, market_norm, period, data)
-            return data
-        raise Exception(f"{source} returned empty K-line data")
+        def _load_from_provider() -> tuple[str, List[Dict[str, Any]]]:
+            if market_norm == "US":
+                selected_source = "Alpaca"
+                selected_data = get_kline_data_from_alpaca(symbol_norm, period, count, start_time, end_time)
+            else:
+                selected_source = "Hyperliquid"
+                selected_data = get_kline_data_from_hyperliquid(symbol_norm, period, count, start_time, end_time)
+            return selected_source, selected_data
+
+        # Use distributed lock to reduce duplicate upstream calls in concurrent multi-agent rounds.
+        with tool_cache.acquire_lock("get_kline_data", cache_args, round_id=round_id) as lock_acquired:
+            if lock_acquired:
+                second_read = tool_cache.get_json("get_kline_data", cache_args, round_id=round_id)
+                if isinstance(second_read, list):
+                    return second_read
+
+            source, data = _load_from_provider()
+            if data is not None:
+                logger.info(f"Got K-line data for {key} from {source}, total {len(data)} items")
+                _save_klines(symbol_norm, market_norm, period, data)
+                tool_cache.set_json(
+                    "get_kline_data",
+                    cache_args,
+                    data,
+                    ttl_seconds=ToolCacheConfig.kline_ttl_seconds,
+                    round_id=round_id,
+                )
+                return data
+            raise Exception(f"{source} returned empty K-line data")
     except Exception as hl_err:
-        logger.error(f"Failed to get K-line data from {source}: {hl_err}")
+        logger.error(f"Failed to get K-line data for {key}: {hl_err}")
         raise Exception(f"Unable to get K-line data for {key}: {hl_err}")
 
 
