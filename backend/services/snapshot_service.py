@@ -8,7 +8,7 @@ from typing import Optional
 from sqlalchemy.orm import Session
 
 from database.models import Account, AccountSnapshot, Position
-from services.asset_calculator import calc_positions_value
+from services.asset_calculator import calc_positions_market_value
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,7 @@ def create_account_snapshot(
             timestamp = datetime.now(timezone.utc).replace(tzinfo=None)
         
         # Calculate positions value
-        positions_value = calc_positions_value(db, account_id)
+        positions_value = calc_positions_market_value(db, account_id)
         
         # Calculate total equity
         cash = float(account.current_cash)
