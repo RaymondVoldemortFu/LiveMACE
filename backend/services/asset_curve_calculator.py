@@ -362,9 +362,13 @@ def _create_account_timeline(
 
         price = Decimal(str(t.price or 0))
         qty = Decimal(str(t.quantity or 0))
-        # Use taker_fee if present, fallback to commission for backward compatibility.
-        fee_raw = getattr(t, "taker_fee", None)
-        fee = Decimal(str(fee_raw if fee_raw is not None else (t.commission or 0)))
+        # Fee source compatibility:
+        # - order_executor_leverage writes taker_fee
+        # - order_matching may only write commission (taker_fee defaults to 0)
+        # Prefer taker_fee only when it's non-zero, or when commission is zero.
+        taker_fee_dec = Decimal(str(getattr(t, "taker_fee", 0) or 0))
+        commission_dec = Decimal(str(getattr(t, "commission", 0) or 0))
+        fee = taker_fee_dec if (taker_fee_dec != 0 or commission_dec == 0) else commission_dec
         interest = Decimal(str(t.interest_charged or 0))
         notional = price * qty
 
@@ -372,64 +376,114 @@ def _create_account_timeline(
         lev_dec = Decimal(str(lev_int))
         pos = position_state.get(key)
 
-        if side in ("LONG", "SHORT"):
-            # Open/add position: cash -= initial_margin + fee + interest
-            initial_margin = (notional / lev_dec) if lev_dec > 0 else notional
-            running_cash -= float(initial_margin + fee + interest)
-
+        def _add_or_update_position(target_side: str, open_leverage: int, open_qty: Decimal, open_price: Decimal) -> None:
+            existing = position_state.get(key)
             if (
-                pos
-                and Decimal(str(pos.get("quantity", 0))) > 0
-                and (pos.get("side") or "").upper() == side
-                and int(pos.get("leverage") or 1) == lev_int
+                existing
+                and Decimal(str(existing.get("quantity", 0))) > 0
+                and (existing.get("side") or "").upper() == target_side
             ):
-                old_qty = Decimal(str(pos.get("quantity", 0)))
-                old_avg = Decimal(str(pos.get("avg_cost", 0)))
-                new_qty = old_qty + qty
-                if new_qty > 0:
-                    new_avg = (old_qty * old_avg + notional) / new_qty
-                else:
-                    new_avg = price
-                pos["quantity"] = float(new_qty)
-                pos["avg_cost"] = float(new_avg)
-                pos["leverage"] = lev_int
-                pos["side"] = side
+                old_qty = Decimal(str(existing.get("quantity", 0)))
+                old_avg = Decimal(str(existing.get("avg_cost", 0)))
+                old_notional = old_qty * old_avg
+                new_qty = old_qty + open_qty
+                new_notional = old_notional + (open_price * open_qty)
+                new_avg = (new_notional / new_qty) if new_qty > 0 else open_price
+
+                old_lev = Decimal(str(existing.get("leverage", 1) or 1))
+                new_lev_dec = (
+                    (old_notional * old_lev + (open_price * open_qty) * Decimal(str(open_leverage))) / new_notional
+                    if new_notional > 0
+                    else Decimal(str(open_leverage))
+                )
+                new_lev = int(new_lev_dec) if int(new_lev_dec) > 0 else 1
+
+                existing["quantity"] = float(new_qty)
+                existing["avg_cost"] = float(new_avg)
+                existing["leverage"] = new_lev
+                existing["side"] = target_side
             else:
                 position_state[key] = {
-                    "quantity": float(qty),
-                    "avg_cost": float(price),
-                    "leverage": lev_int,
-                    "side": side,
+                    "quantity": float(open_qty),
+                    "avg_cost": float(open_price),
+                    "leverage": open_leverage if open_leverage > 0 else 1,
+                    "side": target_side,
                 }
+
+        def _close_position(close_side: str, close_qty_req: Decimal, close_price: Decimal) -> bool:
+            nonlocal running_cash
+            existing = position_state.get(key)
+            if not existing or Decimal(str(existing.get("quantity", 0))) <= 0:
+                return False
+
+            pos_qty = Decimal(str(existing.get("quantity", 0)))
+            close_qty = close_qty_req if close_qty_req <= pos_qty else pos_qty
+            pos_lev = Decimal(str(existing.get("leverage", 1) or 1))
+            pos_side = (existing.get("side") or "LONG").upper()
+            entry_price = Decimal(str(existing.get("avg_cost", 0)))
+            entry_notional = entry_price * close_qty
+            exit_notional = close_price * close_qty
+
+            if pos_lev > 1:
+                # Leveraged close: release margin + side-aware PnL - costs.
+                if pos_side == "SHORT":
+                    pnl = entry_notional - exit_notional
+                else:
+                    pnl = exit_notional - entry_notional
+                margin_released = entry_notional / pos_lev
+                running_cash += float(pnl + margin_released - fee - interest)
+            else:
+                # Spot conventions:
+                # - close long with SELL => receive proceeds
+                # - close short with BUY => pay buyback cost
+                if pos_side == "SHORT" and close_side == "BUY":
+                    running_cash -= float(exit_notional + fee + interest)
+                else:
+                    running_cash += float(exit_notional - fee - interest)
+
+            remaining = pos_qty - close_qty
+            if remaining <= 0:
+                position_state.pop(key, None)
+            else:
+                existing["quantity"] = float(remaining)
+            return True
+
+        if side in ("LONG", "SHORT"):
+            # Native leveraged open flow.
+            initial_margin = (notional / lev_dec) if lev_dec > 0 else notional
+            running_cash -= float(initial_margin + fee + interest)
+            _add_or_update_position(side, lev_int, qty, price)
             return
 
-        if side in ("SELL", "BUY"):
-            # Close position: leverage>1 uses pnl + released_margin - fee - interest.
-            if pos and Decimal(str(pos.get("quantity", 0))) > 0:
-                pos_qty = Decimal(str(pos.get("quantity", 0)))
-                close_qty = qty if qty <= pos_qty else pos_qty
-                pos_lev = Decimal(str(pos.get("leverage", 1) or 1))
-                pos_side = (pos.get("side") or "LONG").upper()
-
-                if pos_lev > 1:
-                    entry_price = Decimal(str(pos.get("avg_cost", 0)))
-                    entry_notional = entry_price * close_qty
-                    exit_notional = price * close_qty
-                    if pos_side == "SHORT":
-                        pnl = entry_notional - exit_notional
-                    else:
-                        pnl = exit_notional - entry_notional
-                    margin_released = entry_notional / pos_lev
-                    running_cash += float(pnl + margin_released - fee - interest)
-                else:
-                    running_cash += float(price * close_qty - fee - interest)
-
-                remaining = pos_qty - close_qty
-                if remaining <= 0:
-                    position_state.pop(key, None)
-                else:
-                    pos["quantity"] = float(remaining)
+        if side == "BUY":
+            # BUY can be either close SHORT (US/legacy) or open/increase LONG.
+            if pos and (pos.get("side") or "").upper() == "SHORT":
+                _close_position("BUY", qty, price)
                 return
+
+            if lev_int > 1:
+                initial_margin = (notional / lev_dec) if lev_dec > 0 else notional
+                running_cash -= float(initial_margin + fee + interest)
+            else:
+                running_cash -= float(notional + fee + interest)
+            _add_or_update_position("LONG", lev_int, qty, price)
+            return
+
+        if side == "SELL":
+            # SELL can be close LONG (common) or open/increase SHORT (US/legacy).
+            if pos and (pos.get("side") or "LONG").upper() != "SHORT":
+                _close_position("SELL", qty, price)
+                return
+
+            if lev_int > 1:
+                # If legacy flow sends leveraged short open as SELL, treat as margin open.
+                initial_margin = (notional / lev_dec) if lev_dec > 0 else notional
+                running_cash -= float(initial_margin + fee + interest)
+            else:
+                # Spot-style short open (US convention): receive sale proceeds.
+                running_cash += float(notional - fee - interest)
+            _add_or_update_position("SHORT", lev_int, qty, price)
+            return
 
         # Fallback to legacy sign-based cash reconstruction for unknown/legacy trade side.
         trade_amount = float(notional + fee + interest)
