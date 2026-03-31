@@ -309,7 +309,12 @@ def get_kline_data(symbol: str, market: str = "CRYPTO", period: str = "1d", coun
         # Use distributed lock to reduce duplicate upstream calls in concurrent multi-agent rounds.
         with tool_cache.acquire_lock("get_kline_data", cache_args, round_id=round_id) as lock_acquired:
             if lock_acquired:
-                second_read = tool_cache.get_json("get_kline_data", cache_args, round_id=round_id)
+                second_read = tool_cache.get_json(
+                    "get_kline_data",
+                    cache_args,
+                    round_id=round_id,
+                    suppress_miss_log=True,
+                )
                 if isinstance(second_read, list):
                     return second_read
 

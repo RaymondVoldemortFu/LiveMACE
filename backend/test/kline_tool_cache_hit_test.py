@@ -218,3 +218,27 @@ def test_kline_cache_hit_when_times_differ_within_same_period_bucket(monkeypatch
         tool_cache.clear_round(round_id)
         tool_cache._client = original_client
 
+
+def test_round_stats_record_hit_rate_fields():
+    fake_client, original_client = _use_fake_redis()
+    round_id = tool_cache.create_round_id(scope="pytest")
+    args = {"symbol": "BTC", "market": "CRYPTO", "period": "1d", "count": 10}
+    payload = [{"timestamp": 1, "close": 11.11}]
+
+    try:
+        with tool_cache.use_round(round_id):
+            assert tool_cache.get_json("get_kline_data", args) is None  # miss +1
+            assert tool_cache.set_json("get_kline_data", args, payload, ttl_seconds=30) is True  # set +1
+            assert tool_cache.get_json("get_kline_data", args) == payload  # hit +1
+
+        stats_key = tool_cache._build_round_stats_key(round_id)
+        stats_before_clear = fake_client.hgetall(stats_key)
+        assert int(stats_before_clear.get("hit", 0)) == 1
+        assert int(stats_before_clear.get("miss", 0)) == 1
+        assert int(stats_before_clear.get("set", 0)) == 1
+
+        tool_cache.clear_round(round_id)
+        assert fake_client.exists(stats_key) == 0
+    finally:
+        tool_cache._client = original_client
+

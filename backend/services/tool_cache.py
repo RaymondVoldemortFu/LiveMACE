@@ -89,7 +89,27 @@ class RedisToolCache:
     def _build_round_index_key(self, round_id: str) -> str:
         return f"{ToolCacheConfig.key_prefix}:round:{round_id}:keys"
 
-    def get_json(self, tool_name: str, args: Dict[str, Any], round_id: Optional[str] = None) -> Optional[Any]:
+    def _build_round_stats_key(self, round_id: str) -> str:
+        return f"{ToolCacheConfig.key_prefix}:round:{round_id}:stats"
+
+    def _increment_round_stat(self, client, round_id: str, field: str) -> None:
+        if not round_id:
+            return
+        stats_key = self._build_round_stats_key(round_id)
+        try:
+            client.hincrby(stats_key, field, 1)
+            client.expire(stats_key, ToolCacheConfig.key_index_ttl_seconds)
+        except Exception:
+            # Stats must never affect the main cache path.
+            pass
+
+    def get_json(
+        self,
+        tool_name: str,
+        args: Dict[str, Any],
+        round_id: Optional[str] = None,
+        suppress_miss_log: bool = False,
+    ) -> Optional[Any]:
         client = self._get_client()
         effective_round_id = round_id or self.get_current_round_id()
         if not effective_round_id:
@@ -99,9 +119,12 @@ class RedisToolCache:
         try:
             raw = client.get(key)
             if raw is None:
-                logger.debug(f"Tool cache miss: tool={tool_name} round={effective_round_id}")
+                self._increment_round_stat(client, effective_round_id, "miss")
+                if not suppress_miss_log:
+                    logger.debug(f"Tool cache miss: tool={tool_name} round={effective_round_id}")
                 return None
             value = json.loads(raw)
+            self._increment_round_stat(client, effective_round_id, "hit")
             logger.debug(f"Tool cache hit: tool={tool_name} round={effective_round_id}")
             return value
         except Exception as e:
@@ -129,6 +152,7 @@ class RedisToolCache:
             client.setex(key, ttl, serialized)
             client.sadd(index_key, key)
             client.expire(index_key, max(ttl, ToolCacheConfig.key_index_ttl_seconds))
+            self._increment_round_stat(client, effective_round_id, "set")
             logger.debug(f"Tool cache set: tool={tool_name} round={effective_round_id} ttl={ttl}s")
             return True
         except Exception as e:
@@ -175,13 +199,29 @@ class RedisToolCache:
         client = self._get_client()
 
         index_key = self._build_round_index_key(round_id)
+        stats_key = self._build_round_stats_key(round_id)
         try:
             keys = list(client.smembers(index_key) or [])
             deleted = 0
             if keys:
                 deleted += int(client.delete(*keys) or 0)
             deleted += int(client.delete(index_key) or 0)
-            logger.info(f"Tool cache round cleared: round={round_id} deleted_keys={deleted}")
+            raw_stats = client.hgetall(stats_key) or {}
+            hits = int(raw_stats.get("hit", 0) or 0)
+            misses = int(raw_stats.get("miss", 0) or 0)
+            sets = int(raw_stats.get("set", 0) or 0)
+            total_reads = hits + misses
+            hit_rate = (hits / total_reads * 100.0) if total_reads > 0 else 0.0
+            deleted += int(client.delete(stats_key) or 0)
+            logger.info(
+                "Tool cache round cleared: round=%s deleted_keys=%s hit=%s miss=%s set=%s hit_rate=%.2f%%",
+                round_id,
+                deleted,
+                hits,
+                misses,
+                sets,
+                hit_rate,
+            )
             return deleted
         except Exception as e:
             logger.warning(f"Failed to clear tool cache round {round_id}: {e}")
