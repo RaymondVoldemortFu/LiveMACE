@@ -33,15 +33,15 @@ MODEL_LIST = [
     # openai
     "gpt-5.2",
     # deepseek
-    "deepseek-v3.2",
+    # "deepseek-v3.2",
     # google
-    "gemini-3-pro-preview",
+    # "gemini-3-pro-preview",
     # xai
     # "grok-420-thinking-all",    # gork agent model doesn't support tool calling, switch to thinking
     # grok tool calling doesn't work, suspect that the api provider have issue with it
     # temporarily disable grok-420-thinking-all
     # qwen
-    "qwen3-max",
+    # "qwen3-max",
 ]
 
 DEFAULT_AGENT_TYPE = "react"

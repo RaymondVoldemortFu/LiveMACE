@@ -1,7 +1,10 @@
 import json
 import logging
 import re
+from html import unescape
 from typing import Dict, Any, List, Optional
+
+import requests
 
 from config.tool_config import ToolConfig
 from services.agent.prompts.sub_agent_prompts import SUB_AGENT_SYSTEM_PROMPT
@@ -23,16 +26,16 @@ except ImportError:
 
 class SearchSubAgent:
     def __init__(self, model: str = "gpt-4o-mini", api_key: str = None, base_url: str = None, agent_name: Optional[str] = None):
-        self.tavily_api_key = ToolConfig.tavily_api_key
-        self.client = None
-        if self.tavily_api_key:
+        self.brightdata_api_key = ToolConfig.brightdata_api_key
+        self._brightdata_client_cls = None
+        if self.brightdata_api_key:
             try:
-                from tavily import TavilyClient
-                self.client = TavilyClient(api_key=self.tavily_api_key)
+                from brightdata import SyncBrightDataClient
+                self._brightdata_client_cls = SyncBrightDataClient
             except ImportError:
-                logger.error("Tavily SDK not installed. Please run `pip install tavily-python`.")
+                logger.error("Bright Data SDK not installed. Please run `uv add brightdata-sdk`.")
         else:
-            logger.warning("TAVILY_API_KEY not found in environment variables.")
+            logger.warning("BRIGHTDATA_API_KEY not found in environment variables.")
 
         # LLM client for sub-agent reasoning
         self.llm_client = LLMClient(model=model,
@@ -56,47 +59,211 @@ class SearchSubAgent:
     def _search_tool(self, query: str, topic: str = "general", time_range: str = None, 
                      search_depth: str = "basic", max_results: int = 5) -> Dict[str, Any]:
         """
-        Executes a search query using Tavily API.
+        Executes a search query using Bright Data SERP API.
         """
-        if not self.client:
-            return {"error": "Tavily client not initialized."}
+        if not self._brightdata_client_cls:
+            return {"error": "Bright Data client not initialized."}
 
         try:
-            # Include answer is set to None (per user requirement to hardcode include_answer=None? 
-            # User said "Include answer parameter hardcoded to none".
-            # In Tavily python SDK, include_answer expects bool or "basic"/"advanced". 
-            # "None" might mean exclude it. Let's set to False to be safe if "none" isn't valid param value but logic intent.)
-            # Re-reading: "Include answer parameter hardcoded to none" -> likely means don't ask Tavily for AI answer, let sub-agent do it.
-            
-            response = self.client.search(
+            merged_query = self._build_serp_query(query=query, topic=topic, time_range=time_range)
+            with self._brightdata_client_cls(token=self.brightdata_api_key) as client:
+                serp_results = client.search.google(
+                    query=merged_query,
+                    num_results=max_results
+                )
+            return self._normalize_serp_results(
                 query=query,
+                merged_query=merged_query,
                 topic=topic,
-                time_range=time_range if time_range != "none" else None,
+                time_range=time_range,
                 search_depth=search_depth,
-                max_results=max_results,
-                include_answer=False, 
-                include_raw_content=False # We use extract for detailed content
+                payload=serp_results,
             )
-            return response
         except Exception as e:
-            logger.error(f"Search failed: {e}")
+            logger.exception(f"Search failed: {e}")
             return {"error": str(e)}
 
     def _extract_tool(self, url: str) -> Dict[str, Any]:
         """
-        Extracts content from a URL using Tavily API.
+        Extracts content from a URL.
+        Optimization: use local fetch first, fallback to Bright Data Unlocker on failure.
         """
-        if not self.client:
-            return {"error": "Tavily client not initialized."}
+        local_result = self._extract_with_local_fetch(url)
+        if not local_result.get("error"):
+            return local_result
 
+        if not self._brightdata_client_cls:
+            return {
+                "error": "Bright Data client not initialized.",
+                "local_attempt": local_result
+            }
         try:
-            # extract returns a dict with 'results' list
-            response = self.client.extract(urls=url)
-            # Simple summary/cleaning could be done here if needed, but raw return is fine for LLM
-            return response
+            with self._brightdata_client_cls(token=self.brightdata_api_key) as client:
+                unlocker_result = client.scrape_url(url=url)
+            normalized = self._normalize_unlocker_result(url=url, payload=unlocker_result)
+            if normalized.get("error"):
+                logger.error(f"Unlocker extraction returned error for {url}: {normalized.get('error')}")
+                return {
+                    "error": normalized.get("error"),
+                    "local_attempt": local_result,
+                    "unlocker_attempt": normalized
+                }
+            normalized["fallback"] = "unlocker"
+            normalized["local_attempt"] = local_result
+            return normalized
         except Exception as e:
-            logger.error(f"Extract failed: {e}")
-            return {"error": str(e)}
+            logger.exception(f"Extract failed: {e}")
+            return {"error": str(e), "local_attempt": local_result}
+
+    def _build_serp_query(self, query: str, topic: str = "general", time_range: str = None) -> str:
+        """
+        Build a SERP-friendly query string with lightweight topic/time hints.
+        """
+        segments = [query.strip()]
+        if topic and topic.lower() in {"news", "finance"}:
+            segments.append(topic.lower())
+        if time_range and time_range != "none":
+            segments.append(f"past {time_range}")
+        return " ".join([s for s in segments if s]).strip()
+
+    def _normalize_serp_results(
+        self,
+        query: str,
+        merged_query: str,
+        topic: str,
+        time_range: Optional[str],
+        search_depth: str,
+        payload: Any,
+    ) -> Dict[str, Any]:
+        """
+        Normalize Bright Data SERP response into internal result schema.
+        """
+        data = getattr(payload, "data", payload)
+        if isinstance(data, dict):
+            items = data.get("results") or data.get("data") or []
+        elif isinstance(data, list):
+            items = data
+        else:
+            items = []
+
+        normalized_results = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            url = item.get("link") or item.get("url") or ""
+            title = item.get("title") or "Untitled Source"
+            snippet = item.get("description") or item.get("snippet") or item.get("content") or ""
+            normalized_results.append(
+                {
+                    "title": str(title),
+                    "url": str(url),
+                    "content": str(snippet),
+                    "raw_content": str(snippet),
+                }
+            )
+
+        return {
+            "query": query,
+            "effective_query": merged_query,
+            "topic": topic,
+            "time_range": time_range,
+            "search_depth": search_depth,
+            "results": normalized_results,
+        }
+
+    def _extract_with_local_fetch(self, url: str) -> Dict[str, Any]:
+        """
+        Basic local extraction as fast path before using Unlocker.
+        """
+        try:
+            response = requests.get(
+                url,
+                timeout=(5, 20),
+                headers={
+                    "User-Agent": (
+                        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/124.0.0.0 Safari/537.36"
+                    )
+                },
+            )
+            response.raise_for_status()
+            html = response.text or ""
+            text = self._clean_html_to_text(html)
+            if len(text) < 100:
+                return {"error": "Local fetch succeeded but extracted text is too short."}
+            title = self._extract_title(html)
+            return {
+                "results": [
+                    {
+                        "url": url,
+                        "title": title or "Untitled Source",
+                        "content": text[:8000],
+                        "raw_content": text[:12000],
+                    }
+                ],
+                "fallback": "local",
+            }
+        except Exception as e:
+            return {"error": f"Local fetch failed: {e}"}
+
+    def _normalize_unlocker_result(self, url: str, payload: Any) -> Dict[str, Any]:
+        """
+        Normalize Unlocker response into current extraction schema.
+        """
+        data = getattr(payload, "data", payload)
+        content = ""
+        title = "Untitled Source"
+
+        if isinstance(data, dict):
+            content = (
+                data.get("content")
+                or data.get("text")
+                or data.get("body")
+                or data.get("html")
+                or ""
+            )
+            title = data.get("title") or title
+        elif isinstance(data, str):
+            content = data
+
+        if not content:
+            return {"error": "Unlocker returned empty content."}
+
+        if "<html" in content.lower():
+            cleaned = self._clean_html_to_text(content)
+            title = self._extract_title(content) or title
+        else:
+            cleaned = str(content).strip()
+
+        if len(cleaned) < 100:
+            return {"error": "Unlocker content is too short."}
+
+        return {
+            "results": [
+                {
+                    "url": url,
+                    "title": title,
+                    "content": cleaned[:8000],
+                    "raw_content": cleaned[:12000],
+                }
+            ]
+        }
+
+    @staticmethod
+    def _extract_title(html: str) -> str:
+        match = re.search(r"<title[^>]*>(.*?)</title>", html, flags=re.IGNORECASE | re.DOTALL)
+        if not match:
+            return ""
+        return unescape(re.sub(r"\s+", " ", match.group(1))).strip()
+
+    @staticmethod
+    def _clean_html_to_text(html: str) -> str:
+        without_script = re.sub(r"<script[\s\S]*?</script>", " ", html, flags=re.IGNORECASE)
+        without_style = re.sub(r"<style[\s\S]*?</style>", " ", without_script, flags=re.IGNORECASE)
+        text = re.sub(r"<[^>]+>", " ", without_style)
+        text = unescape(text)
+        return re.sub(r"\s+", " ", text).strip()
     
     def _estimate_tokens(self, messages: List[Dict[str, Any]]) -> int:
         """
@@ -322,8 +489,8 @@ class SearchSubAgent:
         Main entry point for the sub-agent.
         Orchestrates the search and extraction process.
         """
-        if not self.llm_client or not self.client:
-            return {"error": "Sub-agent not fully initialized (missing LLM or Tavily key)."}
+        if not self.llm_client or not self._brightdata_client_cls:
+            return {"error": "Sub-agent not fully initialized (missing LLM or Bright Data key)."}
 
         agent_name = self.agent_name
         agent_logger.info(f"[{agent_name}] === Starting Search Sub-Agent ===")
@@ -442,6 +609,10 @@ class SearchSubAgent:
                             # Log that we are searching, but put results in search_logger
                             logger.info(f"Sub-Agent performing search: {t_query}")
                             result = self._search_tool(t_query, t_topic, t_time, t_depth, t_max)
+                            if isinstance(result, dict) and result.get("error"):
+                                logger.error(
+                                    f"search_tool returned error for query={t_query!r}: {result.get('error')}"
+                                )
                             
                             # Log full search results to dedicated logger
                             search_logger.info(f"--- Search Results for '{t_query}' ---")
@@ -454,6 +625,10 @@ class SearchSubAgent:
                             url = args.get("url")
                             logger.info(f"Sub-Agent extracting: {url}")
                             result = self._extract_tool(url)
+                            if isinstance(result, dict) and result.get("error"):
+                                logger.error(
+                                    f"extract_tool returned error for url={url!r}: {result.get('error')}"
+                                )
                             
                             # Log full extraction results to dedicated logger
                             search_logger.info(f"--- Extract Results for '{url}' ---")
