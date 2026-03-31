@@ -1,5 +1,5 @@
 from .tools import Tool
-from datetime import datetime
+from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 from services.market_data import get_last_price, get_market_status, get_kline_data
 from repositories.position_repo import list_positions
@@ -11,6 +11,15 @@ from config.agent_config import AgentConfig
 from .memory_tools import create_memory_tools
 from services.agent.trade_execution_tool import execute_trade_tool
 from services.security.api_key_security import resolve_runtime_api_key
+
+KLINE_MODE_PRESETS = {
+    # Short-term high precision: intraday structure.
+    "short_term_high_precision": {"interval": "5m", "lookback_days": 3},
+    # Mid-term medium precision: swing trend and momentum.
+    "mid_term_medium_precision": {"interval": "1h", "lookback_days": 14},
+    # Long-term low precision: macro direction and regime.
+    "long_term_low_precision": {"interval": "1d", "lookback_days": 180},
+}
 
 
 def map_operation_side(operation: str, direction: str):
@@ -57,7 +66,11 @@ def register_default_tools(registry, db: Session, account_id: int, trace_id: str
     registry.register(
         Tool(
             name="get_kline_history",
-            description="Fetch kline (candlestick) history for a symbol within a time range and save it to a file in the sandbox. Returns file path and reading suggestions.",
+            description=(
+                "Fetch kline (candlestick) history using one of three default modes and save it to a file in the sandbox. "
+                "Modes: short_term_high_precision(5m, 3d), mid_term_medium_precision(1h, 14d), "
+                "long_term_low_precision(1d, 180d)."
+            ),
             parameters={
                 "type": "object",
                 "properties": {
@@ -69,24 +82,21 @@ def register_default_tools(registry, db: Session, account_id: int, trace_id: str
                         "type": "string",
                         "description": "Market identifier: CRYPTO or US"
                     },
-                    "interval": {
+                    "mode": {
                         "type": "string",
-                        "enum": ["1m", "5m", "15m", "30m", "1h", "4h", "1d"],
-                        "description": "Time interval"
-                    },
-                    "start_time": {
-                        "type": "string",
-                        "description": "Start time (ISO 8601), e.g. 2023-01-01T00:00:00"
+                        "enum": ["short_term_high_precision", "mid_term_medium_precision", "long_term_low_precision"],
+                        "description": "Preset kline mode with default interval and lookback window.",
+                        "default": "mid_term_medium_precision"
                     },
                     "end_time": {
                         "type": "string",
-                        "description": "End time (ISO 8601), optional"
+                        "description": "Optional end time (ISO 8601). Defaults to now."
                     }
                 },
-                "required": ["symbol", "market", "interval", "start_time"]
+                "required": ["symbol", "market"]
             },
-            func=lambda symbol, market, interval, start_time, end_time=None: _get_kline_and_save(
-                container_service, account_id, symbol, interval, start_time, end_time, market
+            func=lambda symbol, market, mode="mid_term_medium_precision", end_time=None: _get_kline_by_mode_and_save(
+                container_service, account_id, symbol, market, mode, end_time
             ),
             metadata={"tier": "required"}
         )
@@ -392,6 +402,61 @@ def _get_kline_and_save(service, account_id, symbol, interval, start_time, end_t
     }
 
 
+def _get_kline_by_mode_and_save(service, account_id, symbol, market, mode, end_time=None):
+    mode_key = str(mode or "mid_term_medium_precision").strip()
+    preset = KLINE_MODE_PRESETS.get(mode_key)
+    if not preset:
+        return {
+            "error": (
+                "Invalid mode. Available modes: "
+                "short_term_high_precision, mid_term_medium_precision, long_term_low_precision"
+            )
+        }
+
+    end_dt = _parse_iso_datetime(end_time) if end_time else datetime.utcnow()
+    if end_time and not end_dt:
+        return {"error": "Invalid end_time format. Please use ISO 8601 (e.g. 2023-01-01T00:00:00)."}
+
+    start_dt = end_dt - timedelta(days=int(preset["lookback_days"]))
+    start_ts = int(start_dt.timestamp() * 1000)
+    end_ts = int(end_dt.timestamp() * 1000)
+    interval = preset["interval"]
+
+    data = get_kline_data(
+        symbol,
+        market=market,
+        period=interval,
+        count=1000,
+        start_time=start_ts,
+        end_time=end_ts,
+    )
+    if isinstance(data, dict) and "error" in data:
+        return data
+
+    import json
+    content = json.dumps(data, ensure_ascii=False, indent=2)
+
+    timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
+    filename = f"/workspace/kline_{symbol}_{mode_key}_{timestamp}.json"
+    write_res = service.write_file(account_id, filename, content)
+
+    if write_res != "Success":
+        return {"error": f"Failed to save K-line data to container: {write_res}"}
+
+    return {
+        "status": "success",
+        "mode": mode_key,
+        "interval": interval,
+        "lookback_days": int(preset["lookback_days"]),
+        "file_path": filename,
+        "message": (
+            f"K-line data ({mode_key}) saved to {filename}. "
+            "You can use 'read_file' to view it (truncated) or 'run_python_script' to analyze it."
+        ),
+        "data_preview": str(data)[:200] + "..."
+    }
+
+
 def _serialize_account(account):
     if not account: return None
     return {
@@ -446,5 +511,18 @@ def _parse_iso_time(time_str):
         ts = time_str.replace('Z', '+00:00')
         dt = datetime.fromisoformat(ts)
         return int(dt.timestamp() * 1000)
+    except ValueError:
+        return None
+
+
+def _parse_iso_datetime(time_str):
+    if not time_str:
+        return None
+    try:
+        ts = time_str.replace('Z', '+00:00')
+        dt = datetime.fromisoformat(ts)
+        if dt.tzinfo is not None:
+            return dt.astimezone().replace(tzinfo=None)
+        return dt
     except ValueError:
         return None

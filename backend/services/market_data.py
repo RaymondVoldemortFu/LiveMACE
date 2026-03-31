@@ -1,5 +1,6 @@
 from typing import Dict, List, Any
 import logging
+from datetime import datetime
 from .hyperliquid_market_data import (
     get_last_price_from_hyperliquid,
     get_kline_data_from_hyperliquid,
@@ -177,6 +178,58 @@ def _save_klines(symbol: str, market: str, period: str, klines: List[Dict[str, A
         db.close()
 
 
+def _normalize_time_for_kline_cache(value: Any, period: str) -> Any:
+    """
+    Normalize time-like values into period-aligned millisecond buckets so
+    semantically equivalent requests can share Redis tool-cache keys.
+    """
+    if value is None:
+        return None
+
+    ts_ms: int | None = None
+    if isinstance(value, (int, float)):
+        ts_ms = int(value)
+    elif isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return None
+        try:
+            ts_ms = int(float(raw))
+        except ValueError:
+            try:
+                dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                ts_ms = int(dt.timestamp() * 1000)
+            except ValueError:
+                return value
+    else:
+        return value
+
+    period_seconds = _period_to_seconds(period)
+    if not period_seconds or period_seconds <= 0:
+        return ts_ms
+
+    bucket_ms = period_seconds * 1000
+    return (ts_ms // bucket_ms) * bucket_ms
+
+
+def _build_kline_cache_args(
+    symbol: str,
+    market: str,
+    period: str,
+    count: int,
+    start_time: Any,
+    end_time: Any,
+) -> Dict[str, Any]:
+    return {
+        "symbol": symbol,
+        "market": market,
+        "period": period,
+        "count": count,
+        "start_time": _normalize_time_for_kline_cache(start_time, period),
+        "end_time": _normalize_time_for_kline_cache(end_time, period),
+    }
+
+
 def get_last_price(symbol: str, market: str = "CRYPTO") -> float:
     symbol_norm, market_norm = _resolve_market(symbol, market)
     key = f"{symbol_norm}.{market_norm}"
@@ -217,14 +270,14 @@ def get_kline_data(symbol: str, market: str = "CRYPTO", period: str = "1d", coun
     symbol_norm, market_norm = _resolve_market(symbol, market)
     key = f"{symbol_norm}.{market_norm}"
     round_id = tool_cache.get_current_round_id()
-    cache_args = {
-        "symbol": symbol_norm,
-        "market": market_norm,
-        "period": period,
-        "count": count,
-        "start_time": start_time,
-        "end_time": end_time,
-    }
+    cache_args = _build_kline_cache_args(
+        symbol=symbol_norm,
+        market=market_norm,
+        period=period,
+        count=count,
+        start_time=start_time,
+        end_time=end_time,
+    )
 
     try:
         cached_tool_data = tool_cache.get_json("get_kline_data", cache_args, round_id=round_id)

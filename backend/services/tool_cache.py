@@ -99,6 +99,7 @@ class RedisToolCache:
         try:
             raw = client.get(key)
             if raw is None:
+                logger.debug(f"Tool cache miss: tool={tool_name} round={effective_round_id}")
                 return None
             value = json.loads(raw)
             logger.debug(f"Tool cache hit: tool={tool_name} round={effective_round_id}")

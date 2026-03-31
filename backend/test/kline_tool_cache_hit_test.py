@@ -190,3 +190,31 @@ def test_kline_cache_isolated_across_different_rounds(monkeypatch):
         tool_cache.clear_round(round_b)
         tool_cache._client = original_client
 
+
+def test_kline_cache_hit_when_times_differ_within_same_period_bucket(monkeypatch):
+    _, original_client = _use_fake_redis()
+    calls = {"count": 0}
+
+    def _fake_fetch(symbol, period, count, start_time, end_time):
+        calls["count"] += 1
+        return [{"timestamp": calls["count"], "close": 66.66}]
+
+    monkeypatch.setattr(market_data, "_save_klines", lambda *args, **kwargs: None)
+    monkeypatch.setattr(market_data, "get_kline_data_from_hyperliquid", _fake_fetch)
+
+    round_id = tool_cache.create_round_id(scope="pytest")
+    try:
+        with tool_cache.use_round(round_id):
+            # 1d period: both end_time values are on same day, should normalize to same cache bucket.
+            market_data.get_kline_data(
+                "BTC", "CRYPTO", period="1d", count=20, start_time=1772323200123, end_time=1772409599000
+            )
+            market_data.get_kline_data(
+                "BTC", "CRYPTO", period="1d", count=20, start_time=1772323200999, end_time=1772409599999
+            )
+
+        assert calls["count"] == 1
+    finally:
+        tool_cache.clear_round(round_id)
+        tool_cache._client = original_client
+
