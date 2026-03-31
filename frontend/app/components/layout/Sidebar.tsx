@@ -10,6 +10,8 @@ interface SidebarProps {
 
 export default function Sidebar({ currentPage = 'comprehensive', onPageChange, onAccountUpdated }: SidebarProps) {
   const [settingsOpen, setSettingsOpen] = useState(false)
+  // NOTE: 业务要求临时隐藏 Paper Trading 入口；请保留相关代码，勿删除（DO NOT DELETE）。
+  const SHOW_PAPER_TRADING_ENTRY = false
 
   return (
     <>
@@ -40,17 +42,19 @@ export default function Sidebar({ currentPage = 'comprehensive', onPageChange, o
             <Table2 className="w-5 h-5" />
           </button>
 
-          <button
-            className={`flex items-center justify-center w-10 h-10 rounded-lg transition-colors ${
-              currentPage === 'portfolio'
-                ? 'bg-secondary/80 text-secondary-foreground'
-                : 'hover:bg-muted text-muted-foreground'
-            }`}
-            onClick={() => onPageChange?.('portfolio')}
-            title="Portfolio"
-          >
-            <PieChart className="w-5 h-5" />
-          </button>
+          {SHOW_PAPER_TRADING_ENTRY && (
+            <button
+              className={`flex items-center justify-center w-10 h-10 rounded-lg transition-colors ${
+                currentPage === 'portfolio'
+                  ? 'bg-secondary/80 text-secondary-foreground'
+                  : 'hover:bg-muted text-muted-foreground'
+              }`}
+              onClick={() => onPageChange?.('portfolio')}
+              title="Portfolio"
+            >
+              <PieChart className="w-5 h-5" />
+            </button>
+          )}
 
           <button
             className={`flex items-center justify-center w-10 h-10 rounded-lg transition-colors ${
@@ -111,18 +115,20 @@ export default function Sidebar({ currentPage = 'comprehensive', onPageChange, o
             <BarChart3 className="w-5 h-5" />
             <span className="text-xs mt-1">Arena</span>
           </button>
-          <button
-            className={`flex flex-col items-center justify-center w-12 h-12 rounded-lg transition-colors ${
-              currentPage === 'portfolio'
-                ? 'bg-secondary/80 text-secondary-foreground'
-                : 'hover:bg-muted text-muted-foreground'
-            }`}
-            onClick={() => onPageChange?.('portfolio')}
-            title="Portfolio"
-          >
-            <PieChart className="w-5 h-5" />
-            <span className="text-xs mt-1">Portfolio</span>
-          </button>
+          {SHOW_PAPER_TRADING_ENTRY && (
+            <button
+              className={`flex flex-col items-center justify-center w-12 h-12 rounded-lg transition-colors ${
+                currentPage === 'portfolio'
+                  ? 'bg-secondary/80 text-secondary-foreground'
+                  : 'hover:bg-muted text-muted-foreground'
+              }`}
+              onClick={() => onPageChange?.('portfolio')}
+              title="Portfolio"
+            >
+              <PieChart className="w-5 h-5" />
+              <span className="text-xs mt-1">Portfolio</span>
+            </button>
+          )}
            <button
             className={`flex flex-col items-center justify-center w-12 h-12 rounded-lg transition-colors ${
               currentPage === 'agent-status'
