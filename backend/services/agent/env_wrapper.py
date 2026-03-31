@@ -139,28 +139,24 @@ def register_default_tools(registry, db: Session, account_id: int, trace_id: str
                     "topic": {
                         "type": "string",
                         "enum": ["general", "news", "finance"],
-                        "description": "Search topic category."
+                        "description": "Optional category hint (merged into query for news/finance)."
                     },
                     "time_range": {
                         "type": "string",
                         "enum": ["day", "week", "month", "year", "none"],
-                        "description": "Search time range."
-                    },
-                    "search_depth": {
-                        "type": "string",
-                        "enum": ["basic", "advanced"],
-                        "description": "Search depth. basic is faster with fewer results; advanced is slower with more detailed results.",
-                        "default": "basic"
+                        "description": "Google recency filter (past day/week/month/year); none = no filter."
                     },
                     "max_results": {
                         "type": "integer",
-                        "description": "Maximum number of results to return.",
+                        "description": "Maximum number of organic results to return.",
                         "default": 5
                     }
                 },
-                "required": ["query", "topic", "time_range"]
+                "required": ["query"]
             },
-            func=lambda query, topic, time_range, search_depth="basic", max_results=5: search_agent.run(query, topic, time_range, search_depth, max_results),
+            func=lambda query, topic="general", time_range="none", max_results=5: search_agent.run(
+                query, topic, time_range, max_results
+            ),
             metadata={"tier": "important"}
         )
     )

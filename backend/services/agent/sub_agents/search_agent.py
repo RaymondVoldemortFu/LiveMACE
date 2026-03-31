@@ -56,27 +56,37 @@ class SearchSubAgent:
                 # Fallback to cl100k_base for unknown models
                 self.tokenizer = tiktoken.get_encoding("cl100k_base")
 
-    def _search_tool(self, query: str, topic: str = "general", time_range: str = None, 
-                     search_depth: str = "basic", max_results: int = 5) -> Dict[str, Any]:
+    @staticmethod
+    def _google_recency_tbs(time_range: Optional[str]) -> Optional[str]:
+        """Map UI enum to Google `tbs=qdr:` segment (Bright Data SERP URL builder)."""
+        if not time_range or str(time_range).lower() == "none":
+            return None
+        return {"day": "d", "week": "w", "month": "m", "year": "y"}.get(str(time_range).lower())
+
+    def _search_tool(self, query: str, topic: str = "general", time_range: str = None,
+                     max_results: int = 5) -> Dict[str, Any]:
         """
-        Executes a search query using Bright Data SERP API.
+        Executes a search query using Bright Data Google SERP (`query`, `num_results`, optional `time_range` tbs).
         """
         if not self._brightdata_client_cls:
             return {"error": "Bright Data client not initialized."}
 
         try:
-            merged_query = self._build_serp_query(query=query, topic=topic, time_range=time_range)
+            merged_query = self._merge_topic_into_query(query=query, topic=topic)
+            serp_kwargs: Dict[str, Any] = {"num_results": max_results}
+            tbs = self._google_recency_tbs(time_range)
+            if tbs:
+                serp_kwargs["time_range"] = tbs
             with self._brightdata_client_cls(token=self.brightdata_api_key) as client:
                 serp_results = client.search.google(
                     query=merged_query,
-                    num_results=max_results
+                    **serp_kwargs,
                 )
             return self._normalize_serp_results(
                 query=query,
                 merged_query=merged_query,
                 topic=topic,
                 time_range=time_range,
-                search_depth=search_depth,
                 payload=serp_results,
             )
         except Exception as e:
@@ -115,15 +125,11 @@ class SearchSubAgent:
             logger.exception(f"Extract failed: {e}")
             return {"error": str(e), "local_attempt": local_result}
 
-    def _build_serp_query(self, query: str, topic: str = "general", time_range: str = None) -> str:
-        """
-        Build a SERP-friendly query string with lightweight topic/time hints.
-        """
+    def _merge_topic_into_query(self, query: str, topic: str = "general") -> str:
+        """Optional topic hint merged into the query string (not a SERP API field)."""
         segments = [query.strip()]
         if topic and topic.lower() in {"news", "finance"}:
             segments.append(topic.lower())
-        if time_range and time_range != "none":
-            segments.append(f"past {time_range}")
         return " ".join([s for s in segments if s]).strip()
 
     def _normalize_serp_results(
@@ -132,12 +138,21 @@ class SearchSubAgent:
         merged_query: str,
         topic: str,
         time_range: Optional[str],
-        search_depth: str,
         payload: Any,
     ) -> Dict[str, Any]:
         """
         Normalize Bright Data SERP response into internal result schema.
         """
+        if getattr(payload, "success", True) is False and getattr(payload, "error", None):
+            return {
+                "error": str(payload.error),
+                "query": query,
+                "effective_query": merged_query,
+                "topic": topic,
+                "time_range": time_range,
+                "results": [],
+            }
+
         data = getattr(payload, "data", payload)
         if isinstance(data, dict):
             items = data.get("results") or data.get("data") or []
@@ -167,7 +182,6 @@ class SearchSubAgent:
             "effective_query": merged_query,
             "topic": topic,
             "time_range": time_range,
-            "search_depth": search_depth,
             "results": normalized_results,
         }
 
@@ -483,8 +497,8 @@ class SearchSubAgent:
             logger.warning(f"Forced summary generation failed: {e}")
             return latest_content.strip()
 
-    def run(self, query: str, topic: str = "general", time_range: str = "none", 
-            search_depth: str = "basic", max_results: int = 5) -> Dict[str, Any]:
+    def run(self, query: str, topic: str = "general", time_range: str = "none",
+            max_results: int = 5) -> Dict[str, Any]:
         """
         Main entry point for the sub-agent.
         Orchestrates the search and extraction process.
@@ -498,7 +512,7 @@ class SearchSubAgent:
 
         messages = [
             {"role": "system", "content": SUB_AGENT_SYSTEM_PROMPT.format(max_steps=self.max_steps)},
-            {"role": "user", "content": f"Query: {query}\nTopic: {topic}\nTime Range: {time_range}\nDepth: {search_depth}\nMax Results: {max_results}"}
+            {"role": "user", "content": f"Query: {query}\nTopic: {topic}\nTime Range: {time_range}\nMax Results: {max_results}"}
         ]
 
         tools = [
@@ -506,15 +520,22 @@ class SearchSubAgent:
                 "type": "function",
                 "function": {
                     "name": "search_tool",
-                    "description": "Execute a web search.",
+                    "description": "Google SERP search via Bright Data (query + optional recency and result count).",
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "query": {"type": "string"},
-                            "topic": {"type": "string", "enum": ["general", "news", "finance"]},
-                            "time_range": {"type": "string", "enum": ["day", "week", "month", "year", "none"]},
-                            "search_depth": {"type": "string", "enum": ["basic", "advanced"]},
-                            "max_results": {"type": "integer"}
+                            "query": {"type": "string", "description": "Search keywords."},
+                            "topic": {
+                                "type": "string",
+                                "enum": ["general", "news", "finance"],
+                                "description": "Optional hint; news/finance are appended to the query text.",
+                            },
+                            "time_range": {
+                                "type": "string",
+                                "enum": ["day", "week", "month", "year", "none"],
+                                "description": "Google recency filter (tbs qdr); none = no date filter.",
+                            },
+                            "max_results": {"type": "integer", "description": "Number of organic results to fetch."},
                         },
                         "required": ["query"]
                     }
@@ -603,12 +624,11 @@ class SearchSubAgent:
                             t_query = args.get("query")
                             t_topic = args.get("topic", topic)
                             t_time = args.get("time_range", time_range)
-                            t_depth = args.get("search_depth", search_depth)
                             t_max = args.get("max_results", max_results)
                             
                             # Log that we are searching, but put results in search_logger
                             logger.info(f"Sub-Agent performing search: {t_query}")
-                            result = self._search_tool(t_query, t_topic, t_time, t_depth, t_max)
+                            result = self._search_tool(t_query, t_topic, t_time, t_max)
                             if isinstance(result, dict) and result.get("error"):
                                 logger.error(
                                     f"search_tool returned error for query={t_query!r}: {result.get('error')}"
