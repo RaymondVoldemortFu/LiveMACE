@@ -29,6 +29,7 @@ import {
   type TradingAccount,
   type TradingAccountCreate,
 } from '@/lib/api'
+import { isBaselineAccountName } from '@/lib/baselineAccounts'
 
 interface SettingsDialogProps {
   open: boolean
@@ -492,7 +493,14 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
                     ) : (
                       <div className="flex items-center justify-between">
                         <div className="space-y-1 flex-1">
-                          <div className="font-medium">{account.name}</div>
+                          <div className="font-medium flex items-center gap-2 flex-wrap">
+                            {account.name}
+                            {isBaselineAccountName(account.name) ? (
+                              <span className="text-[10px] font-normal uppercase tracking-wide px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
+                                Baseline
+                              </span>
+                            ) : null}
+                          </div>
                           <div className="text-xs text-muted-foreground">
                             {account.model ? `Model: ${account.model}` : 'No model configured'} • {getAgentTypeLabel(account.agent_type)}
                             {account.memory_enabled === 'true' && ' • 🧠 Memory'}

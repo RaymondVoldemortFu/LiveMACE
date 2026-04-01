@@ -1,6 +1,15 @@
 import { useEffect, useState } from 'react'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { getAccounts } from '@/lib/api'
+import { isBaselineAccountName } from '@/lib/baselineAccounts'
 
 interface Account {
   id: number
@@ -103,6 +112,16 @@ export default function AccountSelector({
     return accountName
   }
 
+  const baselineAccounts = accounts.filter((a) => isBaselineAccountName(a.name))
+  const otherAccounts = accounts.filter((a) => !isBaselineAccountName(a.name))
+
+  const renderAccountItems = (list: AccountWithAssets[]) =>
+    list.map((account) => (
+      <SelectItem key={account.id} value={account.id.toString()}>
+        {displayName(account)}
+      </SelectItem>
+    ))
+
   // Find the current account in our loaded accounts list (which has total_assets)
   const currentAccountWithAssets = currentAccount 
     ? accounts.find(a => a.id === currentAccount.id) 
@@ -127,11 +146,18 @@ export default function AccountSelector({
           </SelectValue>
         </SelectTrigger>
         <SelectContent>
-          {accounts.map((account) => (
-            <SelectItem key={account.id} value={account.id.toString()}>
-              {displayName(account)}
-            </SelectItem>
-          ))}
+          {baselineAccounts.length > 0 ? (
+            <SelectGroup>
+              <SelectLabel>Baseline</SelectLabel>
+              {renderAccountItems(baselineAccounts)}
+            </SelectGroup>
+          ) : null}
+          {otherAccounts.length > 0 ? (
+            <SelectGroup>
+              {baselineAccounts.length > 0 ? <SelectLabel>Agents</SelectLabel> : null}
+              {renderAccountItems(otherAccounts)}
+            </SelectGroup>
+          ) : null}
         </SelectContent>
       </Select>
     </div>

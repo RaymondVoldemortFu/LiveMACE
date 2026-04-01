@@ -4,7 +4,16 @@ import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { isBaselineAccountName } from '@/lib/baselineAccounts'
 import { toast } from 'react-hot-toast'
 import AssetCurveWithData from './AssetCurveWithData'
 import AccountSelector from '@/components/layout/AccountSelector'
@@ -196,6 +205,42 @@ export default function AccountDataView({
     }
   }, [selectedEvalAccountId, evalIntervalSeconds, checkpointLimit])
 
+  const evalCheckpointSelectContent = useMemo(() => {
+    if (accounts && accounts.length > 0) {
+      const baseline = accounts.filter((a: any) => isBaselineAccountName(a.name))
+      const rest = accounts.filter((a: any) => !isBaselineAccountName(a.name))
+      return (
+        <>
+          {baseline.length > 0 ? (
+            <SelectGroup>
+              <SelectLabel>Baseline</SelectLabel>
+              {baseline.map((a: any) => (
+                <SelectItem key={a.id} value={String(a.id)}>
+                  {a.name || `#${a.id}`}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          ) : null}
+          {rest.length > 0 ? (
+            <SelectGroup>
+              {baseline.length > 0 ? <SelectLabel>Agents</SelectLabel> : null}
+              {rest.map((a: any) => (
+                <SelectItem key={a.id} value={String(a.id)}>
+                  {a.name || `#${a.id}`}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          ) : null}
+        </>
+      )
+    }
+    return leaderboardItems.map((x) => (
+      <SelectItem key={x.account_id} value={String(x.account_id)}>
+        {x.agent_name || `#${x.account_id}`}
+      </SelectItem>
+    ))
+  }, [accounts, leaderboardItems])
+
   const cancelOrder = async (orderId: number) => {
     try {
       const response = await fetch(`${API_BASE}/api/orders/cancel/${orderId}`, {
@@ -354,15 +399,7 @@ export default function AccountDataView({
                       <SelectTrigger>
                         <SelectValue placeholder="选择Agent" />
                       </SelectTrigger>
-                      <SelectContent>
-                        {(accounts && accounts.length > 0
-                          ? accounts
-                          : leaderboardItems.map(x => ({ id: x.account_id, name: x.agent_name || `#${x.account_id}` }))).map((a: any) => (
-                          <SelectItem key={a.id} value={String(a.id)}>
-                            {a.name || `#${a.id}`}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
+                      <SelectContent>{evalCheckpointSelectContent}</SelectContent>
                     </Select>
                   </div>
                 </div>
