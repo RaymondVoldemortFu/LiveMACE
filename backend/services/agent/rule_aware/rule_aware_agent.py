@@ -215,7 +215,7 @@ class RuleAwareAgent(BaseAgent):
 
                 # Add assistant message - use build_message_dict to preserve provider-specific
                 # extra fields (e.g. Gemini's thought_signature on tool_calls)
-                resp_dict = LLMClient.build_message_dict(resp)
+                resp_dict = self.llm.build_assistant_message_dict(resp)
                 messages.append(resp_dict)
 
                 # Accumulate assistant content (handle multi-turn responses)
@@ -289,6 +289,8 @@ class RuleAwareAgent(BaseAgent):
                             })
 
                     messages.extend(tool_results)
+                    if self.llm.is_gemini_model() and tool_results:
+                        messages.append(LLMClient.gemini_post_tool_user_message())
                     # Reset accumulated content after tool calls
                     accumulated_content = ""
 

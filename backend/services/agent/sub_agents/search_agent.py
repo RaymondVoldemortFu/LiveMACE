@@ -579,7 +579,7 @@ class SearchSubAgent:
                 msg = self.llm_client.call(messages, tools)
 
                 # Handle message object for logging/history
-                msg_dict = msg.model_dump() if hasattr(msg, 'model_dump') else msg
+                msg_dict = self.llm_client.build_assistant_message_dict(msg)
                 messages.append(msg_dict)
 
                 # Log Response
@@ -662,6 +662,8 @@ class SearchSubAgent:
                             "name": func_name,
                             "content": json.dumps(result, ensure_ascii=False)
                         })
+                    if self.llm_client.is_gemini_model():
+                        messages.append(LLMClient.gemini_post_tool_user_message())
                 else:
                     # No tool calls, check for final response in content
                     match = re.search(r"<FINAL_RESPONSE>(.*?)</FINAL_RESPONSE>", content, re.DOTALL)

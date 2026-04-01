@@ -595,6 +595,8 @@ def call_agent_for_decision(
                 for t in tool_calls_data:
                     if isinstance(t, dict):
                         tool_calls_list.append(t)
+                    elif hasattr(t, "function") and hasattr(t, "id"):
+                        tool_calls_list.append(LLMClient._tool_call_dict_roundtrip(t))
                     elif hasattr(t, "model_dump"):
                         tool_calls_list.append(t.model_dump())
                     elif hasattr(t, "dict"):

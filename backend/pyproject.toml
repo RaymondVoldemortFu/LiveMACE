@@ -49,3 +49,8 @@ dev = [
 [tool.hatch.build.targets.wheel]
 packages = ["main.py"]
 
+[tool.pytest.ini_options]
+markers = [
+    "integration: calls external HTTP APIs (requires .env credentials)",
+]
+
