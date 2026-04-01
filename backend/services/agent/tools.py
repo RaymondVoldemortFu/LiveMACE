@@ -22,7 +22,14 @@ class ToolRegistry:
         self.tools[tool.name] = tool
 
     def get(self, name):
-        return self.tools[name]
+        if name in self.tools:
+            return self.tools[name]
+        # 部分模型会返回带命名空间的名称（如 python_repl:run_python_script）
+        if isinstance(name, str) and ":" in name:
+            suffix = name.rsplit(":", 1)[-1]
+            if suffix in self.tools:
+                return self.tools[suffix]
+        raise KeyError(name)
 
     def set_active_tools(self, names: Optional[Iterable[str]]):
         if names is None:

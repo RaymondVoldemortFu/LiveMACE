@@ -49,7 +49,7 @@ cd backend
 uv sync
 # ensure Redis is available locally (example)
 docker run -d --name redis -p 6379:6379 valkey/valkey:8-alpine
-uv run uvicorn main:app --reload --port 5611 --host 0.0.0.0
+uv run uvicorn main:app --port 5611 --host 0.0.0.0
 ```
 
 ### Build

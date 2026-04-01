@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import copy
 import logging
 import os
 from typing import Any, List, Optional, Sequence
@@ -126,6 +127,42 @@ class LLMClient:
         custom = (os.getenv("GEMINI_THOUGHT_SIGNATURE_PLACEHOLDER") or "").strip()
         return custom if custom else _DEFAULT_GEMINI_THOUGHT_SIG_PLACEHOLDER
 
+    @staticmethod
+    def _collapse_json_schema_union_types_for_gemini(node: Any) -> None:
+        """
+        Gemini 经部分网关转 Proto 时，properties 里 JSON Schema 的 type 不能是 list（如 ["number","string"]），
+        否则会 400：Proto field is not repeating, cannot start list。
+        """
+        if isinstance(node, dict):
+            t = node.get("type")
+            if isinstance(t, list):
+                # 优先选数值类型，避免 ["number","string"] 误选 string 丢失语义
+                for p in ("number", "integer", "boolean", "string", "array", "object"):
+                    if p in t:
+                        node["type"] = p
+                        break
+                else:
+                    node["type"] = "string"
+            for v in node.values():
+                LLMClient._collapse_json_schema_union_types_for_gemini(v)
+        elif isinstance(node, list):
+            for item in node:
+                LLMClient._collapse_json_schema_union_types_for_gemini(item)
+
+    @staticmethod
+    def _sanitize_openai_tools_for_gemini(tools: Sequence[Any]) -> list[Any]:
+        """深拷贝并修正 tools，避免修改 registry 内 parameters 引用。"""
+        out = copy.deepcopy(list(tools))
+        for entry in out:
+            if not isinstance(entry, dict):
+                continue
+            fn = entry.get("function")
+            if isinstance(fn, dict):
+                params = fn.get("parameters")
+                if isinstance(params, dict):
+                    LLMClient._collapse_json_schema_union_types_for_gemini(params)
+        return out
+
     def call(
         self,
         messages,
@@ -154,6 +191,8 @@ class LLMClient:
         # 关闭并行工具输出，迫使模型逐条发起调用，避免后续 part 缺签导致 400。
         if self.is_gemini_model():
             request_kwargs["parallel_tool_calls"] = False
+            if tools:
+                request_kwargs["tools"] = self._sanitize_openai_tools_for_gemini(tools)
 
         response = self.client.chat.completions.create(
             **request_kwargs,

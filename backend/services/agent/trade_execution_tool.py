@@ -1,4 +1,5 @@
 import logging
+import re
 from decimal import Decimal
 from typing import Any, Dict, Optional
 
@@ -17,6 +18,49 @@ SUPPORTED_CRYPTO_SYMBOLS = {"BTC", "ETH", "SOL", "BNB", "XRP", "DOGE"}
 SUPPORTED_US_SYMBOLS = {
     "AAPL", "NVDA", "GOOGL", "META", "AMZN", "TSLA", "PG", "JNJ", "UNH", "JPM", "V", "BA", "XOM", "NEE", "AMT", "PLD", "LIN"
 }
+
+
+def _parse_float_loose(value: Any) -> Optional[float]:
+    """从数字或杂糅 XML/文本中提取第一个合法 float；无法解析返回 None。"""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        m = re.search(r"-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?", value.strip())
+        if m:
+            try:
+                return float(m.group(0))
+            except ValueError:
+                return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_int_loose(value: Any, *, default: int = 1) -> int:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        m = re.search(r"-?\d+", value.strip())
+        if m:
+            try:
+                return int(m.group(0))
+            except ValueError:
+                return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def execute_trade_tool(
@@ -46,8 +90,36 @@ def execute_trade_tool(
         direction = (direction or "long").strip().lower()
         size_mode = (size_mode or "portion").strip().lower()
         symbol = (symbol or "").strip().upper()
-        leverage = int(leverage or 1)
+        leverage = _parse_int_loose(leverage, default=1)
         leverage = max(1, min(leverage, 10))
+
+        if target_portion_of_balance is not None:
+            coerced = _parse_float_loose(target_portion_of_balance)
+            if coerced is None:
+                return {
+                    "executed": False,
+                    "error": (
+                        f"Invalid target_portion_of_balance: expected a number, got {target_portion_of_balance!r}. "
+                        "Use JSON tool arguments only (no XML)."
+                    ),
+                }
+            target_portion_of_balance = coerced
+        if usd_amount is not None:
+            coerced = _parse_float_loose(usd_amount)
+            if coerced is None:
+                return {
+                    "executed": False,
+                    "error": f"Invalid usd_amount: expected a number, got {usd_amount!r}. Use JSON tool arguments only.",
+                }
+            usd_amount = coerced
+        if close_ratio is not None:
+            coerced = _parse_float_loose(close_ratio)
+            if coerced is None:
+                return {
+                    "executed": False,
+                    "error": f"Invalid close_ratio: expected a number, got {close_ratio!r}. Use JSON tool arguments only.",
+                }
+            close_ratio = coerced
 
         account = db.query(Account).filter(Account.id == account_id).first()
         if not account:
