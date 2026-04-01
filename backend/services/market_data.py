@@ -1,6 +1,6 @@
 from typing import Dict, List, Any
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from .hyperliquid_market_data import (
     get_last_price_from_hyperliquid,
     get_kline_data_from_hyperliquid,
@@ -178,6 +178,17 @@ def _save_klines(symbol: str, market: str, period: str, klines: List[Dict[str, A
         db.close()
 
 
+def _iso_string_to_utc_epoch_ms(raw: str) -> int:
+    """ISO 8601 → UTC 瞬时点毫秒。naive 按 UTC 解释，与行情层一致，避免依赖服务器本地时区。"""
+    ts = raw.replace("Z", "+00:00")
+    dt = datetime.fromisoformat(ts)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+    return int(dt.timestamp() * 1000)
+
+
 def _normalize_time_for_kline_cache(value: Any, period: str) -> Any:
     """
     Normalize time-like values into period-aligned millisecond buckets so
@@ -197,8 +208,7 @@ def _normalize_time_for_kline_cache(value: Any, period: str) -> Any:
             ts_ms = int(float(raw))
         except ValueError:
             try:
-                dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-                ts_ms = int(dt.timestamp() * 1000)
+                ts_ms = _iso_string_to_utc_epoch_ms(raw)
             except ValueError:
                 return value
     else:

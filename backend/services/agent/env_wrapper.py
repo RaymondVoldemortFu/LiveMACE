@@ -1,5 +1,5 @@
 from .tools import Tool
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm import Session
 from services.market_data import get_last_price, get_market_status, get_kline_data
 from repositories.position_repo import list_positions
@@ -409,7 +409,7 @@ def _get_kline_by_mode_and_save(service, account_id, symbol, market, mode, end_t
             )
         }
 
-    end_dt = _parse_iso_datetime(end_time) if end_time else datetime.utcnow()
+    end_dt = _parse_iso_datetime(end_time) if end_time else datetime.now(timezone.utc)
     if end_time and not end_dt:
         return {"error": "Invalid end_time format. Please use ISO 8601 (e.g. 2023-01-01T00:00:00)."}
 
@@ -500,25 +500,37 @@ def _get_kline_wrapper(symbol, interval, start_time, end_time=None, market="CRYP
     return get_kline_data(symbol, market=market, period=interval, count=1000, start_time=start_ts, end_time=end_ts)
 
 
+def _iso_string_to_utc_aware(dt: datetime) -> datetime:
+    """
+    将 fromisoformat 得到的 datetime 规范为 UTC、带 tzinfo。
+
+    - 已带偏移/Z 的：转为 UTC。
+    - 无 tzinfo 的 naive：按 UTC 解释（与常见行情/K 线 API 一致，避免依赖服务器本地时区）。
+    """
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
 def _parse_iso_time(time_str):
-    if not time_str: return None
+    if not time_str:
+        return None
     try:
-        # Handle Z suffix replacement for fromisoformat compatibility in older python
-        ts = time_str.replace('Z', '+00:00')
+        ts = time_str.replace("Z", "+00:00")
         dt = datetime.fromisoformat(ts)
-        return int(dt.timestamp() * 1000)
+        dt_utc = _iso_string_to_utc_aware(dt)
+        return int(dt_utc.timestamp() * 1000)
     except ValueError:
         return None
 
 
 def _parse_iso_datetime(time_str):
+    """解析 ISO 8601，返回 UTC timezone-aware datetime；供与 timedelta 运算及 .timestamp() 使用。"""
     if not time_str:
         return None
     try:
-        ts = time_str.replace('Z', '+00:00')
+        ts = time_str.replace("Z", "+00:00")
         dt = datetime.fromisoformat(ts)
-        if dt.tzinfo is not None:
-            return dt.astimezone().replace(tzinfo=None)
-        return dt
+        return _iso_string_to_utc_aware(dt)
     except ValueError:
         return None

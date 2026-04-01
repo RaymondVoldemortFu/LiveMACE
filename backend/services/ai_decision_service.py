@@ -80,7 +80,6 @@ def call_ai_for_decision(account: Account, portfolio: Dict, prices: Dict[str, fl
         logger.info(f"Skipping AI trading for account {account.name} - using default API key")
         return None
 
-    created_local_round = False
     try:
         news_summary = fetch_latest_news()
         news_section = news_summary if news_summary else "No recent CoinJournal news available."

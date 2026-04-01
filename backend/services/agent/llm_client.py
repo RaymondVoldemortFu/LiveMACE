@@ -1,5 +1,8 @@
 # services/agent/llm_client.py
+from __future__ import annotations
+
 import base64
+import logging
 import os
 from typing import Any, List, Optional, Sequence
 
@@ -15,6 +18,8 @@ _THOUGHT_SIG_KEYS: tuple[str, ...] = ("thought_signature", "thoughtSignature")
 _DEFAULT_GEMINI_THOUGHT_SIG_PLACEHOLDER = base64.b64encode(
     b"open_alpha_arena_gemini_thought_sig_compat_v1"
 ).decode("ascii")
+
+logger = logging.getLogger(__name__)
 
 
 class LLMClient:
@@ -88,6 +93,26 @@ class LLMClient:
             )
         else:
             self.client = OpenAI(api_key=api_key, http_client=http_client)
+
+        # Gemini 路径使用自定义 httpx.Client；OpenAI() 会持有其引用，须通过 client.close() 释放连接。
+        self._closed = False
+
+    def close(self) -> None:
+        """关闭底层 HTTP 客户端（含自定义 httpx.Client）。长驻进程在丢弃 LLMClient 前应调用，避免套接字泄漏。"""
+        if self._closed:
+            return
+        try:
+            self.client.close()
+        except Exception as e:
+            logger.warning("LLMClient.close() failed: %s", e, exc_info=True)
+        finally:
+            self._closed = True
+
+    def __enter__(self) -> LLMClient:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
 
     @staticmethod
     def is_gemini_model_name(model: str | None) -> bool:
