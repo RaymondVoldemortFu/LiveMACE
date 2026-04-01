@@ -153,6 +153,19 @@ def setup_logging():
     tool_selector_trace_handler.setFormatter(formatter)
     tool_selector_trace_logger.addHandler(tool_selector_trace_handler)
 
+    # 9. Tool Cache Logger (Independent file, no propagation)
+    tool_cache_logger = logging.getLogger("tool_cache")
+    tool_cache_logger.setLevel(logging.DEBUG)
+    tool_cache_logger.propagate = False
+
+    tool_cache_log_file = os.path.join(log_dir, "tool_cache.log")
+    tool_cache_handler = logging.handlers.TimedRotatingFileHandler(
+        tool_cache_log_file, when="midnight", interval=1, backupCount=30, encoding="utf-8"
+    )
+    tool_cache_handler.setFormatter(formatter)
+    tool_cache_handler.setLevel(logging.DEBUG)
+    tool_cache_logger.addHandler(tool_cache_handler)
+
     # Uvicorn loggers integration
     logging.getLogger("uvicorn").handlers = []
     logging.getLogger("uvicorn.access").handlers = []

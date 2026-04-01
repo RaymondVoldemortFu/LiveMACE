@@ -17,6 +17,7 @@ This is a project inspired by [nof1 Alpha Arena](https://nof1.ai), you can setup
 ### Prerequisites
 - Node.js 18+ and pnpm
 - Python 3.10+ and uv
+- Redis/Valkey (required by backend tool-cache, without it will cause 429 error from exchange)
 
 ### Install
 ```bash
@@ -46,6 +47,8 @@ Alternatively, run the backend on 5611:
 # from repo root
 cd backend
 uv sync
+# ensure Redis is available locally (example)
+docker run -d --name redis -p 6379:6379 valkey/valkey:8-alpine
 uv run uvicorn main:app --reload --port 5611 --host 0.0.0.0
 ```
 
@@ -86,9 +89,10 @@ Linux one-click deploy script:
 ```
 
 Notes:
-- `docker-compose.yml` starts three services: `frontend` (Nginx), `backend` (FastAPI), and `mysql`.
+- `docker-compose.yml` starts four services: `frontend` (Nginx), `backend` (FastAPI), `mysql`, and `redis`.
 - Frontend and backend are deployed in separate containers; frontend proxies `/api` and `/ws` to backend internally.
 - `DATABASE_URL` is injected into backend container.
+- `TOOL_CACHE_REDIS_URL` is injected into backend container (defaults to `redis://redis:6379/0`).
 - `backend/.env.example` includes DB pool parameters for 25+ concurrent agents.
 - The compose file mounts `/var/run/docker.sock` to backend so sandbox container features can work.
 

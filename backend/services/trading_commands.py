@@ -31,6 +31,7 @@ from services.alpaca_market_data import SUPPORTED_STOCKS as US_TRADING_SYMBOLS
 from services.trading_symbols import AI_TRADING_SYMBOLS
 from repositories.account_repo import get_account, list_active_ai_accounts
 from repositories.position_repo import get_position
+from services.tool_cache import tool_cache
 
 
 logger = logging.getLogger(__name__)
@@ -150,7 +151,11 @@ def _select_side(db: Session, account: Account, symbol: str, max_value: float) -
     return side, quantity
 
 
-def _collect_account_decision(account_id: int, prices: Dict[str, float]) -> Optional[Dict]:
+def _collect_account_decision(
+    account_id: int,
+    prices: Dict[str, float],
+    decision_round_id: Optional[str] = None,
+) -> Optional[Dict]:
     """
     Collect agent decision for one account in an isolated DB session.
     This is safe to run in worker threads.
@@ -168,7 +173,13 @@ def _collect_account_decision(account_id: int, prices: Dict[str, float]) -> Opti
             return None
 
         if AgentConfig.USE_AGENT:
-            decision = call_agent_for_decision(account, portfolio, prices, db)
+            decision = call_agent_for_decision(
+                account,
+                portfolio,
+                prices,
+                db,
+                decision_round_id=decision_round_id,
+            )
         else:
             decision = call_ai_for_decision(account, portfolio, prices)
 
@@ -527,6 +538,9 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
             max(1, int(getattr(AgentConfig, "AGENT_MAX_CONCURRENCY", 1))),
         )
 
+        decision_round_id = tool_cache.create_round_id(scope="ai_trade")
+        logger.info(f"Started AI trading decision round: {decision_round_id}")
+
         agent_accounts = [
             a for a in accounts
             if str(getattr(a, "agent_type", "react") or "react").strip().lower() in AGENT_DECISION_TYPES
@@ -534,7 +548,12 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
         if agent_accounts:
             with ThreadPoolExecutor(max_workers=min(concurrency, len(agent_accounts))) as executor:
                 future_map = {
-                    executor.submit(_collect_account_decision, account.id, prices): account.id
+                    executor.submit(
+                        _collect_account_decision,
+                        account.id,
+                        prices,
+                        decision_round_id,
+                    ): account.id
                     for account in agent_accounts
                 }
                 for fut in as_completed(future_map):
@@ -570,6 +589,8 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
         if db is not None:
             db.rollback()
     finally:
+        if "decision_round_id" in locals():
+            tool_cache.clear_round(decision_round_id)
         if db is not None:
             db.close()
         _ai_trade_run_lock.release()

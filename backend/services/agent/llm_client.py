@@ -1,13 +1,31 @@
 # services/agent/llm_client.py
-from typing import Any, Optional
+from __future__ import annotations
 
+import base64
+import logging
+import os
+from typing import Any, List, Optional, Sequence
+
+import httpx
 from openai import OpenAI
-from services.agent.gemini_client import GeminiClient
+
+# Gemini 经部分兼容网关时：并行 functionCall 往往只在第一个 part 带 thought_signature，
+# 回传时若后续 part 缺失，上游会 400（如 position 2 / get_account_state）。
+_THOUGHT_SIG_KEYS: tuple[str, ...] = ("thought_signature", "thoughtSignature")
+
+# 部分兼容网关在响应 JSON 中不带 thought_signature，但回传历史时要求 function 上存在且非空；
+# 空串或非 base64 形态可能被上游判为「缺失」（错误信息仍写 missing）。
+_DEFAULT_GEMINI_THOUGHT_SIG_PLACEHOLDER = base64.b64encode(
+    b"open_alpha_arena_gemini_thought_sig_compat_v1"
+).decode("ascii")
+
+logger = logging.getLogger(__name__)
+
 
 class LLMClient:
     """
-    一个极简的、可用于 Agent 的 OpenAI SDK 封装。
-    完全使用 openai 库，不做自定义 HTTP 请求。
+    可用于 Agent 的 OpenAI SDK 封装。
+    所有模型（含名称中带 gemini、经 OpenAI 兼容网关转发的情形）均走 chat.completions。
     """
 
     @staticmethod
@@ -33,28 +51,80 @@ class LLMClient:
 
     def __init__(self, model: str, api_key: str, base_url: str = None):
         """
-        model: 比如 "gpt-4.1" / "gpt-4o-mini" / "qwen2.5-72b" / "gemini-2.0-flash-exp"
+        model: 比如 "gpt-4.1" / "gemini-2.0-flash"（经兼容网关）
         api_key: 账户自己的 key
-        base_url: 如果你用自己的 API gateway，例如 vllm / OpenAI compatible endpoint
-                  直接传入，比如 "https://your-endpoint/v1"
+        base_url: OpenAI 兼容 gateway，例如 "https://your-endpoint/v1"
         """
         self.model = model
+        normalized_base_url = self.normalize_base_url(base_url)
+        # OpenAI SDK 解析响应时会丢掉 ChatCompletionMessageFunctionToolCall / Function 上未在 schema 声明的字段，
+        # 部分 Gemini 网关把 thought_signature 放在原始 JSON 里；用 httpx 钩子抓取 wire 层 tool_calls 供回传合并。
+        self._last_wire_tool_calls: list[dict[str, Any]] | None = None
+        http_client: httpx.Client | None = None
+        if self.is_gemini_model():
 
-        # 检测是否为 Gemini 模型
-        if "gemini" in model.lower():
-            self.client = GeminiClient(model=model, api_key=api_key, base_url=base_url)
-            self.is_gemini = True
+            def _on_response(response: httpx.Response) -> None:
+                try:
+                    if response.request.method != "POST":
+                        return
+                    if "/chat/completions" not in str(response.request.url):
+                        return
+                    ct = (response.headers.get("content-type") or "").lower()
+                    if "event-stream" in ct or "text/event-stream" in ct:
+                        return
+                    response.read()
+                    data = response.json()
+                    msg = (data.get("choices") or [{}])[0].get("message") or {}
+                    raw_tcs = msg.get("tool_calls")
+                    if isinstance(raw_tcs, list) and raw_tcs:
+                        self._last_wire_tool_calls = [x for x in raw_tcs if isinstance(x, dict)]
+                    else:
+                        self._last_wire_tool_calls = None
+                except Exception:
+                    self._last_wire_tool_calls = None
+
+            http_client = httpx.Client(event_hooks={"response": [_on_response]})
+
+        if normalized_base_url:
+            self.client = OpenAI(
+                api_key=api_key,
+                base_url=normalized_base_url,
+                http_client=http_client,
+            )
         else:
-            normalized_base_url = self.normalize_base_url(base_url)
-            if normalized_base_url:
-                self.client = OpenAI(api_key=api_key, base_url=normalized_base_url)
-            else:
-                self.client = OpenAI(api_key=api_key)
-            self.is_gemini = False
+            self.client = OpenAI(api_key=api_key, http_client=http_client)
+
+        # Gemini 路径使用自定义 httpx.Client；OpenAI() 会持有其引用，须通过 client.close() 释放连接。
+        self._closed = False
+
+    def close(self) -> None:
+        """关闭底层 HTTP 客户端（含自定义 httpx.Client）。长驻进程在丢弃 LLMClient 前应调用，避免套接字泄漏。"""
+        if self._closed:
+            return
+        try:
+            self.client.close()
+        except Exception as e:
+            logger.warning("LLMClient.close() failed: %s", e, exc_info=True)
+        finally:
+            self._closed = True
+
+    def __enter__(self) -> LLMClient:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
+
+    @staticmethod
+    def is_gemini_model_name(model: str | None) -> bool:
+        return "gemini" in (model or "").strip().lower()
 
     def is_gemini_model(self) -> bool:
-        model_name = (self.model or "").strip().lower()
-        return "gemini" in model_name
+        return self.is_gemini_model_name(self.model)
+
+    @staticmethod
+    def _gemini_thought_signature_placeholder_value() -> str:
+        custom = (os.getenv("GEMINI_THOUGHT_SIGNATURE_PLACEHOLDER") or "").strip()
+        return custom if custom else _DEFAULT_GEMINI_THOUGHT_SIG_PLACEHOLDER
 
     def call(
         self,
@@ -65,22 +135,25 @@ class LLMClient:
     ):
         """
         统一的 LLM 调用入口，支持 tools（函数调用）
-        直接返回 OpenAI 的 ChatCompletionMessage 对象，便于后续追加到 messages 历史中。
+        直接返回 ChatCompletionMessage，便于后续追加到 messages 历史中。
         """
-        if self.is_gemini:
-            # Gemini 客户端返回 GeminiMessage，已兼容 OpenAI 格式
-            return self.client.call(messages, tools)
+        self._last_wire_tool_calls = None
         request_kwargs = {
             "model": self.model,
-            "messages": messages,
+            "messages": self._normalize_messages_for_api(messages, model=self.model),
             "tools": tools,
             "temperature": 0.4,
-            "max_tokens": 4000,  # Increased from 800 to allow longer responses
+            "max_tokens": 4000,
         }
         if timeout is not None:
             request_kwargs["timeout"] = timeout
         if response_format is not None:
             request_kwargs["response_format"] = response_format
+
+        # 部分 Gemini 兼容网关在并行 functionCall 上只对首条下发可校验的 thought_signature；
+        # 关闭并行工具输出，迫使模型逐条发起调用，避免后续 part 缺签导致 400。
+        if self.is_gemini_model():
+            request_kwargs["parallel_tool_calls"] = False
 
         response = self.client.chat.completions.create(
             **request_kwargs,
@@ -89,56 +162,292 @@ class LLMClient:
         return response.choices[0].message
 
     @staticmethod
-    def build_message_dict(resp) -> dict:
-        """
-        Safely serialize a ChatCompletionMessage (or GeminiMessage) to a plain dict
-        that can be appended to the conversation history.
+    def _has_any_thought_sig(d: dict[str, Any]) -> bool:
+        return any(d.get(k) not in (None, "") for k in _THOUGHT_SIG_KEYS)
 
-        Preserves provider-specific extra fields (e.g. Gemini's thought_signature on
-        each tool_call) that model_dump() may silently drop when the Pydantic model
-        has no schema slot for them.
+    @staticmethod
+    def _first_thought_sig(d: dict[str, Any]) -> tuple[Optional[str], Any]:
+        for k in _THOUGHT_SIG_KEYS:
+            v = d.get(k)
+            if v is not None and v != "":
+                return k, v
+        return None, None
+
+    @staticmethod
+    def _sync_thought_sig_snake_camel(d: dict[str, Any]) -> None:
+        """部分 Gemini 兼容网关只认 thoughtSignature，OpenAI 侧常用 snake_case；双写避免 400。"""
+        if not LLMClient._has_any_thought_sig(d):
+            return
+        _, v = LLMClient._first_thought_sig(d)
+        for k in _THOUGHT_SIG_KEYS:
+            if d.get(k) in (None, ""):
+                d[k] = v
+
+    @staticmethod
+    def _ensure_gemini_tool_calls_have_nonempty_thought_sig(
+        tool_calls: list[dict[str, Any]],
+        *,
+        model: str | None,
+    ) -> list[dict[str, Any]]:
         """
+        单条 tool_call 时 _fill_parallel_thought_signatures 不会运行；网关仍要求 function 上存在非空 thought_signature。
+        """
+        if not LLMClient.is_gemini_model_name(model) or not tool_calls:
+            return tool_calls
+        ph = LLMClient._gemini_thought_signature_placeholder_value()
+        out: list[dict[str, Any]] = []
+        for tc in tool_calls:
+            if not isinstance(tc, dict):
+                out.append(tc)
+                continue
+            m = dict(tc)
+            fn = dict(m["function"]) if isinstance(m.get("function"), dict) else {}
+            if not LLMClient._has_any_thought_sig(fn):
+                ik, iv = LLMClient._first_thought_sig(m)
+                fn["thought_signature"] = iv if ik is not None else ph
+            if not LLMClient._has_any_thought_sig(m):
+                ok, ov = LLMClient._first_thought_sig(fn)
+                m["thought_signature"] = ov if ok is not None else ph
+            LLMClient._sync_thought_sig_snake_camel(fn)
+            LLMClient._sync_thought_sig_snake_camel(m)
+            m["function"] = fn
+            out.append(m)
+        return out
+
+    @staticmethod
+    def _fill_parallel_thought_signatures(
+        tool_calls: list[dict[str, Any]],
+        *,
+        model: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """
+        同一 assistant 消息内多条并行 tool_call 时，用首个已出现的签名补全缺失项（不覆盖已有签名）。
+        键名与模板一致（snake 或 camel），便于网关识别。
+
+        部分 Gemini 兼容网关只在 tool_call 顶层带 thought_signature，function 内无签名；
+        上游仍要求每个 functionCall part 含 thought_signature，故在仅有 outer 或仅有 inner
+        模板时，将二者互为回退复制。若并行调用完全无签名且 model 为 gemini，写入空字符串占位。
+        """
+        if len(tool_calls) < 2:
+            return tool_calls
+        tpl_outer_k: Optional[str] = None
+        tpl_outer_v: Any = None
+        tpl_inner_k: Optional[str] = None
+        tpl_inner_v: Any = None
+        for tc in tool_calls:
+            if not isinstance(tc, dict):
+                continue
+            ok, ov = LLMClient._first_thought_sig(tc)
+            if tpl_outer_k is None and ok is not None:
+                tpl_outer_k, tpl_outer_v = ok, ov
+            fn = tc.get("function")
+            if isinstance(fn, dict):
+                ik, iv = LLMClient._first_thought_sig(fn)
+                if tpl_inner_k is None and ik is not None:
+                    tpl_inner_k, tpl_inner_v = ik, iv
+            if tpl_outer_k is not None and tpl_inner_k is not None:
+                break
+
+        if tpl_inner_k is None and tpl_outer_k is not None:
+            tpl_inner_k, tpl_inner_v = tpl_outer_k, tpl_outer_v
+        elif tpl_outer_k is None and tpl_inner_k is not None:
+            tpl_outer_k, tpl_outer_v = tpl_inner_k, tpl_inner_v
+
+        if tpl_outer_k is None and tpl_inner_k is None:
+            if LLMClient.is_gemini_model_name(model):
+                tpl_outer_k = tpl_inner_k = "thought_signature"
+                tpl_outer_v = tpl_inner_v = LLMClient._gemini_thought_signature_placeholder_value()
+            else:
+                return tool_calls
+
+        out: list[dict[str, Any]] = []
+        for tc in tool_calls:
+            if not isinstance(tc, dict):
+                out.append(tc)
+                continue
+            tc = dict(tc)
+            fn = dict(tc["function"]) if isinstance(tc.get("function"), dict) else {}
+            if tpl_outer_k is not None and not LLMClient._has_any_thought_sig(tc):
+                tc[tpl_outer_k] = tpl_outer_v
+            if tpl_inner_k is not None and not LLMClient._has_any_thought_sig(fn):
+                fn[tpl_inner_k] = tpl_inner_v
+            tc["function"] = fn
+            out.append(tc)
+        return out
+
+    @staticmethod
+    def _normalize_messages_for_api(
+        messages: Sequence[Any],
+        *,
+        model: str | None = None,
+    ) -> list[Any]:
+        """
+        ReAct 历史中 assistant.tool_calls 均为 dict；若后续某处用错误的 roundtrip 处理过 dict，
+        或需统一形状，在此对每个 tool_call 做一次安全展开（dict / SDK 对象均可）。
+        """
+        out: list[Any] = []
+        for m in messages:
+            if not isinstance(m, dict):
+                out.append(m)
+                continue
+            if m.get("role") == "assistant" and m.get("tool_calls"):
+                mm = dict(m)
+                tcs = [LLMClient._tool_call_dict_roundtrip(tc) for tc in m["tool_calls"]]
+                mm["tool_calls"] = LLMClient._fill_parallel_thought_signatures(tcs, model=model)
+                mm["tool_calls"] = LLMClient._ensure_gemini_tool_calls_have_nonempty_thought_sig(
+                    mm["tool_calls"], model=model
+                )
+                out.append(mm)
+            else:
+                out.append(m)
+        return out
+
+    @staticmethod
+    def _merge_wire_tool_call_dicts(
+        tcs: list[dict[str, Any]],
+        raw_list: list[dict[str, Any]] | None,
+    ) -> list[dict[str, Any]]:
+        """将 HTTP 原始 JSON 中 tool_calls 的扩展字段合并进 roundtrip dict（不覆盖 SDK 已给出的非空值）。"""
+        if not raw_list or len(raw_list) != len(tcs):
+            return tcs
+        out: list[dict[str, Any]] = []
+        for i, tc in enumerate(tcs):
+            raw = raw_list[i]
+            m = dict(tc)
+            for k, v in raw.items():
+                if k in ("id", "type", "function"):
+                    continue
+                if m.get(k) not in (None, ""):
+                    continue
+                m[k] = v
+            raw_fn = raw.get("function")
+            fn = dict(m.get("function") or {}) if isinstance(m.get("function"), dict) else {}
+            if isinstance(raw_fn, dict):
+                for k, v in raw_fn.items():
+                    if k in ("name", "arguments"):
+                        continue
+                    if fn.get(k) not in (None, ""):
+                        continue
+                    fn[k] = v
+            m["function"] = fn
+            out.append(m)
+        return out
+
+    def build_assistant_message_dict(self, resp) -> dict:
+        """与最近一次 call() 配对的 assistant 消息 dict；Gemini 下合并 wire 层 tool_calls 扩展字段。"""
+        wire = self._last_wire_tool_calls
+        self._last_wire_tool_calls = None
+        return LLMClient.build_message_dict(
+            resp,
+            model=self.model,
+            wire_raw_tool_calls=wire,
+        )
+
+    @staticmethod
+    def _pydantic_extra_dict(obj: Any) -> dict[str, Any]:
+        """OpenAI SDK BaseModel 上供应商自定义字段（如 Gemini 的 thought_signature）。"""
+        merged: dict[str, Any] = {}
+        extra = getattr(obj, "model_extra", None)
+        if isinstance(extra, dict):
+            merged.update(extra)
+        pe = getattr(obj, "__pydantic_extra__", None)
+        if isinstance(pe, dict):
+            merged.update(pe)
+        return merged
+
+    @staticmethod
+    def _tool_call_dict_roundtrip(tc: Any) -> dict[str, Any]:
+        """
+        将 assistant tool_call 原样序列化回请求体（含 function 内扩展字段，不做解码/改写）。
+        此前手写 id/type/function 会丢掉 thought_signature，导致上游 400。
+        对 **dict** 必须用键访问：getattr(dict, 'function') 为 None，会把 id/function 清空。
+        """
+        if isinstance(tc, dict):
+            fn_src = tc.get("function")
+            fn_dict: dict[str, Any] = dict(fn_src) if isinstance(fn_src, dict) else {}
+            out: dict[str, Any] = {}
+            for key, val in tc.items():
+                if key == "function":
+                    continue
+                out[key] = val
+            out["function"] = fn_dict
+            out.setdefault("id", tc.get("id", ""))
+            out.setdefault("type", tc.get("type", "function"))
+            return out
+
+        fn_obj = getattr(tc, "function", None)
+        fn_dict = {}
+        if fn_obj is not None:
+            if hasattr(fn_obj, "model_dump"):
+                fn_dict = dict(fn_obj.model_dump(mode="json", exclude_none=False))
+            else:
+                fn_dict = {
+                    "name": getattr(fn_obj, "name", ""),
+                    "arguments": getattr(fn_obj, "arguments", "{}"),
+                }
+            for k, v in LLMClient._pydantic_extra_dict(fn_obj).items():
+                fn_dict.setdefault(k, v)
+            fn_dict.setdefault("name", getattr(fn_obj, "name", ""))
+            fn_dict.setdefault("arguments", getattr(fn_obj, "arguments", "{}"))
+
+        if hasattr(tc, "model_dump"):
+            tc_dict = dict(tc.model_dump(mode="json", exclude_none=False))
+        else:
+            tc_dict = {
+                "id": getattr(tc, "id", ""),
+                "type": getattr(tc, "type", "function"),
+                "function": fn_dict,
+            }
+        for k, v in LLMClient._pydantic_extra_dict(tc).items():
+            if k not in ("id", "type", "function"):
+                tc_dict.setdefault(k, v)
+        tc_dict["id"] = getattr(tc, "id", tc_dict.get("id", ""))
+        tc_dict["type"] = getattr(tc, "type", tc_dict.get("type", "function"))
+        tc_dict["function"] = fn_dict
+        return tc_dict
+
+    @staticmethod
+    def tool_calls_to_roundtrip_dicts(tool_calls: Optional[List[Any]]) -> Optional[List[dict[str, Any]]]:
+        if not tool_calls:
+            return None
+        return [LLMClient._tool_call_dict_roundtrip(tc) for tc in tool_calls]
+
+    @staticmethod
+    def build_message_dict(
+        resp,
+        *,
+        model: str | None = None,
+        wire_raw_tool_calls: list[dict[str, Any]] | None = None,
+    ) -> dict:
+        """
+        将 ChatCompletionMessage 安全序列化为可写入历史的 dict。
+        完整保留 tool_calls / function 上的供应商扩展字段（如 thought_signature），按原样回传。
+        wire_raw_tool_calls: 来自 HTTP 原始 JSON 的 tool_calls 列表（与 resp.tool_calls 按序对齐）。
+        """
+        tool_calls = getattr(resp, "tool_calls", None)
         if hasattr(resp, "model_dump"):
-            msg = resp.model_dump()
+            msg = dict(resp.model_dump(mode="json", exclude_none=False))
         else:
             msg = dict(resp)
 
-        # Merge top-level model_extra (e.g. Gemini adds thought_signature here too)
-        if hasattr(resp, "model_extra") and resp.model_extra:
-            for k, v in resp.model_extra.items():
-                msg.setdefault(k, v)
+        for k, v in LLMClient._pydantic_extra_dict(resp).items():
+            msg.setdefault(k, v)
 
-        # Re-serialize tool_calls preserving per-call model_extra fields
-        tool_calls = getattr(resp, "tool_calls", None)
         if tool_calls:
-            tool_calls_out = []
-            for tc in tool_calls:
-                tc_dict = {
-                    "id": tc.id,
-                    "type": getattr(tc, "type", "function"),
-                    "function": {
-                        "name": tc.function.name,
-                        "arguments": tc.function.arguments,
-                    },
-                }
-                if hasattr(tc, "model_extra") and tc.model_extra:
-                    tc_dict.update(tc.model_extra)
-                tool_calls_out.append(tc_dict)
-            msg["tool_calls"] = tool_calls_out
+            tcs = [LLMClient._tool_call_dict_roundtrip(tc) for tc in tool_calls]
+            tcs = LLMClient._merge_wire_tool_call_dicts(tcs, wire_raw_tool_calls)
+            msg["tool_calls"] = LLMClient._fill_parallel_thought_signatures(tcs, model=model)
+            msg["tool_calls"] = LLMClient._ensure_gemini_tool_calls_have_nonempty_thought_sig(
+                msg["tool_calls"], model=model
+            )
 
         return msg
 
     @staticmethod
     def extract_text_content(message: Any) -> str:
-        """
-        兼容不同 SDK/供应商响应格式，尽量提取可展示的文本。
-        """
+        """兼容不同供应商响应格式，尽量提取可展示的文本。"""
         if message is None:
             return ""
-
-        # 处理 GeminiMessage
-        if hasattr(message, '__class__') and message.__class__.__name__ == 'GeminiMessage':
-            return GeminiClient.extract_text_content(message)
 
         content = getattr(message, "content", "")
 
@@ -160,14 +469,25 @@ class LLMClient:
 
         return str(content).strip() if content is not None else ""
 
+    @staticmethod
+    def gemini_post_tool_user_message() -> dict[str, str]:
+        """
+        部分 Gemini OpenAI 兼容网关要求：若 messages 以 tool 结尾直接发起下一轮 completion 会误报
+        thought_signature 缺失；在 tool 后插入一条 user 可消除该 400。
+        """
+        return {
+            "role": "user",
+            "content": (
+                "Tool results are attached above. Continue: invoke more tools if needed, "
+                "or complete the task per system instructions."
+            ),
+        }
+
     def test_connection(self, timeout_seconds: Optional[float] = 15.0) -> str:
         """
-        使用与运行时一致的 OpenAI SDK 调用测试模型连通性。
+        使用与运行时一致的 chat.completions 测试连通性。
         返回模型响应文本，调用失败时直接抛出异常。
         """
-        if self.is_gemini:
-            return self.client.test_connection()
-
         message = self.call(
             messages=[
                 {"role": "system", "content": "You are a helpful assistant."},

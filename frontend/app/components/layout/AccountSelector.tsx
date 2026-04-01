@@ -31,7 +31,14 @@ interface AccountSelectorProps {
 
 // Use relative path to work with proxy
 
-export default function AccountSelector({ currentAccount, onAccountChange, username = "default", refreshTrigger, accounts: externalAccounts, loadingExternal }: AccountSelectorProps) {
+export default function AccountSelector({
+  currentAccount,
+  onAccountChange,
+  username = "default",
+  refreshTrigger,
+  accounts: externalAccounts,
+  loadingExternal,
+}: AccountSelectorProps) {
   const [accounts, setAccounts] = useState<AccountWithAssets[]>([])
   const [loading, setLoading] = useState(true)
 

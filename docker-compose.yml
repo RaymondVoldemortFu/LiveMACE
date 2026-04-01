@@ -1,4 +1,16 @@
 services:
+  redis:
+    image: valkey/valkey:8-alpine
+    container_name: open-alpha-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
   mysql:
     image: mysql:8.4
     container_name: usmover-mysql
@@ -32,8 +44,11 @@ services:
       DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-120}
       DB_POOL_TIMEOUT: ${DB_POOL_TIMEOUT:-30}
       DB_POOL_RECYCLE: ${DB_POOL_RECYCLE:-1800}
+      TOOL_CACHE_REDIS_URL: ${TOOL_CACHE_REDIS_URL:-redis://redis:6379/0}
     depends_on:
       mysql:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     ports:
       - "5611:5611"

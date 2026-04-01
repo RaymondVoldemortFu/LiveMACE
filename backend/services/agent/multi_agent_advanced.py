@@ -550,10 +550,7 @@ class AdvancedMultiAgent(BaseAgent):
             msg_content = resp.content or ""
             tool_calls = resp.tool_calls
 
-            if hasattr(resp, "model_dump"):
-                resp_dict = resp.model_dump()
-            else:
-                resp_dict = resp.dict()
+            resp_dict = self.llm.build_assistant_message_dict(resp)
             messages.append(resp_dict)
 
             if on_step:
@@ -561,11 +558,7 @@ class AdvancedMultiAgent(BaseAgent):
                     {
                         "role": "assistant",
                         "content": f"[Execution] {msg_content}" if msg_content else None,
-                        "tool_calls": [
-                            t.model_dump() if hasattr(t, "model_dump") else t for t in tool_calls
-                        ]
-                        if tool_calls
-                        else None,
+                        "tool_calls": LLMClient.tool_calls_to_roundtrip_dicts(tool_calls),
                         "metadata": {"agent": "ExecutionAgent"},
                     }
                 )
@@ -622,6 +615,8 @@ class AdvancedMultiAgent(BaseAgent):
                             ),
                         }
                     )
+                elif self.llm.is_gemini_model():
+                    messages.append(LLMClient.gemini_post_tool_user_message())
                 continue
 
             if self._is_done_message(msg_content):
@@ -715,10 +710,7 @@ class AdvancedMultiAgent(BaseAgent):
             msg_content = resp.content or ""
             tool_calls = resp.tool_calls
 
-            if hasattr(resp, "model_dump"):
-                resp_dict = resp.model_dump()
-            else:
-                resp_dict = resp.dict()
+            resp_dict = self.llm.build_assistant_message_dict(resp)
             messages.append(resp_dict)
 
             if on_step:
@@ -726,11 +718,7 @@ class AdvancedMultiAgent(BaseAgent):
                     {
                         "role": "assistant",
                         "content": f"[{agent_name}] {msg_content}" if msg_content else None,
-                        "tool_calls": [
-                            t.model_dump() if hasattr(t, "model_dump") else t for t in tool_calls
-                        ]
-                        if tool_calls
-                        else None,
+                        "tool_calls": LLMClient.tool_calls_to_roundtrip_dicts(tool_calls),
                         "metadata": {"agent": agent_name},
                     }
                 )
@@ -800,6 +788,8 @@ class AdvancedMultiAgent(BaseAgent):
                             ),
                         }
                     )
+                elif self.llm.is_gemini_model():
+                    messages.append(LLMClient.gemini_post_tool_user_message())
             else:
                 current_response = msg_content
                 break

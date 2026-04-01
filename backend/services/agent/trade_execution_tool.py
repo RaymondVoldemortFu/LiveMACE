@@ -109,6 +109,12 @@ def execute_trade_tool(
             return {"executed": False, "error": f"Invalid price for {symbol}"}
 
         if operation == "open":
+            if market == "CRYPTO" and direction == "short" and leverage <= 1:
+                return {
+                    "executed": False,
+                    "error": "CRYPTO short requires leverage > 1 (spot mode does not support SHORT).",
+                }
+
             if market == "CRYPTO":
                 existing_position = (
                     db.query(Position)
@@ -231,6 +237,7 @@ def execute_trade_tool(
             market=market,
             direction=direction,
             quantity=quantity,
+            position=position,
         )
         _save_trade_log(
             db=db,
@@ -379,6 +386,7 @@ def _execute_close(
     market: str,
     direction: str,
     quantity: float,
+    position: Optional[Position] = None,
 ):
     side = "SELL" if direction == "long" else "BUY"
     if market == "US":
@@ -399,6 +407,10 @@ def _execute_close(
         if not check_and_execute_order(db, order):
             raise ValueError("US stock close order was not executed")
         return order
+
+    if position is not None and int(getattr(position, "leverage", 1) or 1) <= 1:
+        # Align with place_and_execute_crypto: spot close can only SELL.
+        side = "SELL"
 
     return place_and_execute_crypto(
         db=db,
@@ -444,6 +456,7 @@ def _handle_close_all(db: Session, account: Account, symbol: str, market: str, r
             market=pos.market,
             direction=side,
             quantity=qty,
+            position=pos,
         )
         closed_orders.append({"symbol": pos.symbol, "market": pos.market, "order_id": order.id, "quantity": qty})
         _save_trade_log(

@@ -26,6 +26,7 @@ from services.agent.public_apis_registry import register_public_api_tools
 from services.agent.history_tool import HistoryTool
 from services.container_service import ContainerService
 from services.security.api_key_security import is_default_api_key, resolve_runtime_api_key
+from services.tool_cache import tool_cache
 
 
 logger = logging.getLogger(__name__)
@@ -529,6 +530,7 @@ def call_agent_for_decision(
     portfolio: Dict,
     prices: Dict[str, float],
     db: Session,
+    decision_round_id: Optional[str] = None,
 ) -> Optional[Dict]:
     """基于 Agent（多轮+工具）的决策接口，保持与 call_ai_for_decision 兼容。"""
 
@@ -559,6 +561,7 @@ def call_agent_for_decision(
 
     trace_id = str(uuid.uuid4())
     step_counter = 0
+    created_local_round = False
 
     def on_step(message: Dict[str, Any]):
         nonlocal step_counter
@@ -591,6 +594,8 @@ def call_agent_for_decision(
                 for t in tool_calls_data:
                     if isinstance(t, dict):
                         tool_calls_list.append(t)
+                    elif hasattr(t, "function") and hasattr(t, "id"):
+                        tool_calls_list.append(LLMClient._tool_call_dict_roundtrip(t))
                     elif hasattr(t, "model_dump"):
                         tool_calls_list.append(t.model_dump())
                     elif hasattr(t, "dict"):
@@ -709,8 +714,13 @@ def call_agent_for_decision(
         account_id = account.id
         account_name = account.name
 
-        logger.info(f"Calling agent.run() for account {account_name}")
-        decision = agent.run(portfolio=portfolio, prices=prices, on_step=on_step, trace_id=trace_id)
+        if not decision_round_id:
+            decision_round_id = tool_cache.create_round_id(scope=f"account_{account_id}")
+            created_local_round = True
+
+        logger.info(f"Calling agent.run() for account {account_name} with decision_round_id={decision_round_id}")
+        with tool_cache.use_round(decision_round_id):
+            decision = agent.run(portfolio=portfolio, prices=prices, on_step=on_step, trace_id=trace_id)
         logger.info(f"Agent.run() completed for account {account_name}, decision: {decision}")
 
         if decision:
@@ -723,5 +733,7 @@ def call_agent_for_decision(
         logger.error(f"call_agent_for_decision failed: {e}", exc_info=True)
         return None
     finally:
+        if decision_round_id and created_local_round:
+            tool_cache.clear_round(decision_round_id)
         # Always release the container (use saved account_id to avoid DetachedInstanceError)
         container_service.release_container(account_id)
