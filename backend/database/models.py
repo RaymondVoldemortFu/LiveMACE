@@ -232,7 +232,7 @@ class AIDecisionLog(Base):
     id = Column(Integer, primary_key=True, index=True)
     account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False)
     decision_time = Column(TIMESTAMP, server_default=func.current_timestamp(), index=True)
-    reason = Column(String(1000), nullable=False)  # AI reasoning for the decision
+    reason = Column(Text, nullable=False)  # AI reasoning (long multi-agent summaries; was VARCHAR(1000))
     operation = Column(String(10), nullable=False)  # open/close/hold
     symbol = Column(String(20), nullable=True)  # symbol for buy/sell operations
     direction = Column(String(10), nullable=True)  # long/short

@@ -1,4 +1,5 @@
-import React, { useEffect, useState, useRef } from 'react'
+import React, { useEffect, useState, useRef, useMemo } from 'react'
+import { isBaselineAccountName } from '@/lib/baselineAccounts'
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Button } from "@/components/ui/button"
@@ -18,6 +19,11 @@ interface AgentStatusViewProps {
 }
 
 export default function AgentStatusView({ accounts }: AgentStatusViewProps) {
+    const agentTraceAccounts = useMemo(
+        () => (accounts || []).filter((a) => !isBaselineAccountName(a?.name)),
+        [accounts]
+    )
+
     const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null)
     const [traceId, setTraceId] = useState<string | null>(null)
     const [trace, setTrace] = useState<AgentTrace | null>(null)
@@ -26,12 +32,19 @@ export default function AgentStatusView({ accounts }: AgentStatusViewProps) {
     const scrollRef = useRef<HTMLDivElement>(null)
     const [sheetOpen, setSheetOpen] = useState(false)
 
-    // Set initial account
+    // Baseline accounts have no agent traces; only list LLM/agent accounts.
     useEffect(() => {
-        if (accounts.length > 0 && !selectedAccountId) {
-            setSelectedAccountId(accounts[0].id.toString())
+        if (agentTraceAccounts.length === 0) {
+            setSelectedAccountId(null)
+            setTraceId(null)
+            setTrace(null)
+            return
         }
-    }, [accounts])
+        setSelectedAccountId((prev) => {
+            if (prev && agentTraceAccounts.some((a) => a.id.toString() === prev)) return prev
+            return agentTraceAccounts[0].id.toString()
+        })
+    }, [agentTraceAccounts])
 
     // Poll for latest trace ID (only in live mode)
     useEffect(() => {
@@ -294,7 +307,7 @@ export default function AgentStatusView({ accounts }: AgentStatusViewProps) {
                                 <SelectValue placeholder="Select Account" />
                             </SelectTrigger>
                             <SelectContent>
-                                {accounts.map(acc => (
+                                {agentTraceAccounts.map((acc) => (
                                     <SelectItem key={acc.id} value={acc.id.toString()}>
                                         {acc.name}
                                     </SelectItem>
@@ -323,7 +336,11 @@ export default function AgentStatusView({ accounts }: AgentStatusViewProps) {
                     </CardTitle>
                 </CardHeader>
                 <CardContent className="flex-1 overflow-auto p-4 min-w-0" ref={scrollRef}>
-                    {trace ? (
+                    {agentTraceAccounts.length === 0 ? (
+                        <div className="h-full flex items-center justify-center text-muted-foreground text-sm text-center px-4">
+                            Baseline 账号（buy_hold / grid）无 Agent Trace，请从上方选择其他账号。
+                        </div>
+                    ) : trace ? (
                         <div className="space-y-4 w-full min-w-0 max-w-full">
                             {trace.steps.map(renderStep)}
                         </div>

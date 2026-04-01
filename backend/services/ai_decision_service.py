@@ -311,6 +311,23 @@ Rules:
         return None
 
 
+def _clip_reason_for_db(reason: object, max_bytes: int = 65000) -> str:
+    """Keep reason within MySQL TEXT safe size (bytes)."""
+    if reason is None:
+        return "No reason provided"
+    s = str(reason)
+    b = s.encode("utf-8")
+    if len(b) <= max_bytes:
+        return s
+    b = b[: max(0, max_bytes - 3)]
+    while b:
+        try:
+            return b.decode("utf-8") + "..."
+        except UnicodeDecodeError:
+            b = b[:-1]
+    return "..."
+
+
 def save_ai_decision(db: Session, account_id: int, decision: Dict, portfolio: Dict, executed: bool = False, order_id: Optional[int] = None, execution_price: Optional[float] = None, execution_quantity: Optional[float] = None) -> None:
     """Save AI decision to the decision log"""
     try:
@@ -325,7 +342,7 @@ def save_ai_decision(db: Session, account_id: int, decision: Dict, portfolio: Di
         symbol_raw = decision.get("symbol")
         symbol = symbol_raw.upper() if symbol_raw else None
         target_portion = float(decision.get("target_portion_of_balance", 0)) if decision.get("target_portion_of_balance") is not None else 0.0
-        reason = decision.get("reason", "No reason provided")
+        reason = _clip_reason_for_db(decision.get("reason", "No reason provided"))
         trace_id = decision.get("trace_id")
 
         # Calculate previous portion for the symbol
