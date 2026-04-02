@@ -57,6 +57,11 @@ ACCOUNT_FIELD_KEYS = [
     "is_active",
 ]
 
+BASELINE_ACCOUNT_SPECS = [
+    {"name": "buy_hold", "agent_type": "buy_hold"},
+    {"name": "grid", "agent_type": "grid"},
+]
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -403,11 +408,59 @@ def main() -> int:
                 created += 1
                 print(f"[CREATED] {name} (model={model}, combo={config_name})")
 
+        # Create/update fixed baseline accounts once per user.
+        for baseline_spec in BASELINE_ACCOUNT_SPECS:
+            baseline_name = baseline_spec["name"]
+            baseline_agent_type = baseline_spec["agent_type"]
+            existing = (
+                db.query(Account)
+                .filter(Account.user_id == user.id, Account.name == baseline_name)
+                .first()
+            )
+            if existing:
+                if args.update_existing:
+                    existing.model = baseline_agent_type
+                    existing.base_url = base_url
+                    existing.api_key = encrypted_api_key
+                    existing.account_type = "AI"
+                    existing.agent_type = baseline_agent_type
+                    existing.memory_enabled = "false"
+                    existing.tool_routing_enabled = "false"
+                    existing.enable_rule_aware = "false"
+                    existing.is_active = "true"
+                    updated += 1
+                    print(f"[UPDATED] {baseline_name} (baseline)")
+                else:
+                    skipped += 1
+                    print(f"[SKIPPED] {baseline_name} already exists")
+                continue
+
+            baseline_account = Account(
+                user_id=user.id,
+                version="v1",
+                name=baseline_name,
+                account_type="AI",
+                agent_type=baseline_agent_type,
+                memory_enabled="false",
+                tool_routing_enabled="false",
+                enable_rule_aware="false",
+                is_active="true",
+                model=baseline_agent_type,
+                base_url=base_url,
+                api_key=encrypted_api_key,
+                initial_capital=DEFAULT_INITIAL_CAPITAL,
+                current_cash=DEFAULT_INITIAL_CAPITAL,
+                frozen_cash=Decimal("0"),
+            )
+            db.add(baseline_account)
+            created += 1
+            print(f"[CREATED] {baseline_name} (baseline)")
+
         db.commit()
     finally:
         db.close()
 
-    total = len(MODEL_LIST) * len(account_configs)
+    total = len(MODEL_LIST) * len(account_configs) + len(BASELINE_ACCOUNT_SPECS)
     print(
         f"Done. created={created}, updated={updated}, skipped={skipped}, total={total}, mode={args.mode}"
     )

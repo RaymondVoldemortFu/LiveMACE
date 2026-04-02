@@ -115,6 +115,32 @@ def _load_trading_accounts(db: Session) -> List[Account]:
     return list(accounts_by_id.values())
 
 
+def _load_baseline_accounts(db: Session) -> List[Account]:
+    active_accounts = _get_active_ai_trading_accounts(db)
+    return [
+        account
+        for account in active_accounts
+        if (getattr(account, "agent_type", "react") or "react").strip().lower() in {"buy_hold", "grid"}
+    ]
+
+
+def _run_baseline_accounts(db: Session, accounts: List[Account], prices: Dict[str, float]) -> None:
+    now = datetime.now(timezone.utc)
+    for account in accounts:
+        agent_type = getattr(account, "agent_type", "react") or "react"
+        agent_type = str(agent_type).strip().lower()
+        if agent_type == "buy_hold":
+            try:
+                _buy_hold_baseline.run_tick(db, account, prices, now=now)
+            except Exception as e:
+                logger.error(f"BuyHold baseline failed for account={account.id} ({account.name}): {e}", exc_info=True)
+        elif agent_type == "grid":
+            try:
+                _grid_baseline.run_tick(db, account, prices)
+            except Exception as e:
+                logger.error(f"Grid baseline failed for account={account.id} ({account.name}): {e}", exc_info=True)
+
+
 def _select_side(db: Session, account: Account, symbol: str, max_value: float) -> Optional[Tuple[str, int]]:
     """Select random trading side and quantity for legacy random trading"""
     market = "CRYPTO"
@@ -549,24 +575,41 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
                             exc_info=True,
                         )
 
-        # 1) Run baselines (sequential) so they can create LIMIT orders etc.
-        now = datetime.now(timezone.utc)
-        for account in accounts:
-            agent_type = getattr(account, "agent_type", "react") or "react"
-            agent_type = str(agent_type).strip().lower()
-            if agent_type == "buy_hold":
-                try:
-                    _buy_hold_baseline.run_tick(db, account, prices, now=now)
-                except Exception as e:
-                    logger.error(f"BuyHold baseline failed for account={account.id} ({account.name}): {e}", exc_info=True)
-            elif agent_type == "grid":
-                try:
-                    _grid_baseline.run_tick(db, account, prices)
-                except Exception as e:
-                    logger.error(f"Grid baseline failed for account={account.id} ({account.name}): {e}", exc_info=True)
-
     except Exception as err:
         logger.error(f"AI-driven order placement failed: {err}", exc_info=True)
+        if db is not None:
+            db.rollback()
+    finally:
+        if db is not None:
+            db.close()
+        _ai_trade_run_lock.release()
+
+
+def place_baseline_driven_order() -> None:
+    """Run baseline strategies (buy_hold/grid) independently from AI decision schedule."""
+    if not _ai_trade_run_lock.acquire(blocking=False):
+        logger.warning("Trading loop is already running; skip baseline trigger to avoid overlap")
+        return
+
+    db = None
+    try:
+        db = SessionLocal()
+        baseline_accounts = _load_baseline_accounts(db)
+        if not baseline_accounts:
+            logger.debug("No baseline accounts, skipping baseline trading")
+            return
+
+        prices = {}
+        prices.update(_get_market_prices(AI_TRADING_SYMBOLS, "CRYPTO"))
+        prices.update(_get_market_prices(US_TRADING_SYMBOLS, "US"))
+        if not prices:
+            logger.warning("Failed to fetch market prices, skipping baseline trading")
+            return
+
+        _run_baseline_accounts(db, baseline_accounts, prices)
+
+    except Exception as err:
+        logger.error(f"Baseline-driven order placement failed: {err}", exc_info=True)
         if db is not None:
             db.rollback()
     finally:
@@ -638,3 +681,4 @@ def place_random_crypto_order(max_ratio: float = 0.2) -> None:
 
 AUTO_TRADE_JOB_ID = "auto_crypto_trade"
 AI_TRADE_JOB_ID = "ai_crypto_trade"
+BASELINE_TRADE_JOB_ID = "baseline_trade"
