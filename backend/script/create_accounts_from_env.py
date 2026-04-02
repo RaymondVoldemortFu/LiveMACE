@@ -62,6 +62,12 @@ BASELINE_ACCOUNT_SPECS = [
     {"name": "grid", "agent_type": "grid"},
 ]
 
+LLM_AGENT_TYPES = {"react", "multi_agent", "advanced_multi_agent", "rule_aware"}
+
+
+def _agent_type_uses_llm(agent_type: str) -> bool:
+    return (agent_type or "").strip().lower() in LLM_AGENT_TYPES
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -371,9 +377,14 @@ def main() -> int:
                 )
                 if existing:
                     if args.update_existing:
-                        existing.model = model
-                        existing.base_url = base_url
-                        existing.api_key = encrypted_api_key
+                        if _agent_type_uses_llm(account_config["agent_type"]):
+                            existing.model = model
+                            existing.base_url = base_url
+                            existing.api_key = encrypted_api_key
+                        else:
+                            existing.model = None
+                            existing.base_url = None
+                            existing.api_key = None
                         existing.account_type = account_config["account_type"]
                         existing.agent_type = account_config["agent_type"]
                         existing.memory_enabled = account_config["memory_enabled"]
@@ -397,9 +408,9 @@ def main() -> int:
                     tool_routing_enabled=account_config["tool_routing_enabled"],
                     enable_rule_aware=account_config["enable_rule_aware"],
                     is_active=account_config["is_active"],
-                    model=model,
-                    base_url=base_url,
-                    api_key=encrypted_api_key,
+                    model=model if _agent_type_uses_llm(account_config["agent_type"]) else None,
+                    base_url=base_url if _agent_type_uses_llm(account_config["agent_type"]) else None,
+                    api_key=encrypted_api_key if _agent_type_uses_llm(account_config["agent_type"]) else None,
                     initial_capital=DEFAULT_INITIAL_CAPITAL,
                     current_cash=DEFAULT_INITIAL_CAPITAL,
                     frozen_cash=Decimal("0"),
@@ -419,9 +430,9 @@ def main() -> int:
             )
             if existing:
                 if args.update_existing:
-                    existing.model = baseline_agent_type
-                    existing.base_url = base_url
-                    existing.api_key = encrypted_api_key
+                    existing.model = None
+                    existing.base_url = None
+                    existing.api_key = None
                     existing.account_type = "AI"
                     existing.agent_type = baseline_agent_type
                     existing.memory_enabled = "false"
@@ -445,9 +456,9 @@ def main() -> int:
                 tool_routing_enabled="false",
                 enable_rule_aware="false",
                 is_active="true",
-                model=baseline_agent_type,
-                base_url=base_url,
-                api_key=encrypted_api_key,
+                model=None,
+                base_url=None,
+                api_key=None,
                 initial_capital=DEFAULT_INITIAL_CAPITAL,
                 current_cash=DEFAULT_INITIAL_CAPITAL,
                 frozen_cash=Decimal("0"),

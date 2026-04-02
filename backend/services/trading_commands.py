@@ -4,6 +4,7 @@ Trading Commands Service - Handles order execution and trading logic
 import logging
 import random
 import threading
+import os
 from decimal import Decimal
 from typing import Dict, Optional, Tuple, List
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -27,6 +28,7 @@ from services.ai_decision_service import (
 )
 from services.baselines import BuyHoldBaseline, GridBaseline
 from config.agent_config import AgentConfig
+from config.market_data_config import ALPACA_US_FEED_ENABLED
 from services.alpaca_market_data import SUPPORTED_STOCKS as US_TRADING_SYMBOLS
 from services.trading_symbols import AI_TRADING_SYMBOLS
 from repositories.account_repo import get_account, list_active_ai_accounts
@@ -43,6 +45,7 @@ _grid_baseline = GridBaseline()
 
 US_TRADING_SYMBOLS = list(US_TRADING_SYMBOLS)
 AGENT_DECISION_TYPES = {"react", "multi_agent", "advanced_multi_agent", "rule_aware"}
+_baseline_us_feed_skip_logged = False
 
 
 def _infer_market(symbol: str, decision_market: Optional[str]) -> str:
@@ -81,17 +84,39 @@ def _log_trade_execution(operation: str, symbol: str, target_portion: float, pri
     trade_logger.info(msg)
 
 
-def _get_market_prices(symbols: List[str], market: str) -> Dict[str, float]:
+def _get_market_prices(symbols: List[str], market: str, suppress_symbol_warnings: bool = False) -> Dict[str, float]:
     """Get latest prices for given symbols"""
     prices = {}
+    failed_symbols: List[str] = []
     for symbol in symbols:
         try:
             price = float(get_last_price(symbol, market))
             if price > 0:
                 prices[symbol] = price
+            else:
+                failed_symbols.append(symbol)
         except Exception as err:
-            logger.warning(f"Failed to get price for {symbol}: {err}")
+            failed_symbols.append(symbol)
+            if not suppress_symbol_warnings:
+                logger.warning(f"Failed to get price for {symbol}: {err}")
+
+    if suppress_symbol_warnings and failed_symbols:
+        logger.warning(
+            "Failed to get %s prices for %d/%d symbols (suppressed per-symbol warnings). Sample: %s",
+            market,
+            len(failed_symbols),
+            len(symbols),
+            ", ".join(failed_symbols[:5]),
+        )
     return prices
+
+
+def _baseline_should_fetch_us_prices() -> bool:
+    if not ALPACA_US_FEED_ENABLED:
+        return False
+    alpaca_key = (os.getenv("ALPACA_KEY") or "").strip()
+    alpaca_secret = (os.getenv("ALPACA_SECRET") or "").strip()
+    return bool(alpaca_key and alpaca_secret)
 
 
 def _get_active_ai_trading_accounts(db: Session) -> List[Account]:
@@ -599,9 +624,20 @@ def place_baseline_driven_order() -> None:
             logger.debug("No baseline accounts, skipping baseline trading")
             return
 
+        global _baseline_us_feed_skip_logged
+
         prices = {}
         prices.update(_get_market_prices(AI_TRADING_SYMBOLS, "CRYPTO"))
-        prices.update(_get_market_prices(US_TRADING_SYMBOLS, "US"))
+
+        if _baseline_should_fetch_us_prices():
+            prices.update(_get_market_prices(US_TRADING_SYMBOLS, "US", suppress_symbol_warnings=True))
+            _baseline_us_feed_skip_logged = False
+        elif not _baseline_us_feed_skip_logged:
+            logger.warning(
+                "Baseline US price fetch disabled (Alpaca feed disabled or missing credentials); skipping US symbols"
+            )
+            _baseline_us_feed_skip_logged = True
+
         if not prices:
             logger.warning("Failed to fetch market prices, skipping baseline trading")
             return
