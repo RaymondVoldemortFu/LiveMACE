@@ -367,8 +367,9 @@ class RuleAwareAgent(BaseAgent):
             logger.warning(f"Decision has compliance violations: {len(compliance_audit.violations)} critical violations")
             agent_logger.warning(f"COMPLIANCE WARNING: {len(compliance_audit.violations)} critical violations")
 
-        # Perform LLM-based audit if enabled
-        if self.enable_llm_audit and self.llm_auditor:
+        # Perform LLM-based audit if enabled (skipped when AUDIT_OFFLINE=True)
+        audit_offline = os.getenv("AUDIT_OFFLINE", "false").strip().lower() in ("true", "1", "yes")
+        if self.enable_llm_audit and self.llm_auditor and not audit_offline:
             try:
                 logger.info("Performing LLM-based audit scoring...")
                 rule_documents = self.rule_engine.format_rules_for_prompt()
