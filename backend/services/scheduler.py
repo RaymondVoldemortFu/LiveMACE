@@ -606,9 +606,27 @@ def reset_auto_trading_job():
     import threading
     import os
 
-    # Define interval (default 4 hours, configurable via env)
-    AI_TRADE_INTERVAL_SECONDS = int(os.getenv("AI_TRADE_INTERVAL_SECONDS", "14400"))
-    BASELINE_TRADE_INTERVAL_SECONDS = int(os.getenv("BASELINE_TRADE_INTERVAL_SECONDS", "300"))
+    def _parse_interval_env(env_name: str, default_value: int) -> int:
+        raw_value = os.getenv(env_name)
+        if raw_value is None or str(raw_value).strip() == "":
+            return default_value
+        try:
+            parsed = int(str(raw_value).strip())
+            if parsed <= 0:
+                raise ValueError("must be > 0")
+            return parsed
+        except Exception:
+            logger.warning(
+                "Invalid %s=%r, fallback to default %s seconds",
+                env_name,
+                raw_value,
+                default_value,
+            )
+            return default_value
+
+    # Define interval (defaults: AI 4h, baseline 5m; configurable via env)
+    AI_TRADE_INTERVAL_SECONDS = _parse_interval_env("AI_TRADE_INTERVAL_SECONDS", 14400)
+    BASELINE_TRADE_INTERVAL_SECONDS = _parse_interval_env("BASELINE_TRADE_INTERVAL_SECONDS", 300)
 
     def _setup_job_async():
         try:

@@ -1,5 +1,6 @@
 from typing import Dict, List, Any
 import logging
+from threading import Lock
 from .hyperliquid_market_data import (
     get_last_price_from_hyperliquid,
     get_kline_data_from_hyperliquid,
@@ -25,6 +26,13 @@ US_STOCK_SYMBOLS = {str(symbol).upper() for symbol in SUPPORTED_STOCKS}
 
 KLINE_CACHE_PERIOD = "1m"
 KLINE_CACHE_MAX_STALE_SECONDS = 120
+US_MARKET_STATUS_TTL_SECONDS = 60
+
+_us_market_status_cache: Dict[str, Any] = {
+    "status": None,
+    "ts": 0,
+}
+_us_market_status_lock = Lock()
 
 
 def _period_to_seconds(period: str) -> int | None:
@@ -176,6 +184,21 @@ def _save_klines(symbol: str, market: str, period: str, klines: List[Dict[str, A
         db.close()
 
 
+def _get_cached_us_market_status() -> Dict[str, Any]:
+    now_ts = now_timestamp()
+    with _us_market_status_lock:
+        cached_status = _us_market_status_cache.get("status")
+        cached_ts = int(_us_market_status_cache.get("ts") or 0)
+        if cached_status is not None and (now_ts - cached_ts) <= US_MARKET_STATUS_TTL_SECONDS:
+            return cached_status
+
+    status = get_market_status_from_alpaca("AAPL")
+    with _us_market_status_lock:
+        _us_market_status_cache["status"] = status
+        _us_market_status_cache["ts"] = now_ts
+    return status
+
+
 def get_last_price(symbol: str, market: str = "CRYPTO") -> float:
     symbol_norm, market_norm = _resolve_market(symbol, market)
     key = f"{symbol_norm}.{market_norm}"
@@ -199,12 +222,12 @@ def get_last_price(symbol: str, market: str = "CRYPTO") -> float:
             source = "Alpaca"
             # Settlement requirement for US stocks:
             # when market is closed, use latest daily close as valuation price.
-            status = get_market_status_from_alpaca(symbol_norm)
+            status = _get_cached_us_market_status()
             is_trading = bool(status.get("is_trading", False))
             if not is_trading:
                 close_price = get_last_close_price_from_alpaca(symbol_norm)
                 if close_price and close_price > 0:
-                    logger.info(
+                    logger.debug(
                         "US market closed for %s, using latest close price: %s",
                         key,
                         close_price,

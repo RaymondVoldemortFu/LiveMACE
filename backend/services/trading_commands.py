@@ -88,6 +88,8 @@ def _get_market_prices(symbols: List[str], market: str, suppress_symbol_warnings
     """Get latest prices for given symbols"""
     prices = {}
     failed_symbols: List[str] = []
+    non_positive_symbols: List[str] = []
+    exception_symbols: List[str] = []
     for symbol in symbols:
         try:
             price = float(get_last_price(symbol, market))
@@ -95,17 +97,31 @@ def _get_market_prices(symbols: List[str], market: str, suppress_symbol_warnings
                 prices[symbol] = price
             else:
                 failed_symbols.append(symbol)
+                non_positive_symbols.append(symbol)
+                if not suppress_symbol_warnings:
+                    logger.warning(
+                        "Non-positive price for %s (%s): %s",
+                        symbol,
+                        market,
+                        price,
+                    )
         except Exception as err:
             failed_symbols.append(symbol)
+            exception_symbols.append(symbol)
             if not suppress_symbol_warnings:
                 logger.warning(f"Failed to get price for {symbol}: {err}")
 
     if suppress_symbol_warnings and failed_symbols:
         logger.warning(
-            "Failed to get %s prices for %d/%d symbols (suppressed per-symbol warnings). Sample: %s",
+            (
+                "Failed to get %s prices for %d/%d symbols "
+                "(non_positive=%d, exceptions=%d; suppressed per-symbol warnings). Sample: %s"
+            ),
             market,
             len(failed_symbols),
             len(symbols),
+            len(non_positive_symbols),
+            len(exception_symbols),
             ", ".join(failed_symbols[:5]),
         )
     return prices
