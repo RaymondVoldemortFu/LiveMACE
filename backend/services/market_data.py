@@ -9,6 +9,7 @@ from .hyperliquid_market_data import (
 )
 from .alpaca_market_data import (
     get_last_price_from_alpaca,
+    get_last_close_price_from_alpaca,
     get_kline_data_from_alpaca,
     get_market_status_from_alpaca,
     get_all_supported_symbols,
@@ -196,6 +197,24 @@ def get_last_price(symbol: str, market: str = "CRYPTO") -> float:
     try:
         if market_norm == "US":
             source = "Alpaca"
+            # Settlement requirement for US stocks:
+            # when market is closed, use latest daily close as valuation price.
+            status = get_market_status_from_alpaca(symbol_norm)
+            is_trading = bool(status.get("is_trading", False))
+            if not is_trading:
+                close_price = get_last_close_price_from_alpaca(symbol_norm)
+                if close_price and close_price > 0:
+                    logger.info(
+                        "US market closed for %s, using latest close price: %s",
+                        key,
+                        close_price,
+                    )
+                    cache_price(symbol_norm, market_norm, close_price)
+                    return close_price
+                logger.error(
+                    "US market closed for %s but latest close price is unavailable; falling back to latest trade price",
+                    key,
+                )
             price = get_last_price_from_alpaca(symbol_norm)
         else:
             source = "Hyperliquid"

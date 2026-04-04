@@ -163,6 +163,60 @@ class AlpacaClient:
             logger.error(f"Error fetching Alpaca price for {symbol}: {e}")
             return None
 
+    def get_last_close_price(self, symbol: str, lookback_days: int = 10) -> Optional[float]:
+        """Get latest available daily close price for a US symbol.
+
+        This is used for valuation/settlement when the US market is closed.
+        """
+        try:
+            symbol_norm = _ensure_supported_symbol(symbol)
+            end_dt = now_utc()
+            start_dt = end_dt - timedelta(days=max(2, int(lookback_days)))
+
+            logger.info(
+                "Alpaca latest close request: %s start=%s end=%s",
+                symbol_norm,
+                start_dt.isoformat(),
+                end_dt.isoformat(),
+            )
+            self._wait()
+            req_kwargs = self._request_feed_kwargs()
+            req = StockBarsRequest(
+                symbol_or_symbols=[symbol_norm],
+                timeframe=TimeFrame(1, TimeFrameUnit.Day),
+                start=start_dt,
+                end=end_dt,
+                limit=max(2, int(lookback_days)),
+                **req_kwargs,
+            )
+            bars = self._data_client.get_stock_bars(req)
+            if hasattr(bars, "data"):
+                bar_list = bars.data.get(symbol_norm, [])
+            elif isinstance(bars, dict):
+                bar_list = bars.get(symbol_norm, [])
+            else:
+                try:
+                    bar_list = bars[symbol_norm]
+                except Exception:
+                    bar_list = []
+
+            if not bar_list:
+                logger.warning("Alpaca latest close empty: %s", symbol_norm)
+                return None
+
+            # Keep deterministic by timestamp, then use the latest bar close.
+            bar_list = sorted(
+                bar_list,
+                key=lambda b: getattr(b, "timestamp", datetime.min.replace(tzinfo=timezone.utc)),
+            )
+            last_bar = bar_list[-1]
+            close_price = getattr(last_bar, "close", None)
+            logger.info("Alpaca latest close success: %s close=%s", symbol_norm, close_price)
+            return float(close_price) if close_price is not None else None
+        except Exception as e:
+            logger.error(f"Error fetching Alpaca latest close for {symbol}: {e}")
+            return None
+
     def get_kline_data(
         self,
         symbol: str,
@@ -319,6 +373,10 @@ alpaca_client = AlpacaClient()
 
 def get_last_price_from_alpaca(symbol: str) -> Optional[float]:
     return alpaca_client.get_last_price(symbol)
+
+
+def get_last_close_price_from_alpaca(symbol: str) -> Optional[float]:
+    return alpaca_client.get_last_close_price(symbol)
 
 
 def get_kline_data_from_alpaca(
