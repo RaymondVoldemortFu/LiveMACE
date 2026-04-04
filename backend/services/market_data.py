@@ -1,6 +1,7 @@
 from typing import Dict, List, Any
 import logging
 from threading import Lock
+from datetime import datetime, timezone
 from .hyperliquid_market_data import (
     get_last_price_from_hyperliquid,
     get_kline_data_from_hyperliquid,
@@ -20,6 +21,8 @@ from database.connection import SessionLocal
 from database.models import MarketKline
 from services.time_source import now_timestamp
 from repositories.kline_repo import KlineRepository
+from config.tool_cache_config import ToolCacheConfig
+from services.tool_cache import tool_cache
 
 logger = logging.getLogger(__name__)
 US_STOCK_SYMBOLS = {str(symbol).upper() for symbol in SUPPORTED_STOCKS}
@@ -185,6 +188,7 @@ def _save_klines(symbol: str, market: str, period: str, klines: List[Dict[str, A
 
 
 def _get_cached_us_market_status() -> Dict[str, Any]:
+    """Get US market status with short TTL cache to avoid per-symbol clock calls."""
     now_ts = now_timestamp()
     with _us_market_status_lock:
         cached_status = _us_market_status_cache.get("status")
@@ -192,11 +196,86 @@ def _get_cached_us_market_status() -> Dict[str, Any]:
         if cached_status is not None and (now_ts - cached_ts) <= US_MARKET_STATUS_TTL_SECONDS:
             return cached_status
 
-    status = get_market_status_from_alpaca("AAPL")
+    try:
+        # Alpaca clock is market-wide (not symbol-specific); use a stable supported symbol.
+        status = get_market_status_from_alpaca("AAPL")
+    except Exception as err:
+        with _us_market_status_lock:
+            cached_status = _us_market_status_cache.get("status")
+        if cached_status is not None:
+            logger.warning(
+                "Failed to refresh US market status, using stale cached status: %s",
+                err,
+            )
+            return cached_status
+        raise
+
     with _us_market_status_lock:
         _us_market_status_cache["status"] = status
-        _us_market_status_cache["ts"] = now_ts
+        _us_market_status_cache["ts"] = now_timestamp()
     return status
+
+
+def _iso_string_to_utc_epoch_ms(raw: str) -> int:
+    """ISO 8601 → UTC 瞬时点毫秒。naive 按 UTC 解释，与行情层一致，避免依赖服务器本地时区。"""
+    ts = raw.replace("Z", "+00:00")
+    dt = datetime.fromisoformat(ts)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+    return int(dt.timestamp() * 1000)
+
+
+def _normalize_time_for_kline_cache(value: Any, period: str) -> Any:
+    """
+    Normalize time-like values into period-aligned millisecond buckets so
+    semantically equivalent requests can share Redis tool-cache keys.
+    """
+    if value is None:
+        return None
+
+    ts_ms: int | None = None
+    if isinstance(value, (int, float)):
+        ts_ms = int(value)
+    elif isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return None
+        try:
+            ts_ms = int(float(raw))
+        except ValueError:
+            try:
+                ts_ms = _iso_string_to_utc_epoch_ms(raw)
+            except ValueError:
+                return value
+    else:
+        return value
+
+    period_seconds = _period_to_seconds(period)
+    if not period_seconds or period_seconds <= 0:
+        return ts_ms
+
+    bucket_ms = period_seconds * 1000
+    return (ts_ms // bucket_ms) * bucket_ms
+
+
+def _build_kline_cache_args(
+    symbol: str,
+    market: str,
+    period: str,
+    count: int,
+    start_time: Any,
+    end_time: Any,
+) -> Dict[str, Any]:
+    return {
+        "symbol": symbol,
+        "market": market,
+        "period": period,
+        "count": count,
+        "start_time": _normalize_time_for_kline_cache(start_time, period),
+        "end_time": _normalize_time_for_kline_cache(end_time, period),
+    }
 
 
 def get_last_price(symbol: str, market: str = "CRYPTO") -> float:
@@ -256,26 +335,70 @@ def get_last_price(symbol: str, market: str = "CRYPTO") -> float:
 def get_kline_data(symbol: str, market: str = "CRYPTO", period: str = "1d", count: int = 100, start_time: Any = None, end_time: Any = None) -> List[Dict[str, Any]]:
     symbol_norm, market_norm = _resolve_market(symbol, market)
     key = f"{symbol_norm}.{market_norm}"
+    round_id = tool_cache.get_current_round_id()
+    cache_args = _build_kline_cache_args(
+        symbol=symbol_norm,
+        market=market_norm,
+        period=period,
+        count=count,
+        start_time=start_time,
+        end_time=end_time,
+    )
 
     try:
+        cached_tool_data = tool_cache.get_json("get_kline_data", cache_args, round_id=round_id)
+        if isinstance(cached_tool_data, list):
+            logger.debug(f"Using Redis tool cache for K-line data: {key} period={period} count={count}")
+            return cached_tool_data
+
         if start_time is None and end_time is None:
             cached = _get_cached_klines(symbol_norm, market_norm, period, count)
             if cached:
+                tool_cache.set_json(
+                    "get_kline_data",
+                    cache_args,
+                    cached,
+                    ttl_seconds=ToolCacheConfig.kline_ttl_seconds,
+                    round_id=round_id,
+                )
                 return cached
 
-        if market_norm == "US":
-            source = "Alpaca"
-            data = get_kline_data_from_alpaca(symbol_norm, period, count, start_time, end_time)
-        else:
-            source = "Hyperliquid"
-            data = get_kline_data_from_hyperliquid(symbol_norm, period, count, start_time, end_time)
-        if data is not None:
-            logger.info(f"Got K-line data for {key} from {source}, total {len(data)} items")
-            _save_klines(symbol_norm, market_norm, period, data)
-            return data
-        raise Exception(f"{source} returned empty K-line data")
+        def _load_from_provider() -> tuple[str, List[Dict[str, Any]]]:
+            if market_norm == "US":
+                selected_source = "Alpaca"
+                selected_data = get_kline_data_from_alpaca(symbol_norm, period, count, start_time, end_time)
+            else:
+                selected_source = "Hyperliquid"
+                selected_data = get_kline_data_from_hyperliquid(symbol_norm, period, count, start_time, end_time)
+            return selected_source, selected_data
+
+        # Use distributed lock to reduce duplicate upstream calls in concurrent multi-agent rounds.
+        with tool_cache.acquire_lock("get_kline_data", cache_args, round_id=round_id) as lock_acquired:
+            if lock_acquired:
+                second_read = tool_cache.get_json(
+                    "get_kline_data",
+                    cache_args,
+                    round_id=round_id,
+                    suppress_miss_log=True,
+                )
+                if isinstance(second_read, list):
+                    return second_read
+
+            source, data = _load_from_provider()
+            if data is not None:
+                logger.info(f"Got K-line data for {key} from {source}, total {len(data)} items")
+                _save_klines(symbol_norm, market_norm, period, data)
+                tool_cache.set_json(
+                    "get_kline_data",
+                    cache_args,
+                    data,
+                    ttl_seconds=ToolCacheConfig.kline_ttl_seconds,
+                    round_id=round_id,
+                )
+                return data
+            raise Exception(f"{source} returned empty K-line data")
     except Exception as hl_err:
-        logger.error(f"Failed to get K-line data from {source}: {hl_err}")
+        logger.error(f"Failed to get K-line data for {key}: {hl_err}")
         raise Exception(f"Unable to get K-line data for {key}: {hl_err}")
 
 

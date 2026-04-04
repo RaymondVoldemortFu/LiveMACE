@@ -6,7 +6,7 @@ dotenv.load_dotenv()
 
 
 class ToolConfig:
-    tavily_api_key = os.getenv("TAVILY_API_KEY")
+    brightdata_api_key = os.getenv("BRIGHTDATA_API_KEY")
     
     # Sub-agent configuration
     MAX_SEARCH_STEPS = 5

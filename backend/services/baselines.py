@@ -22,6 +22,18 @@ from services.trading_symbols import AI_TRADING_SYMBOLS
 
 logger = logging.getLogger(__name__)
 
+BASELINE_AGENT_TYPES = frozenset({"buy_hold", "grid"})
+BASELINE_ACCOUNT_NAMES = frozenset({"buy_hold", "grid"})
+
+
+def is_baseline_trading_account(account: object) -> bool:
+    """True if this account should run rule-based baselines (by agent_type or display name)."""
+    at = (getattr(account, "agent_type", None) or "").strip().lower()
+    if at in BASELINE_AGENT_TYPES:
+        return True
+    nm = (getattr(account, "name", None) or "").strip().lower()
+    return nm in BASELINE_ACCOUNT_NAMES
+
 
 CRYPTO_UNIVERSE: List[str] = list(AI_TRADING_SYMBOLS)
 US_UNIVERSE: List[str] = list(SUPPORTED_STOCKS)

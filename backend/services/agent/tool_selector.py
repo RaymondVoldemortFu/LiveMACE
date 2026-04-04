@@ -22,6 +22,7 @@ REQUIRED_TOOL_NAMES = [
     "get_kline_history",
     "get_account_state",
     "get_history_decisions",
+    "execute_trade",
 ]
 
 REQUIRED_TOOLS_TEXT = ", ".join(REQUIRED_TOOL_NAMES)

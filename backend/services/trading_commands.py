@@ -26,13 +26,14 @@ from services.ai_decision_service import (
     SUPPORTED_SYMBOLS,
     call_agent_for_decision
 )
-from services.baselines import BuyHoldBaseline, GridBaseline
+from services.baselines import BuyHoldBaseline, GridBaseline, is_baseline_trading_account
 from config.agent_config import AgentConfig
 from config.market_data_config import ALPACA_US_FEED_ENABLED
 from services.alpaca_market_data import SUPPORTED_STOCKS as US_TRADING_SYMBOLS
 from services.trading_symbols import AI_TRADING_SYMBOLS
 from repositories.account_repo import get_account, list_active_ai_accounts
 from repositories.position_repo import get_position
+from services.tool_cache import tool_cache
 
 
 logger = logging.getLogger(__name__)
@@ -145,11 +146,7 @@ def _load_trading_accounts(db: Session) -> List[Account]:
         return active_accounts
 
     agent_accounts = get_active_ai_accounts(db)
-    baseline_accounts = [
-        account
-        for account in active_accounts
-        if (getattr(account, "agent_type", "react") or "react").strip().lower() in {"buy_hold", "grid"}
-    ]
+    baseline_accounts = [account for account in active_accounts if is_baseline_trading_account(account)]
     accounts_by_id = {account.id: account for account in agent_accounts}
     for account in baseline_accounts:
         accounts_by_id.setdefault(account.id, account)
@@ -217,7 +214,11 @@ def _select_side(db: Session, account: Account, symbol: str, max_value: float) -
     return side, quantity
 
 
-def _collect_account_decision(account_id: int, prices: Dict[str, float]) -> Optional[Dict]:
+def _collect_account_decision(
+    account_id: int,
+    prices: Dict[str, float],
+    decision_round_id: Optional[str] = None,
+) -> Optional[Dict]:
     """
     Collect agent decision for one account in an isolated DB session.
     This is safe to run in worker threads.
@@ -235,7 +236,13 @@ def _collect_account_decision(account_id: int, prices: Dict[str, float]) -> Opti
             return None
 
         if AgentConfig.USE_AGENT:
-            decision = call_agent_for_decision(account, portfolio, prices, db)
+            decision = call_agent_for_decision(
+                account,
+                portfolio,
+                prices,
+                db,
+                decision_round_id=decision_round_id,
+            )
         else:
             decision = call_ai_for_decision(account, portfolio, prices)
 
@@ -263,6 +270,9 @@ def _process_account_decision_payload(db: Session, payload: Dict, prices: Dict[s
     account = get_account(db, payload["account_id"])
     if not account:
         logger.warning(f"Account {payload['account_id']} disappeared before execution")
+        return
+
+    if is_baseline_trading_account(account):
         return
 
     account_agent_type = str(getattr(account, "agent_type", "react") or "react").strip().lower()
@@ -594,14 +604,24 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
             max(1, int(getattr(AgentConfig, "AGENT_MAX_CONCURRENCY", 1))),
         )
 
+        decision_round_id = tool_cache.create_round_id(scope="ai_trade")
+        logger.info(f"Started AI trading decision round: {decision_round_id}")
+
         agent_accounts = [
-            a for a in accounts
+            a
+            for a in accounts
             if str(getattr(a, "agent_type", "react") or "react").strip().lower() in AGENT_DECISION_TYPES
+            and not is_baseline_trading_account(a)
         ]
         if agent_accounts:
             with ThreadPoolExecutor(max_workers=min(concurrency, len(agent_accounts))) as executor:
                 future_map = {
-                    executor.submit(_collect_account_decision, account.id, prices): account.id
+                    executor.submit(
+                        _collect_account_decision,
+                        account.id,
+                        prices,
+                        decision_round_id,
+                    ): account.id
                     for account in agent_accounts
                 }
                 for fut in as_completed(future_map):
@@ -615,6 +635,38 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
                             f"Decision worker crashed for account_id={account_id}: {worker_err}",
                             exc_info=True,
                         )
+
+        # Clear failed-transaction state from agent workers before baseline DB writes.
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+        # 1) Run baselines (sequential). Re-load each account so ORM state is fresh after agent commits.
+        now = datetime.now(timezone.utc)
+        for account in accounts:
+            if not is_baseline_trading_account(account):
+                continue
+            fresh = get_account(db, account.id)
+            if not fresh:
+                continue
+            agent_type = str(getattr(fresh, "agent_type", "react") or "react").strip().lower()
+            if agent_type != "buy_hold" and agent_type != "grid":
+                nm = (getattr(fresh, "name", "") or "").strip().lower()
+                if nm == "buy_hold":
+                    agent_type = "buy_hold"
+                elif nm == "grid":
+                    agent_type = "grid"
+            if agent_type == "buy_hold":
+                try:
+                    _buy_hold_baseline.run_tick(db, fresh, prices, now=now)
+                except Exception as e:
+                    logger.error(f"BuyHold baseline failed for account={fresh.id} ({fresh.name}): {e}", exc_info=True)
+            elif agent_type == "grid":
+                try:
+                    _grid_baseline.run_tick(db, fresh, prices)
+                except Exception as e:
+                    logger.error(f"Grid baseline failed for account={fresh.id} ({fresh.name}): {e}", exc_info=True)
 
     except Exception as err:
         logger.error(f"AI-driven order placement failed: {err}", exc_info=True)

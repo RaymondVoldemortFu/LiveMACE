@@ -113,10 +113,7 @@ class MultiAgent(BaseAgent):
             tool_calls = resp.tool_calls
             
             # Add to local messages for continuity
-            if hasattr(resp, "model_dump"):
-                resp_dict = resp.model_dump()
-            else:
-                resp_dict = resp.dict()
+            resp_dict = self.llm.build_assistant_message_dict(resp)
             messages.append(resp_dict)
             
             # Emit step for UI with specific role/color
@@ -130,7 +127,7 @@ class MultiAgent(BaseAgent):
                 step_data = {
                     "role": display_role,
                     "content": f"[{agent_name}] {msg_content}" if msg_content else None,
-                    "tool_calls": [t.model_dump() if hasattr(t, "model_dump") else t for t in tool_calls] if tool_calls else None,
+                    "tool_calls": LLMClient.tool_calls_to_roundtrip_dicts(tool_calls),
                     "metadata": {"agent": agent_name}
                 }
                 on_step(step_data)
@@ -201,6 +198,8 @@ class MultiAgent(BaseAgent):
                             "content": json.dumps(result, ensure_ascii=False),
                             "metadata": {"agent": agent_name}
                         })
+                if self.llm.is_gemini_model():
+                    messages.append(LLMClient.gemini_post_tool_user_message())
             else:
                 # No tool calls, this is the final answer from sub-agent
                 current_response = msg_content

@@ -4,7 +4,10 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import text
+import logging
 import os
+
+_startup_log = logging.getLogger(__name__)
 
 from config.logging_config import setup_logging
 # Initialize logging configuration
@@ -68,6 +71,20 @@ def on_startup():
                         "ADD COLUMN tool_routing_enabled VARCHAR(10) DEFAULT 'true' NOT NULL"
                     )
                 )
+    if engine.dialect.name == "mysql":
+        try:
+            with engine.begin() as conn:
+                conn.execute(
+                    text(
+                        "ALTER TABLE ai_decision_logs MODIFY COLUMN reason TEXT NOT NULL"
+                    )
+                )
+            _startup_log.info("MySQL: ai_decision_logs.reason widened to TEXT")
+        except Exception as exc:
+            _startup_log.warning(
+                "MySQL: could not ALTER ai_decision_logs.reason to TEXT (may already be TEXT): %s",
+                exc,
+            )
     # Seed trading configs if empty
     db: Session = SessionLocal()
     try:

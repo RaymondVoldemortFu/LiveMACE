@@ -8,6 +8,7 @@ import anyio
 
 from services.scheduler import start_scheduler, setup_market_tasks, task_scheduler, start_margin_monitor
 from services.container_service import ContainerService
+from services.tool_cache import tool_cache
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +21,10 @@ dotenv.load_dotenv(dotenv_path=dotenv.find_dotenv(usecwd=True), override=False)
 def initialize_services():
     """Initialize all services"""
     try:
+        # Tool cache is mandatory. Fail-fast when Redis is unavailable/misconfigured.
+        tool_cache.ensure_ready()
+        logger.info("Redis tool cache is ready")
+
         # Initialize Docker Container Service
         try:
             ContainerService()

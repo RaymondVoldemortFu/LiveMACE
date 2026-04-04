@@ -14,6 +14,7 @@ import {
 import { Card } from '@/components/ui/card'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Button } from '@/components/ui/button'
+import { isBaselineAccountName } from '@/lib/baselineAccounts'
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend)
 
@@ -45,10 +46,19 @@ interface ComprehensiveCurveViewProps {
 }
 
 type Timeframe = '5m' | '1h' | '1d'
-type CurveCategory = 'avg-by-model' | 'tool' | 'memory' | 'rule' | 'react' | 'advanced_multi_agent' | 'all'
+type CurveCategory =
+  | 'avg-by-model'
+  | 'baseline'
+  | 'tool'
+  | 'memory'
+  | 'rule'
+  | 'react'
+  | 'advanced_multi_agent'
+  | 'all'
 
 const CATEGORY_ORDER: CurveCategory[] = [
   'avg-by-model',
+  'baseline',
   'tool',
   'memory',
   'rule',
@@ -59,6 +69,7 @@ const CATEGORY_ORDER: CurveCategory[] = [
 
 const CATEGORY_LABEL: Record<CurveCategory, string> = {
   'avg-by-model': '同模型跨架构平均收益',
+  baseline: 'Baseline',
   tool: 'Tool',
   memory: 'Memory',
   rule: 'Rule',
@@ -83,6 +94,7 @@ const colorPalette = [
 
 function getCurveCategory(account?: AccountLike): Exclude<CurveCategory, 'avg-by-model' | 'all'> {
   if (!account) return 'react'
+  if (isBaselineAccountName(account.name)) return 'baseline'
   if ((account.agent_type || '').trim().toLowerCase() === 'advanced_multi_agent') return 'advanced_multi_agent'
   if (account.enable_rule_aware === true) return 'rule'
   if ((account.memory_enabled || '').trim().toLowerCase() === 'true') return 'memory'
@@ -209,8 +221,12 @@ export default function ComprehensiveCurveView({ data: initialData, accounts = [
   const modelByUsername = useMemo(() => {
     const map = new Map<string, string>()
     for (const username of usernames) {
-      const model = accountByName.get(username)?.model || 'unknown-model'
-      map.set(username, model)
+      const acc = accountByName.get(username)
+      const modelKey =
+        acc && isBaselineAccountName(acc.name)
+          ? 'baseline'
+          : (acc?.model && String(acc.model).trim()) || 'unknown-model'
+      map.set(username, modelKey)
     }
     return map
   }, [usernames, accountByName])
