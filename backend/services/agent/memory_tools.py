@@ -23,13 +23,15 @@ def get_or_create_memory_service():
         _memory_service = get_memory_service()
     return _memory_service
 
-def create_memory_tools(db: Session, trace_id: str = None):
+def create_memory_tools(db: Session, trace_id: str = None, bound_account_id: str = None):
     """
     Factory function to create memory tools with a specific database session.
 
     Args:
         db: SQLAlchemy Session to use for database operations
         trace_id: Trace ID for linking memories to the agent session that created them
+        bound_account_id: If set, overrides any account_id the agent passes — prevents
+                          cross-account memory writes for accounts with memory disabled
 
     Returns:
         Tuple of (memory_add_tool, memory_search_tool)
@@ -55,7 +57,11 @@ def create_memory_tools(db: Session, trace_id: str = None):
             if not memory_service:
                 return {"status": "error", "message": "Memory service is not available"}
 
-            account_id = _resolve_account_id(account_id)
+            # Enforce bound account — ignore whatever account_id the agent passed
+            if bound_account_id:
+                account_id = bound_account_id
+            else:
+                account_id = _resolve_account_id(account_id)
 
             # Hard dedup: search for similar memories before adding
             existing = memory_service.search(query=experience, account_id=account_id, limit=1, db=db, market=market)
@@ -95,7 +101,10 @@ def create_memory_tools(db: Session, trace_id: str = None):
             if not memory_service:
                 return {"status": "error", "message": "Memory service is not available"}
 
-            account_id = _resolve_account_id(account_id)
+            if bound_account_id:
+                account_id = bound_account_id
+            else:
+                account_id = _resolve_account_id(account_id)
 
             limit = min(limit, 5)
             results = memory_service.search(query=query, account_id=account_id, limit=limit, db=db, market=market)

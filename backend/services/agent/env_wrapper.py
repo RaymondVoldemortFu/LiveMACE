@@ -233,7 +233,7 @@ def register_default_tools(registry, db: Session, account_id: int, trace_id: str
     # === Memory tools (if enabled for this account) ===
     account = get_account(db, account_id)
     if account and account.memory_enabled == "true":
-        memory_add_tool, memory_search_tool = create_memory_tools(db, trace_id=trace_id)
+        memory_add_tool, memory_search_tool = create_memory_tools(db, trace_id=trace_id, bound_account_id=str(account_id))
         registry.register(memory_add_tool)
         registry.register(memory_search_tool)
 
