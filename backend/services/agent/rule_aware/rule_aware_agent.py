@@ -11,7 +11,6 @@ from typing import Dict, Any, List, Callable, Optional
 from ..base import BaseAgent
 from ..llm_client import LLMClient
 from ..tools import ToolRegistry
-from ..memory import get_memory_service
 from config.agent_config import AgentConfig
 from database.connection import get_db
 from database.models import Account
@@ -44,7 +43,8 @@ class RuleAwareAgent(BaseAgent):
         user_id: str = None,
         enable_llm_audit: bool = False,
         account_id: int = None,
-        agent_name: str = None
+        agent_name: str = None,
+        memory_enabled: bool = False,
     ):
         """
         Initialize Rule-Aware Agent
@@ -63,7 +63,7 @@ class RuleAwareAgent(BaseAgent):
         self.max_steps = max_steps
         self.user_id = user_id
         self.account_id = account_id
-        self.memory = get_memory_service()
+        # self.memory = get_memory_service()  # Disabled: internal memory bypasses memory_enabled flag
         
         # Rule compliance components
         self.rule_engine = rule_engine
@@ -151,33 +151,6 @@ class RuleAwareAgent(BaseAgent):
             portfolio=json.dumps(portfolio, ensure_ascii=False, indent=2),
             prices=json.dumps(prices, ensure_ascii=False, indent=2)
         )
-        
-        # Retrieve memory if available
-        if self.memory and self.user_id:
-            try:
-                query = f"Trading context: {len(portfolio.get('positions', {}))} positions. Market: {list(prices.keys())}"
-                retrieved_memories = self.memory.search(query, account_id=self.user_id)
-                
-                if retrieved_memories:
-                    memory_texts = []
-                    for m in retrieved_memories:
-                        text = m.get('memory') or m.get('text') or m.get('content')
-                        if text:
-                            memory_texts.append(f"- {text}")
-                    
-                    if memory_texts:
-                        memory_block = "\n".join(memory_texts)
-                        system_prompt += f"\n\n## Relevant Memories:\n{memory_block}"
-                        agent_logger.info(f"Retrieved memories: {memory_block}")
-                        
-                        if on_step:
-                            on_step({
-                                "role": "memory",
-                                "content": f"Retrieved Memories:\n{memory_block}",
-                                "metadata": {"type": "memory"}
-                            })
-            except Exception as e:
-                logger.error(f"Failed to retrieve memory: {e}")
         
         # Initialize conversation
         messages: List[Dict[str, Any]] = [
@@ -318,16 +291,8 @@ class RuleAwareAgent(BaseAgent):
         agent_logger.info("=== Final Decision ===")
         agent_logger.info(json.dumps(decision, ensure_ascii=False, indent=2))
         
-        # Store in memory if enabled
-        if self.memory and self.user_id and decision:
-            try:
-                memory_text = f"Decided to {decision['operation']} {decision.get('symbol', 'N/A')} at {current_time}. Reason: {decision.get('reason', 'N/A')}"
-                self.memory.add(memory_text, account_id=self.user_id)
-            except Exception as e:
-                logger.error(f"Failed to store memory: {e}")
-        
         return decision
-    
+
     def _attach_compliance_audit(
         self,
         decision: Dict[str, Any],
