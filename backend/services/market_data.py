@@ -1,5 +1,6 @@
 from typing import Dict, List, Any
 import logging
+from threading import Lock
 from datetime import datetime, timezone
 from .hyperliquid_market_data import (
     get_last_price_from_hyperliquid,
@@ -10,6 +11,7 @@ from .hyperliquid_market_data import (
 )
 from .alpaca_market_data import (
     get_last_price_from_alpaca,
+    get_last_close_price_from_alpaca,
     get_kline_data_from_alpaca,
     get_market_status_from_alpaca,
     get_all_supported_symbols,
@@ -27,6 +29,13 @@ US_STOCK_SYMBOLS = {str(symbol).upper() for symbol in SUPPORTED_STOCKS}
 
 KLINE_CACHE_PERIOD = "1m"
 KLINE_CACHE_MAX_STALE_SECONDS = 120
+US_MARKET_STATUS_TTL_SECONDS = 60
+
+_us_market_status_cache: Dict[str, Any] = {
+    "status": None,
+    "ts": 0,
+}
+_us_market_status_lock = Lock()
 
 
 def _period_to_seconds(period: str) -> int | None:
@@ -178,6 +187,35 @@ def _save_klines(symbol: str, market: str, period: str, klines: List[Dict[str, A
         db.close()
 
 
+def _get_cached_us_market_status() -> Dict[str, Any]:
+    """Get US market status with short TTL cache to avoid per-symbol clock calls."""
+    now_ts = now_timestamp()
+    with _us_market_status_lock:
+        cached_status = _us_market_status_cache.get("status")
+        cached_ts = int(_us_market_status_cache.get("ts") or 0)
+        if cached_status is not None and (now_ts - cached_ts) <= US_MARKET_STATUS_TTL_SECONDS:
+            return cached_status
+
+    try:
+        # Alpaca clock is market-wide (not symbol-specific); use a stable supported symbol.
+        status = get_market_status_from_alpaca("AAPL")
+    except Exception as err:
+        with _us_market_status_lock:
+            cached_status = _us_market_status_cache.get("status")
+        if cached_status is not None:
+            logger.warning(
+                "Failed to refresh US market status, using stale cached status: %s",
+                err,
+            )
+            return cached_status
+        raise
+
+    with _us_market_status_lock:
+        _us_market_status_cache["status"] = status
+        _us_market_status_cache["ts"] = now_timestamp()
+    return status
+
+
 def _iso_string_to_utc_epoch_ms(raw: str) -> int:
     """ISO 8601 → UTC 瞬时点毫秒。naive 按 UTC 解释，与行情层一致，避免依赖服务器本地时区。"""
     ts = raw.replace("Z", "+00:00")
@@ -261,6 +299,24 @@ def get_last_price(symbol: str, market: str = "CRYPTO") -> float:
     try:
         if market_norm == "US":
             source = "Alpaca"
+            # Settlement requirement for US stocks:
+            # when market is closed, use latest daily close as valuation price.
+            status = _get_cached_us_market_status()
+            is_trading = bool(status.get("is_trading", False))
+            if not is_trading:
+                close_price = get_last_close_price_from_alpaca(symbol_norm)
+                if close_price and close_price > 0:
+                    logger.debug(
+                        "US market closed for %s, using latest close price: %s",
+                        key,
+                        close_price,
+                    )
+                    cache_price(symbol_norm, market_norm, close_price)
+                    return close_price
+                logger.error(
+                    "US market closed for %s but latest close price is unavailable; falling back to latest trade price",
+                    key,
+                )
             price = get_last_price_from_alpaca(symbol_norm)
         else:
             source = "Hyperliquid"

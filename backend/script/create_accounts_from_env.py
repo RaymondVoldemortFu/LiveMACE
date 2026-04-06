@@ -61,6 +61,17 @@ ACCOUNT_FIELD_KEYS = [
     "is_active",
 ]
 
+BASELINE_ACCOUNT_SPECS = [
+    {"name": "buy_hold", "agent_type": "buy_hold"},
+    {"name": "grid", "agent_type": "grid"},
+]
+
+LLM_AGENT_TYPES = {"react", "multi_agent", "advanced_multi_agent", "rule_aware"}
+
+
+def _agent_type_uses_llm(agent_type: str) -> bool:
+    return (agent_type or "").strip().lower() in LLM_AGENT_TYPES
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -414,9 +425,14 @@ def main() -> int:
                 )
                 if existing:
                     if args.update_existing:
-                        existing.model = model
-                        existing.base_url = base_url
-                        existing.api_key = encrypted_api_key
+                        if _agent_type_uses_llm(account_config["agent_type"]):
+                            existing.model = model
+                            existing.base_url = base_url
+                            existing.api_key = encrypted_api_key
+                        else:
+                            existing.model = None
+                            existing.base_url = None
+                            existing.api_key = None
                         existing.account_type = account_config["account_type"]
                         existing.agent_type = account_config["agent_type"]
                         existing.memory_enabled = account_config["memory_enabled"]
@@ -440,9 +456,9 @@ def main() -> int:
                     tool_routing_enabled=account_config["tool_routing_enabled"],
                     enable_rule_aware=account_config["enable_rule_aware"],
                     is_active=account_config["is_active"],
-                    model=model,
-                    base_url=base_url,
-                    api_key=encrypted_api_key,
+                    model=model if _agent_type_uses_llm(account_config["agent_type"]) else None,
+                    base_url=base_url if _agent_type_uses_llm(account_config["agent_type"]) else None,
+                    api_key=encrypted_api_key if _agent_type_uses_llm(account_config["agent_type"]) else None,
                     initial_capital=DEFAULT_INITIAL_CAPITAL,
                     current_cash=DEFAULT_INITIAL_CAPITAL,
                     frozen_cash=Decimal("0"),
@@ -451,11 +467,59 @@ def main() -> int:
                 created += 1
                 print(f"[CREATED] {name} (model={model}, combo={config_name})")
 
+        # Create/update fixed baseline accounts once per user.
+        for baseline_spec in BASELINE_ACCOUNT_SPECS:
+            baseline_name = baseline_spec["name"]
+            baseline_agent_type = baseline_spec["agent_type"]
+            existing = (
+                db.query(Account)
+                .filter(Account.user_id == user.id, Account.name == baseline_name)
+                .first()
+            )
+            if existing:
+                if args.update_existing:
+                    existing.model = None
+                    existing.base_url = None
+                    existing.api_key = None
+                    existing.account_type = "AI"
+                    existing.agent_type = baseline_agent_type
+                    existing.memory_enabled = "false"
+                    existing.tool_routing_enabled = "false"
+                    existing.enable_rule_aware = "false"
+                    existing.is_active = "true"
+                    updated += 1
+                    print(f"[UPDATED] {baseline_name} (baseline)")
+                else:
+                    skipped += 1
+                    print(f"[SKIPPED] {baseline_name} already exists")
+                continue
+
+            baseline_account = Account(
+                user_id=user.id,
+                version="v1",
+                name=baseline_name,
+                account_type="AI",
+                agent_type=baseline_agent_type,
+                memory_enabled="false",
+                tool_routing_enabled="false",
+                enable_rule_aware="false",
+                is_active="true",
+                model=None,
+                base_url=None,
+                api_key=None,
+                initial_capital=DEFAULT_INITIAL_CAPITAL,
+                current_cash=DEFAULT_INITIAL_CAPITAL,
+                frozen_cash=Decimal("0"),
+            )
+            db.add(baseline_account)
+            created += 1
+            print(f"[CREATED] {baseline_name} (baseline)")
+
         db.commit()
     finally:
         db.close()
 
-    total = len(MODEL_LIST) * len(account_configs)
+    total = len(MODEL_LIST) * len(account_configs) + len(BASELINE_ACCOUNT_SPECS)
     print(
         f"Done. baseline_created={baseline_created}, baseline_skipped={baseline_skipped}, "
         f"created={created}, updated={updated}, skipped={skipped}, total={total}, mode={args.mode}"

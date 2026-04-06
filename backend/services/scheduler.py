@@ -597,14 +597,36 @@ def _ensure_market_data_ready() -> None:
 
 def reset_auto_trading_job():
     """Reset the auto trading job after account configuration changes"""
-    # Import constants from auto_trader module
-    from services.auto_trader import AI_TRADE_JOB_ID
-    from services.trading_commands import place_ai_driven_crypto_order
+    from services.trading_commands import (
+        AI_TRADE_JOB_ID,
+        BASELINE_TRADE_JOB_ID,
+        place_ai_driven_crypto_order,
+        place_baseline_driven_order,
+    )
     import threading
     import os
 
-    # Define interval (default 4 hours, configurable via env)
-    AI_TRADE_INTERVAL_SECONDS = int(os.getenv("AI_TRADE_INTERVAL_SECONDS", "14400"))
+    def _parse_interval_env(env_name: str, default_value: int) -> int:
+        raw_value = os.getenv(env_name)
+        if raw_value is None or str(raw_value).strip() == "":
+            return default_value
+        try:
+            parsed = int(str(raw_value).strip())
+            if parsed <= 0:
+                raise ValueError("must be > 0")
+            return parsed
+        except Exception:
+            logger.warning(
+                "Invalid %s=%r, fallback to default %s seconds",
+                env_name,
+                raw_value,
+                default_value,
+            )
+            return default_value
+
+    # Define interval (defaults: AI 4h, baseline 5m; configurable via env)
+    AI_TRADE_INTERVAL_SECONDS = _parse_interval_env("AI_TRADE_INTERVAL_SECONDS", 14400)
+    BASELINE_TRADE_INTERVAL_SECONDS = _parse_interval_env("BASELINE_TRADE_INTERVAL_SECONDS", 300)
 
     def _setup_job_async():
         try:
@@ -621,12 +643,24 @@ def reset_auto_trading_job():
             if task_scheduler.scheduler and task_scheduler.scheduler.get_job(AI_TRADE_JOB_ID):
                 task_scheduler.remove_task(AI_TRADE_JOB_ID)
                 logger.info(f"Removed existing auto trading job: {AI_TRADE_JOB_ID}")
+
+            # Remove existing baseline trading job if it exists
+            if task_scheduler.scheduler and task_scheduler.scheduler.get_job(BASELINE_TRADE_JOB_ID):
+                task_scheduler.remove_task(BASELINE_TRADE_JOB_ID)
+                logger.info(f"Removed existing baseline trading job: {BASELINE_TRADE_JOB_ID}")
             
             # Re-add the auto trading job with updated configuration
             task_scheduler.add_interval_task(
                 task_func=lambda: place_ai_driven_crypto_order(max_ratio=0.2),
                 interval_seconds=AI_TRADE_INTERVAL_SECONDS,
                 task_id=AI_TRADE_JOB_ID
+            )
+
+            # Add independent baseline trading job
+            task_scheduler.add_interval_task(
+                task_func=place_baseline_driven_order,
+                interval_seconds=BASELINE_TRADE_INTERVAL_SECONDS,
+                task_id=BASELINE_TRADE_JOB_ID,
             )
             
             # Trigger one immediate execution
@@ -636,9 +670,20 @@ def reset_auto_trading_job():
             except Exception as run_err:
                 logger.error(f"Immediate AI trade failed: {run_err}")
 
+            try:
+                logger.info("Triggering immediate baseline trade after setup")
+                place_baseline_driven_order()
+            except Exception as run_err:
+                logger.error(f"Immediate baseline trade failed: {run_err}")
+
             # Log current jobs for verification
             jobs = task_scheduler.get_job_info()
-            logger.info(f"Auto trading job reset successfully - interval: {AI_TRADE_INTERVAL_SECONDS}s; Jobs: {jobs}")
+            logger.info(
+                "Auto trading jobs reset successfully - ai_interval=%ss baseline_interval=%ss; Jobs: %s",
+                AI_TRADE_INTERVAL_SECONDS,
+                BASELINE_TRADE_INTERVAL_SECONDS,
+                jobs,
+            )
 
         except Exception as e:
             logger.error(f"Failed to reset auto trading job in background: {e}")

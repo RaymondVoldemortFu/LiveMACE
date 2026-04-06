@@ -4,6 +4,7 @@ Trading Commands Service - Handles order execution and trading logic
 import logging
 import random
 import threading
+import os
 from decimal import Decimal
 from typing import Dict, Optional, Tuple, List
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -27,6 +28,7 @@ from services.ai_decision_service import (
 )
 from services.baselines import BuyHoldBaseline, GridBaseline, is_baseline_trading_account
 from config.agent_config import AgentConfig
+from config.market_data_config import ALPACA_US_FEED_ENABLED
 from services.alpaca_market_data import SUPPORTED_STOCKS as US_TRADING_SYMBOLS
 from services.trading_symbols import AI_TRADING_SYMBOLS
 from repositories.account_repo import get_account, list_active_ai_accounts
@@ -44,6 +46,7 @@ _grid_baseline = GridBaseline()
 
 US_TRADING_SYMBOLS = list(US_TRADING_SYMBOLS)
 AGENT_DECISION_TYPES = {"react", "multi_agent", "advanced_multi_agent", "rule_aware"}
+_baseline_us_feed_skip_logged = False
 
 
 def _infer_market(symbol: str, decision_market: Optional[str]) -> str:
@@ -82,17 +85,55 @@ def _log_trade_execution(operation: str, symbol: str, target_portion: float, pri
     trade_logger.info(msg)
 
 
-def _get_market_prices(symbols: List[str], market: str) -> Dict[str, float]:
+def _get_market_prices(symbols: List[str], market: str, suppress_symbol_warnings: bool = False) -> Dict[str, float]:
     """Get latest prices for given symbols"""
     prices = {}
+    failed_symbols: List[str] = []
+    non_positive_symbols: List[str] = []
+    exception_symbols: List[str] = []
     for symbol in symbols:
         try:
             price = float(get_last_price(symbol, market))
             if price > 0:
                 prices[symbol] = price
+            else:
+                failed_symbols.append(symbol)
+                non_positive_symbols.append(symbol)
+                if not suppress_symbol_warnings:
+                    logger.warning(
+                        "Non-positive price for %s (%s): %s",
+                        symbol,
+                        market,
+                        price,
+                    )
         except Exception as err:
-            logger.warning(f"Failed to get price for {symbol}: {err}")
+            failed_symbols.append(symbol)
+            exception_symbols.append(symbol)
+            if not suppress_symbol_warnings:
+                logger.warning(f"Failed to get price for {symbol}: {err}")
+
+    if suppress_symbol_warnings and failed_symbols:
+        logger.warning(
+            (
+                "Failed to get %s prices for %d/%d symbols "
+                "(non_positive=%d, exceptions=%d; suppressed per-symbol warnings). Sample: %s"
+            ),
+            market,
+            len(failed_symbols),
+            len(symbols),
+            len(non_positive_symbols),
+            len(exception_symbols),
+            ", ".join(failed_symbols[:5]),
+        )
     return prices
+
+
+def _baseline_should_fetch_us_prices() -> bool:
+    if not ALPACA_US_FEED_ENABLED:
+        return False
+    alpaca_key = (os.getenv("ALPACA_KEY") or "").strip()
+    alpaca_secret = (os.getenv("ALPACA_SECRET") or "").strip()
+    return bool(alpaca_key and alpaca_secret)
 
 
 def _get_active_ai_trading_accounts(db: Session) -> List[Account]:
@@ -110,6 +151,32 @@ def _load_trading_accounts(db: Session) -> List[Account]:
     for account in baseline_accounts:
         accounts_by_id.setdefault(account.id, account)
     return list(accounts_by_id.values())
+
+
+def _load_baseline_accounts(db: Session) -> List[Account]:
+    active_accounts = _get_active_ai_trading_accounts(db)
+    return [
+        account
+        for account in active_accounts
+        if (getattr(account, "agent_type", "react") or "react").strip().lower() in {"buy_hold", "grid"}
+    ]
+
+
+def _run_baseline_accounts(db: Session, accounts: List[Account], prices: Dict[str, float]) -> None:
+    now = datetime.now(timezone.utc)
+    for account in accounts:
+        agent_type = getattr(account, "agent_type", "react") or "react"
+        agent_type = str(agent_type).strip().lower()
+        if agent_type == "buy_hold":
+            try:
+                _buy_hold_baseline.run_tick(db, account, prices, now=now)
+            except Exception as e:
+                logger.error(f"BuyHold baseline failed for account={account.id} ({account.name}): {e}", exc_info=True)
+        elif agent_type == "grid":
+            try:
+                _grid_baseline.run_tick(db, account, prices)
+            except Exception as e:
+                logger.error(f"Grid baseline failed for account={account.id} ({account.name}): {e}", exc_info=True)
 
 
 def _select_side(db: Session, account: Account, symbol: str, max_value: float) -> Optional[Tuple[str, int]]:
@@ -606,8 +673,50 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
         if db is not None:
             db.rollback()
     finally:
-        if "decision_round_id" in locals():
-            tool_cache.clear_round(decision_round_id)
+        if db is not None:
+            db.close()
+        _ai_trade_run_lock.release()
+
+
+def place_baseline_driven_order() -> None:
+    """Run baseline strategies (buy_hold/grid) independently from AI decision schedule."""
+    if not _ai_trade_run_lock.acquire(blocking=False):
+        logger.warning("Trading loop is already running; skip baseline trigger to avoid overlap")
+        return
+
+    db = None
+    try:
+        db = SessionLocal()
+        baseline_accounts = _load_baseline_accounts(db)
+        if not baseline_accounts:
+            logger.debug("No baseline accounts, skipping baseline trading")
+            return
+
+        global _baseline_us_feed_skip_logged
+
+        prices = {}
+        prices.update(_get_market_prices(AI_TRADING_SYMBOLS, "CRYPTO"))
+
+        if _baseline_should_fetch_us_prices():
+            prices.update(_get_market_prices(US_TRADING_SYMBOLS, "US", suppress_symbol_warnings=True))
+            _baseline_us_feed_skip_logged = False
+        elif not _baseline_us_feed_skip_logged:
+            logger.warning(
+                "Baseline US price fetch disabled (Alpaca feed disabled or missing credentials); skipping US symbols"
+            )
+            _baseline_us_feed_skip_logged = True
+
+        if not prices:
+            logger.warning("Failed to fetch market prices, skipping baseline trading")
+            return
+
+        _run_baseline_accounts(db, baseline_accounts, prices)
+
+    except Exception as err:
+        logger.error(f"Baseline-driven order placement failed: {err}", exc_info=True)
+        if db is not None:
+            db.rollback()
+    finally:
         if db is not None:
             db.close()
         _ai_trade_run_lock.release()
@@ -676,3 +785,4 @@ def place_random_crypto_order(max_ratio: float = 0.2) -> None:
 
 AUTO_TRADE_JOB_ID = "auto_crypto_trade"
 AI_TRADE_JOB_ID = "ai_crypto_trade"
+BASELINE_TRADE_JOB_ID = "baseline_trade"
