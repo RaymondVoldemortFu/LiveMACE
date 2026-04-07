@@ -8,7 +8,6 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .base import BaseAgent
 from .llm_client import LLMClient
-from .memory import get_memory_service
 from .prompts.advanced_multi_agent_prompts import (
     ANALYST_AGENT_PROMPT,
     ADVANCED_EXECUTION_PROMPT,
@@ -34,7 +33,6 @@ class AdvancedMultiAgent(BaseAgent):
         super().__init__(llm, tools)
         self.max_steps = max_steps
         self.user_id = user_id
-        self.memory = get_memory_service()
 
         self.context: List[str] = []
         self.evidence_log: List[Dict[str, Any]] = []
@@ -817,30 +815,8 @@ class AdvancedMultiAgent(BaseAgent):
     ) -> Dict[str, Any]:
         logger.info("Starting Advanced Multi-Agent decision process")
 
-        memory_content = ""
-        if self.memory and self.user_id:
-            try:
-                query = f"Trading context: {len(portfolio.get('positions', {}))} positions. Market: {list(prices.keys())}"
-                memories = self.memory.search(query, account_id=self.user_id)
-                if memories:
-                    texts = [m.get("memory") or m.get("text") or m.get("content") for m in memories]
-                    memory_content = "\n".join([f"- {t}" for t in texts if t])
-                    if on_step and memory_content:
-                        on_step(
-                            {
-                                "role": "memory",
-                                "content": f"Retrieved Memories:\n{memory_content}",
-                                "metadata": {"type": "memory"},
-                            }
-                        )
-            except Exception as e:
-                logger.error("Memory retrieval failed: %s", e)
-
         self.context = []
         self.evidence_log = []
-
-        if memory_content:
-            self.context.append(f"Relevant Memories:\n{memory_content}")
 
         objective = self._build_objective(portfolio)
         final_decision = None
@@ -992,16 +968,5 @@ class AdvancedMultiAgent(BaseAgent):
                 "protocol": "tool",
                 "executed_trades": executed_trades,
             }
-
-        if self.memory and self.user_id:
-            try:
-                session_summary = "\n".join(self.context)
-                self.memory.add(
-                    session_summary,
-                    account_id=self.user_id,
-                    metadata={"trace_id": trace_id} if trace_id else {},
-                )
-            except Exception as e:
-                logger.error("Failed to save to memory: %s", e)
 
         return final_decision
