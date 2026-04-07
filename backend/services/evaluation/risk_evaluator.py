@@ -10,15 +10,24 @@ Compares risk metrics between memory-enabled and memory-disabled agents:
 
 from typing import Dict, Any, List, Optional
 from datetime import datetime
+from dataclasses import dataclass
 import logging
 import numpy as np
-import os
 from sqlalchemy.orm import Session
 
 from .base import BaseEvaluator
-from database.models import AgentPeriodCheckpoint, Account
+from database.models import AccountSnapshot
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class CheckpointData:
+    """Unified checkpoint data from account_snapshots."""
+    period_end: datetime
+    equity_end: float
+    return_rate: float
+    pnl: float
 
 
 class RiskEvaluator(BaseEvaluator):
@@ -26,12 +35,10 @@ class RiskEvaluator(BaseEvaluator):
 
     # Configurable thresholds
     DRAWDOWN_THRESHOLD = 0.05  # 5% decline from peak
-    SHARP_MOVEMENT_THRESHOLD = 0.03  # 3% single-period change
+    SHARP_MOVEMENT_THRESHOLD = 0.01  # 1% single-period change
     TAIL_RISK_PERCENTILE = 0.05  # Bottom 5% of returns
     LOSS_STREAK_MIN_LENGTH = 3  # 3+ consecutive losses
 
-    # Use AI trade interval for risk evaluation (aligns with decision cycles)
-    DEFAULT_INTERVAL_SECONDS = int(os.getenv("AI_TRADE_INTERVAL_SECONDS", "900"))
 
     def __init__(self, db: Session):
         self.db = db
@@ -80,25 +87,39 @@ class RiskEvaluator(BaseEvaluator):
         account_id: int,
         start_time: Optional[datetime] = None,
         end_time: Optional[datetime] = None,
-        interval_seconds: Optional[int] = None
-    ) -> List[AgentPeriodCheckpoint]:
-        """Load checkpoints ordered by time."""
-        if interval_seconds is None:
-            interval_seconds = self.DEFAULT_INTERVAL_SECONDS
-
-        query = self.db.query(AgentPeriodCheckpoint).filter(
-            AgentPeriodCheckpoint.account_id == account_id,
-            AgentPeriodCheckpoint.interval_seconds == interval_seconds
+    ) -> List[CheckpointData]:
+        """Load account snapshots ordered by time and compute return rates."""
+        query = self.db.query(AccountSnapshot).filter(
+            AccountSnapshot.account_id == account_id
         )
-
         if start_time:
-            query = query.filter(AgentPeriodCheckpoint.period_end >= start_time)
+            query = query.filter(AccountSnapshot.ts >= start_time)
         if end_time:
-            query = query.filter(AgentPeriodCheckpoint.period_end <= end_time)
+            query = query.filter(AccountSnapshot.ts <= end_time)
 
-        return query.order_by(AgentPeriodCheckpoint.period_end).all()
+        snapshots = query.order_by(AccountSnapshot.ts).all()
 
-    def _detect_drawdowns(self, checkpoints: List[AgentPeriodCheckpoint]) -> Dict[str, Any]:
+        if len(snapshots) < 2:
+            return []
+
+        checkpoints = []
+        for i in range(1, len(snapshots)):
+            prev = snapshots[i - 1]
+            curr = snapshots[i]
+            prev_equity = float(prev.total_equity)
+            curr_equity = float(curr.total_equity)
+            return_rate = (curr_equity - prev_equity) / prev_equity if prev_equity != 0 else 0.0
+            pnl = curr_equity - prev_equity
+            checkpoints.append(CheckpointData(
+                period_end=curr.ts if isinstance(curr.ts, datetime) else datetime.fromisoformat(str(curr.ts)),
+                equity_end=curr_equity,
+                return_rate=round(return_rate, 6),
+                pnl=round(pnl, 4)
+            ))
+
+        return checkpoints
+
+    def _detect_drawdowns(self, checkpoints: List[CheckpointData]) -> Dict[str, Any]:
         """Detect drawdown events (peak-to-trough declines)."""
         equities = [float(cp.equity_end) for cp in checkpoints]
 
@@ -154,7 +175,7 @@ class RiskEvaluator(BaseEvaluator):
             "max_drawdown": min([d["drawdown_pct"] for d in drawdowns]) if drawdowns else 0.0
         }
 
-    def _detect_sharp_movements(self, checkpoints: List[AgentPeriodCheckpoint]) -> Dict[str, Any]:
+    def _detect_sharp_movements(self, checkpoints: List[CheckpointData]) -> Dict[str, Any]:
         """Detect sharp single-period movements (gains and losses)."""
         sharp_losses = []
         sharp_gains = []
@@ -186,7 +207,7 @@ class RiskEvaluator(BaseEvaluator):
             }
         }
 
-    def _detect_loss_streaks(self, checkpoints: List[AgentPeriodCheckpoint]) -> Dict[str, Any]:
+    def _detect_loss_streaks(self, checkpoints: List[CheckpointData]) -> Dict[str, Any]:
         """Detect consecutive loss streaks."""
         streaks = []
         current_streak = []
@@ -220,7 +241,7 @@ class RiskEvaluator(BaseEvaluator):
             "max_streak_length": max([s["length"] for s in streaks]) if streaks else 0
         }
 
-    def _calculate_tail_risk(self, checkpoints: List[AgentPeriodCheckpoint]) -> Dict[str, Any]:
+    def _calculate_tail_risk(self, checkpoints: List[CheckpointData]) -> Dict[str, Any]:
         """Calculate tail risk (extreme losses)."""
         returns = [float(cp.return_rate) for cp in checkpoints]
 
