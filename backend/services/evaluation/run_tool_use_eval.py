@@ -491,6 +491,9 @@ def run():
             grouped_scores[key]["Tool Cost / Budget Usage"].append(
                 objective_metrics.get("summary", {}).get("tool_calls_per_step", 0)
             )
+            grouped_scores[key]["Routing Quality Score"].append(
+                (judge_metrics.get("routing_quality") or {}).get("score", 0)
+            )
             token_usage = judge_metrics.get("token_usage", {})
             token_agg[key]["prompt_tokens"].append(token_usage.get("prompt_tokens", 0))
             token_agg[key]["completion_tokens"].append(token_usage.get("completion_tokens", 0))

@@ -1,6 +1,7 @@
 import json
 import os
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 try:
@@ -16,6 +17,19 @@ from services.evaluation.judge_output_utils import (
 )
 from services.agent.llm_client import LLMClient
 
+try:
+    from services.agent.tool_selector import REQUIRED_TOOL_NAMES as ROUTING_REQUIRED_TOOL_NAMES
+except Exception:
+    ROUTING_REQUIRED_TOOL_NAMES = [
+        "get_market_snapshot",
+        "get_kline_history",
+        "get_account_state",
+        "get_history_decisions",
+        "execute_trade",
+    ]
+
+_TOOL_QUALITY_SCORE_CACHE: Optional[Dict[str, int]] = None
+
 
 def _safe_json_loads(value: Any) -> Any:
     if value is None:
@@ -26,6 +40,76 @@ def _safe_json_loads(value: Any) -> Any:
         return json.loads(value)
     except Exception:
         return value
+
+
+def _load_tool_quality_scores() -> Dict[str, int]:
+    global _TOOL_QUALITY_SCORE_CACHE
+    if _TOOL_QUALITY_SCORE_CACHE is not None:
+        return _TOOL_QUALITY_SCORE_CACHE
+
+    default_path = (
+        Path(__file__).resolve().parent
+        / "tool_eval"
+        / "tool_quality_scores_20260407_203219.json"
+    )
+    score_path = Path(
+        (os.getenv("TOOL_QUALITY_SCORE_PATH") or str(default_path)).strip()
+    ).expanduser()
+
+    try:
+        payload = json.loads(score_path.read_text(encoding="utf-8"))
+        raw_scores = payload.get("scores") if isinstance(payload, dict) else {}
+        if isinstance(raw_scores, dict):
+            _TOOL_QUALITY_SCORE_CACHE = {
+                str(k): int(v)
+                for k, v in raw_scores.items()
+                if isinstance(v, (int, float, str)) and str(v).strip() != ""
+            }
+        else:
+            _TOOL_QUALITY_SCORE_CACHE = {}
+    except Exception:
+        _TOOL_QUALITY_SCORE_CACHE = {}
+    return _TOOL_QUALITY_SCORE_CACHE
+
+
+def compute_routing_quality_from_steps(steps: List[Dict[str, Any]]) -> Dict[str, Any]:
+    required = set(ROUTING_REQUIRED_TOOL_NAMES)
+    quality_scores = _load_tool_quality_scores()
+    call_scores: List[float] = []
+    selection_calls = 0
+    scored_calls = 0
+
+    for step in steps:
+        if step.get("role") != "tool":
+            continue
+        payload = _safe_json_loads(step.get("tool_output") or step.get("content"))
+        if not isinstance(payload, dict):
+            continue
+        selected_tools = payload.get("selected_tools")
+        if not isinstance(selected_tools, list):
+            continue
+
+        # This tool output is from a select_tools routing call.
+        selection_calls += 1
+        tool_count = len(selected_tools)
+        denom_count = tool_count - len(required)
+        if denom_count <= 0:
+            continue
+
+        non_required = [str(t) for t in selected_tools if str(t) not in required]
+        numerator = sum(max(0, min(4, int(quality_scores.get(t, 0)))) for t in non_required)
+        denominator = denom_count * 4
+        if denominator <= 0:
+            continue
+        call_scores.append(numerator / denominator)
+        scored_calls += 1
+
+    trace_score = (sum(call_scores) / len(call_scores)) if call_scores else 0.0
+    return {
+        "score": float(trace_score),
+        "selection_calls": selection_calls,
+        "scored_calls": scored_calls,
+    }
 
 
 def _build_judge_system_prompt(base_prompt: str) -> str:
@@ -142,9 +226,11 @@ class LLMToolJudgeEvaluator(BaseEvaluator):
             parsed["reason"] = "failed_to_parse_json"
         prompt_tokens = _count_message_tokens(messages, self.llm.model)
         completion_tokens = _count_text_tokens(content, self.llm.model)
+        routing_quality = compute_routing_quality_from_steps(steps)
         return {
             "judge_raw": content,
             "judge_parsed": parsed,
+            "routing_quality": routing_quality,
             "token_usage": {
                 "model": self.llm.model,
                 "prompt_tokens": prompt_tokens,
