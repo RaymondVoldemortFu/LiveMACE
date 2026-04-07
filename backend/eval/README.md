@@ -23,6 +23,14 @@ cd backend
 The script reads the database from `DATABASE_URL` (or defaults to `./data.db`)
 and the LLM config from `.env`, identical to the main app.
 
+If your active DB file is `backend/alpha_arena.sqlite`, pass one of:
+
+```bash
+uv run python eval/offline_llm_audit.py --db-path ./alpha_arena.sqlite
+# or
+uv run python eval/offline_llm_audit.py --database-url sqlite:///./alpha_arena.sqlite
+```
+
 ### Quick Start
 
 ```bash
@@ -54,6 +62,8 @@ The script resolves model / key / URL in this order (first wins):
 
 | Flag | Default | Description |
 |---|---|---|
+| `--database-url URL` | env / default | Override `DATABASE_URL` for this run |
+| `--db-path PATH` | none | SQLite file path shortcut (converted to DATABASE_URL) |
 | `--model MODEL` | env / `gpt-4.1` | LLM model name |
 | `--api-key KEY` | env | API key |
 | `--base-url URL` | env | API base URL |
