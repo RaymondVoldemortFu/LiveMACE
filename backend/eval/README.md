@@ -23,6 +23,14 @@ cd backend
 The script reads the database from `DATABASE_URL` (or defaults to `./data.db`)
 and the LLM config from `.env`, identical to the main app.
 
+If your active DB file is `backend/alpha_arena.sqlite`, pass one of:
+
+```bash
+uv run python eval/offline_llm_audit.py --db-path ./alpha_arena.sqlite
+# or
+uv run python eval/offline_llm_audit.py --database-url sqlite:///./alpha_arena.sqlite
+```
+
 ### Quick Start
 
 ```bash
@@ -54,6 +62,8 @@ The script resolves model / key / URL in this order (first wins):
 
 | Flag | Default | Description |
 |---|---|---|
+| `--database-url URL` | env / default | Override `DATABASE_URL` for this run |
+| `--db-path PATH` | none | SQLite file path shortcut (converted to DATABASE_URL) |
 | `--model MODEL` | env / `gpt-4.1` | LLM model name |
 | `--api-key KEY` | env | API key |
 | `--base-url URL` | env | API base URL |
@@ -85,3 +95,25 @@ For each audited `RuleEvaluationResult` row:
    uv run python eval/offline_llm_audit.py --limit 200
    ```
 3. Results are immediately available in the frontend compliance dashboard.
+
+---
+
+## rule_aware_stats_report.py
+
+Generate Rule-Aware Agent statistics directly from SQLite without starting backend.
+
+Includes:
+- Account-level summary (all-time and recent 7 days)
+- LLM audit aggregates
+- Trend charts for `s_rule_sat`, `s_audit`, and `final_score`
+
+Quick start:
+
+```bash
+cd backend
+conda run -n uvbench python eval/rule_aware_stats_report.py --db-path ./alpha_arena.sqlite --days 14
+```
+
+Outputs are written to `backend/eval_outputs/rule_aware_stats/` by default.
+
+Full guide: `eval/RULE_AWARE_STATS_REPORT.md`

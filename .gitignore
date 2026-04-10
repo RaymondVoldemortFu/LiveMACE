@@ -320,3 +320,6 @@ data.db-journal
 chroma_db
 *.sqlite3
 .cursor
+.claude
+.github
+backend/eval_outputs/

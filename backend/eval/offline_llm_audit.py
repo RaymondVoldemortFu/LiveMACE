@@ -32,10 +32,52 @@ if str(_BACKEND_DIR) not in sys.path:
 import dotenv
 dotenv.load_dotenv(dotenv.find_dotenv(usecwd=True), override=False)
 
+
+def _bootstrap_database_url_from_cli() -> None:
+    """
+    Allow overriding DATABASE_URL before database.connection is imported.
+
+    Supported CLI flags (first match wins):
+      --database-url <url>
+      --database-url=<url>
+      --db-path <sqlite_file>
+      --db-path=<sqlite_file>
+    """
+    args = sys.argv[1:]
+    database_url: Optional[str] = None
+    db_path: Optional[str] = None
+
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg.startswith("--database-url="):
+            database_url = arg.split("=", 1)[1].strip()
+        elif arg == "--database-url" and i + 1 < len(args):
+            database_url = args[i + 1].strip()
+            i += 1
+        elif arg.startswith("--db-path="):
+            db_path = arg.split("=", 1)[1].strip()
+        elif arg == "--db-path" and i + 1 < len(args):
+            db_path = args[i + 1].strip()
+            i += 1
+        i += 1
+
+    if database_url:
+        os.environ["DATABASE_URL"] = database_url
+        return
+
+    if db_path:
+        abs_path = Path(db_path).expanduser().resolve()
+        # Keep sqlite URL style consistent with SQLAlchemy expectations.
+        os.environ["DATABASE_URL"] = f"sqlite:///{abs_path.as_posix()}"
+
+
+_bootstrap_database_url_from_cli()
+
 # ── App imports (after path / env setup) ────────────────────────────────────
 from sqlalchemy.orm import Session
 
-from database.connection import SessionLocal
+from database.connection import SessionLocal, DATABASE_URL
 from database.models import RuleEvaluationResult, AgentTrace, Account
 
 from services.agent.llm_client import LLMClient
@@ -266,6 +308,8 @@ def run_offline_audit(
     auditor = LLMAuditor(llm_client)
     rule_documents = rule_engine.format_rules_for_prompt()
 
+    logger.info("Using DATABASE_URL=%s", DATABASE_URL)
+
     db: Session = SessionLocal()
     try:
         # ── Query records that need auditing ──────────────────────────────────
@@ -374,6 +418,23 @@ def _parse_args() -> argparse.Namespace:
         description=(
             "Offline LLM audit: find RuleEvaluationResult rows without LLM audit "
             "scores and run the same LLMAuditor used in the live pipeline."
+        ),
+    )
+    parser.add_argument(
+        "--database-url",
+        default=None,
+        dest="database_url",
+        help=(
+            "Override DATABASE_URL for this run. Example: "
+            "sqlite:///./alpha_arena.sqlite"
+        ),
+    )
+    parser.add_argument(
+        "--db-path",
+        default=None,
+        dest="db_path",
+        help=(
+            "SQLite file path shortcut for this run. Example: ./alpha_arena.sqlite"
         ),
     )
     parser.add_argument(
