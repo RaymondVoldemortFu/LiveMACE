@@ -352,16 +352,31 @@ class ReActAgent(BaseAgent):
             # 2) 没有工具调用，按协议处理最终输出
             text_content = content or ""
             if self._is_trade_done_message(text_content):
-                decision = {
-                    "operation": "hold",
-                    "symbol": "",
-                    "direction": "long",
-                    "target_portion_of_balance": 0.0,
-                    "leverage": 1,
-                    "reason": f"Tool-mode terminated by token {termination_token}",
-                    "protocol": "tool",
-                    "executed_trades": executed_trades,
-                }
+                # Only write fallback decision if no execute_trade was called
+                if not executed_trades:
+                    decision = {
+                        "operation": "hold",
+                        "symbol": "",
+                        "direction": "long",
+                        "target_portion_of_balance": 0.0,
+                        "leverage": 1,
+                        "reason": f"Tool-mode terminated by token {termination_token}",
+                        "protocol": "tool",
+                        "executed_trades": executed_trades,
+                    }
+                else:
+                    # execute_trade was called, don't write duplicate decision
+                    decision = {
+                        "operation": "hold",  # placeholder, won't be logged
+                        "symbol": "",
+                        "direction": "long",
+                        "target_portion_of_balance": 0.0,
+                        "leverage": 1,
+                        "reason": "",
+                        "protocol": "tool",
+                        "executed_trades": executed_trades,
+                        "skip_logging": True,  # signal to skip AIDecisionLog
+                    }
                 logger.info(
                     f"Agent terminated tool-mode loop with token. executed_trade_calls={len(executed_trades)}"
                 )
