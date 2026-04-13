@@ -47,13 +47,7 @@ def initialize_services():
             logger.info("Automatic cryptocurrency trading task reset initiated in background")
         except Exception as e:
             logger.error(f"Failed to initiate AI auto trading task: {e}")
-            # Fallback to random trading schedule to keep demo functional
-            try:
-                schedule_auto_trading(interval_seconds=300, use_ai=False)
-                jobs = task_scheduler.get_job_info()
-                logger.warning(f"Falling back to random trading schedule. Jobs: {jobs}")
-            except Exception as e2:
-                logger.error(f"Failed to schedule fallback random trading task: {e2}")
+            raise
 
         # Add price cache cleanup task (every 2 minutes)
         from services.price_cache import clear_expired_prices

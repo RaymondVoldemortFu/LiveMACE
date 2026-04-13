@@ -5,11 +5,12 @@ Used to manage WebSocket snapshot updates and other scheduled tasks
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
+from apscheduler.triggers.date import DateTrigger
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from typing import Dict, Set, Callable, Optional, List
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timezone, timedelta
 
 from database.connection import SessionLocal
 from database.models import Position, CryptoPrice, Account, Order
@@ -17,6 +18,38 @@ from decimal import Decimal
 from services.snapshot_service import create_snapshots_for_all_accounts
 
 logger = logging.getLogger(__name__)
+
+
+def plan_first_and_recurring_runs(
+    first_dt: datetime,
+    interval_seconds: int,
+    now: Optional[datetime] = None,
+) -> tuple[Optional[datetime], datetime]:
+    """
+    Plan first-run and recurring-run anchors.
+
+    - If now <= first_dt: first run should happen at first_dt.
+    - If first_dt < now < first_dt + interval: first run is late but still within
+      first interval window, so keep a one-off first run for misfire catch-up.
+    - If now >= first_dt + interval: first run window has passed, only keep recurring.
+    """
+    if interval_seconds <= 0:
+        raise ValueError("interval_seconds must be > 0")
+
+    anchor_now = now or datetime.now(timezone.utc)
+    first_interval_end = first_dt + timedelta(seconds=interval_seconds)
+    recurring_start = first_dt + timedelta(seconds=interval_seconds)
+
+    if anchor_now <= first_dt:
+        return first_dt, recurring_start
+    if anchor_now < first_interval_end:
+        return first_dt, recurring_start
+
+    elapsed_seconds = (anchor_now - recurring_start).total_seconds()
+    missed_intervals = int(elapsed_seconds // interval_seconds)
+    if elapsed_seconds % interval_seconds != 0:
+        missed_intervals += 1
+    return None, recurring_start + timedelta(seconds=missed_intervals * interval_seconds)
 
 
 class TaskScheduler:
@@ -157,7 +190,15 @@ class TaskScheduler:
             logger.debug(f"Failed to remove snapshot task for account {account_id}: {e}")
     
     
-    def add_interval_task(self, task_func: Callable, interval_seconds: int, task_id: str, *args, **kwargs):
+    def add_interval_task(
+        self,
+        task_func: Callable,
+        interval_seconds: int,
+        task_id: str,
+        *args,
+        start_date: Optional[datetime] = None,
+        **kwargs,
+    ):
         """
         Add interval execution task
 
@@ -172,7 +213,7 @@ class TaskScheduler:
             
         self.scheduler.add_job(
             func=task_func,
-            trigger=IntervalTrigger(seconds=interval_seconds),
+            trigger=IntervalTrigger(seconds=interval_seconds, start_date=start_date),
             args=args,
             kwargs=kwargs,
             id=task_id,
@@ -182,6 +223,33 @@ class TaskScheduler:
         )
         
         logger.info(f"Added interval task {task_id}: Execute every {interval_seconds} seconds")
+
+    def add_date_task(
+        self,
+        task_func: Callable,
+        run_date: datetime,
+        task_id: str,
+        *args,
+        misfire_grace_time: Optional[int] = None,
+        **kwargs,
+    ):
+        """Add one-off execution task at a fixed datetime."""
+        if not self.is_running():
+            self.start()
+
+        self.scheduler.add_job(
+            func=task_func,
+            trigger=DateTrigger(run_date=run_date),
+            args=args,
+            kwargs=kwargs,
+            id=task_id,
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=misfire_grace_time,
+        )
+
+        logger.info(f"Added date task {task_id}: run at {run_date.isoformat()}")
     
     def remove_task(self, task_id: str):
         """
@@ -552,6 +620,10 @@ def remove_user_snapshot_job(user_id: int):
 def setup_market_tasks():
     """Set up crypto market-related scheduled tasks"""
     from services.market_kline_service import refresh_market_klines, KLINE_REFRESH_INTERVAL_SECONDS
+    from services.asset_curve_cache_service import (
+        ASSET_CURVE_CACHE_REFRESH_SECONDS,
+        refresh_asset_curve_cache_job,
+    )
 
     # Prefetch and persist market kline data for cache usage
     task_scheduler.add_interval_task(
@@ -560,6 +632,27 @@ def setup_market_tasks():
         task_id="market_kline_refresh"
     )
     logger.info(f"Market kline refresh scheduled every {KLINE_REFRESH_INTERVAL_SECONDS}s")
+
+    # Persist asset curve points by timeframe to avoid on-request recomputation.
+    warmup_time = datetime.now(timezone.utc) + timedelta(seconds=3)
+    for timeframe, refresh_seconds in ASSET_CURVE_CACHE_REFRESH_SECONDS.items():
+        task_scheduler.add_date_task(
+            task_func=lambda tf=timeframe: refresh_asset_curve_cache_job(tf),
+            run_date=warmup_time,
+            task_id=f"asset_curve_cache_warmup_{timeframe}",
+            misfire_grace_time=refresh_seconds,
+        )
+        task_scheduler.add_interval_task(
+            task_func=lambda tf=timeframe: refresh_asset_curve_cache_job(tf),
+            interval_seconds=refresh_seconds,
+            task_id=f"asset_curve_cache_refresh_{timeframe}",
+            start_date=warmup_time + timedelta(seconds=refresh_seconds),
+        )
+        logger.info(
+            "Asset curve cache refresh scheduled: timeframe=%s interval=%ss",
+            timeframe,
+            refresh_seconds,
+        )
 
 
 def _ensure_market_data_ready() -> None:
@@ -624,9 +717,32 @@ def reset_auto_trading_job():
             )
             return default_value
 
+    def _parse_required_first_execution_time(env_name: str) -> datetime:
+        raw_value = os.getenv(env_name)
+        if raw_value is None or str(raw_value).strip() == "":
+            raise RuntimeError(
+                f"Missing required {env_name}. "
+                "Auto trading requires a fixed first execution time."
+            )
+        try:
+            parsed = datetime.fromisoformat(str(raw_value).strip())
+        except Exception as exc:
+            raise RuntimeError(
+                f"Invalid {env_name}={raw_value!r}; must be ISO datetime, e.g. 2026-01-01T08:00:00+08:00"
+            ) from exc
+
+        if parsed.tzinfo is None:
+            raise RuntimeError(
+                f"Invalid {env_name}={raw_value!r}; timezone offset is required, e.g. +08:00 or Z"
+            )
+        return parsed.astimezone(timezone.utc)
+
     # Define interval (defaults: AI 4h, baseline 5m; configurable via env)
     AI_TRADE_INTERVAL_SECONDS = _parse_interval_env("AI_TRADE_INTERVAL_SECONDS", 14400)
     BASELINE_TRADE_INTERVAL_SECONDS = _parse_interval_env("BASELINE_TRADE_INTERVAL_SECONDS", 300)
+    FIRST_EXECUTION_TIME_UTC = _parse_required_first_execution_time("AI_TRADE_FIRST_EXECUTION_TIME")
+    AI_TRADE_FIRST_JOB_ID = f"{AI_TRADE_JOB_ID}_first"
+    BASELINE_TRADE_FIRST_JOB_ID = f"{BASELINE_TRADE_JOB_ID}_first"
 
     def _setup_job_async():
         try:
@@ -643,45 +759,68 @@ def reset_auto_trading_job():
             if task_scheduler.scheduler and task_scheduler.scheduler.get_job(AI_TRADE_JOB_ID):
                 task_scheduler.remove_task(AI_TRADE_JOB_ID)
                 logger.info(f"Removed existing auto trading job: {AI_TRADE_JOB_ID}")
+            if task_scheduler.scheduler and task_scheduler.scheduler.get_job(AI_TRADE_FIRST_JOB_ID):
+                task_scheduler.remove_task(AI_TRADE_FIRST_JOB_ID)
+                logger.info(f"Removed existing one-off auto trading job: {AI_TRADE_FIRST_JOB_ID}")
 
             # Remove existing baseline trading job if it exists
             if task_scheduler.scheduler and task_scheduler.scheduler.get_job(BASELINE_TRADE_JOB_ID):
                 task_scheduler.remove_task(BASELINE_TRADE_JOB_ID)
                 logger.info(f"Removed existing baseline trading job: {BASELINE_TRADE_JOB_ID}")
+            if task_scheduler.scheduler and task_scheduler.scheduler.get_job(BASELINE_TRADE_FIRST_JOB_ID):
+                task_scheduler.remove_task(BASELINE_TRADE_FIRST_JOB_ID)
+                logger.info(f"Removed existing one-off baseline trading job: {BASELINE_TRADE_FIRST_JOB_ID}")
             
-            # Re-add the auto trading job with updated configuration
+            # Re-add the auto trading job with updated configuration.
+            ai_first_run, ai_recurring_start = plan_first_and_recurring_runs(
+                FIRST_EXECUTION_TIME_UTC,
+                AI_TRADE_INTERVAL_SECONDS,
+            )
+            if ai_first_run is not None:
+                task_scheduler.add_date_task(
+                    task_func=lambda: place_ai_driven_crypto_order(max_ratio=0.2),
+                    run_date=ai_first_run,
+                    task_id=AI_TRADE_FIRST_JOB_ID,
+                    # Allow late setup within one interval to still execute first decision once.
+                    misfire_grace_time=AI_TRADE_INTERVAL_SECONDS,
+                )
             task_scheduler.add_interval_task(
                 task_func=lambda: place_ai_driven_crypto_order(max_ratio=0.2),
                 interval_seconds=AI_TRADE_INTERVAL_SECONDS,
-                task_id=AI_TRADE_JOB_ID
+                task_id=AI_TRADE_JOB_ID,
+                start_date=ai_recurring_start,
             )
 
-            # Add independent baseline trading job
+            # Add independent baseline trading job.
+            baseline_first_run, baseline_recurring_start = plan_first_and_recurring_runs(
+                FIRST_EXECUTION_TIME_UTC,
+                BASELINE_TRADE_INTERVAL_SECONDS,
+            )
+            if baseline_first_run is not None:
+                task_scheduler.add_date_task(
+                    task_func=place_baseline_driven_order,
+                    run_date=baseline_first_run,
+                    task_id=BASELINE_TRADE_FIRST_JOB_ID,
+                    misfire_grace_time=BASELINE_TRADE_INTERVAL_SECONDS,
+                )
             task_scheduler.add_interval_task(
                 task_func=place_baseline_driven_order,
                 interval_seconds=BASELINE_TRADE_INTERVAL_SECONDS,
                 task_id=BASELINE_TRADE_JOB_ID,
+                start_date=baseline_recurring_start,
             )
-            
-            # Trigger one immediate execution
-            try:
-                logger.info("Triggering immediate AI trade after setup")
-                place_ai_driven_crypto_order(max_ratio=0.2)
-            except Exception as run_err:
-                logger.error(f"Immediate AI trade failed: {run_err}")
-
-            try:
-                logger.info("Triggering immediate baseline trade after setup")
-                place_baseline_driven_order()
-            except Exception as run_err:
-                logger.error(f"Immediate baseline trade failed: {run_err}")
 
             # Log current jobs for verification
             jobs = task_scheduler.get_job_info()
             logger.info(
-                "Auto trading jobs reset successfully - ai_interval=%ss baseline_interval=%ss; Jobs: %s",
+                "Auto trading jobs reset successfully - ai_interval=%ss baseline_interval=%ss first_execution_time_utc=%s ai_first_run=%s ai_recurring_start=%s baseline_first_run=%s baseline_recurring_start=%s; Jobs: %s",
                 AI_TRADE_INTERVAL_SECONDS,
                 BASELINE_TRADE_INTERVAL_SECONDS,
+                FIRST_EXECUTION_TIME_UTC.isoformat(),
+                ai_first_run.isoformat() if ai_first_run else None,
+                ai_recurring_start.isoformat(),
+                baseline_first_run.isoformat() if baseline_first_run else None,
+                baseline_recurring_start.isoformat(),
                 jobs,
             )
 
@@ -691,3 +830,64 @@ def reset_auto_trading_job():
     # Start the setup in a daemon thread so it doesn't block startup or request handling
     threading.Thread(target=_setup_job_async, name="auto_trade_setup", daemon=True).start()
     logger.info("Initiated background auto trading job reset")
+
+
+def get_ai_trade_schedule_status() -> Dict[str, Optional[str]]:
+    """Return AI trade schedule status including next decision time in UTC."""
+    from services.trading_commands import AI_TRADE_JOB_ID
+    import os
+    first_job_id = f"{AI_TRADE_JOB_ID}_first"
+
+    def _parse_required_first_execution_time(env_name: str) -> datetime:
+        raw_value = os.getenv(env_name)
+        if raw_value is None or str(raw_value).strip() == "":
+            raise RuntimeError(f"{env_name} is required but not set")
+        try:
+            parsed = datetime.fromisoformat(str(raw_value).strip())
+        except Exception as exc:
+            raise RuntimeError(
+                f"Invalid {env_name}={raw_value!r}; must be ISO datetime, e.g. 2026-01-01T08:00:00+08:00"
+            ) from exc
+        if parsed.tzinfo is None:
+            raise RuntimeError(
+                f"Invalid {env_name}={raw_value!r}; timezone offset is required, e.g. +08:00 or Z"
+            )
+        return parsed.astimezone(timezone.utc)
+
+    raw_interval = os.getenv("AI_TRADE_INTERVAL_SECONDS", "14400")
+    first_execution_time_utc = _parse_required_first_execution_time("AI_TRADE_FIRST_EXECUTION_TIME")
+
+    interval_seconds = int(str(raw_interval).strip())
+    if interval_seconds <= 0:
+        raise RuntimeError(f"AI_TRADE_INTERVAL_SECONDS must be > 0, got {interval_seconds}")
+
+    next_run_dt: Optional[datetime] = None
+    if task_scheduler.scheduler:
+        candidate_times: List[datetime] = []
+        first_job = task_scheduler.scheduler.get_job(first_job_id)
+        recurring_job = task_scheduler.scheduler.get_job(AI_TRADE_JOB_ID)
+
+        for job in (first_job, recurring_job):
+            if job and job.next_run_time:
+                run_time = job.next_run_time
+                if run_time.tzinfo is None:
+                    run_time = run_time.replace(tzinfo=timezone.utc)
+                candidate_times.append(run_time)
+
+        if candidate_times:
+            next_run_dt = min(candidate_times)
+
+    if next_run_dt is None:
+        first_run, recurring_run = plan_first_and_recurring_runs(
+            first_execution_time_utc,
+            interval_seconds,
+            now=datetime.now(timezone.utc),
+        )
+        next_run_dt = first_run or recurring_run
+
+    return {
+        "job_id": AI_TRADE_JOB_ID,
+        "interval_seconds": str(interval_seconds),
+        "first_execution_time": first_execution_time_utc.isoformat(),
+        "next_decision_time_utc": next_run_dt.astimezone(timezone.utc).isoformat(),
+    }

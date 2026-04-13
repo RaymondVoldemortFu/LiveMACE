@@ -1,8 +1,10 @@
 import json
 import logging
 import re
+import time
 from html import unescape
 from typing import Dict, Any, List, Optional
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
 import requests
 
@@ -46,6 +48,13 @@ class SearchSubAgent:
         self.max_steps = ToolConfig.MAX_SEARCH_STEPS
         self.max_context_tokens = ToolConfig.MAX_CONTEXT_TOKENS
         self.agent_name = agent_name or "SearchSubAgent"
+        self.max_retries = ToolConfig.SEARCH_AGENT_MAX_RETRIES
+        self.search_timeout_seconds = ToolConfig.SEARCH_AGENT_SEARCH_TIMEOUT_SECONDS
+        self.unlocker_timeout_seconds = ToolConfig.SEARCH_AGENT_UNLOCKER_TIMEOUT_SECONDS
+        self.local_fetch_connect_timeout_seconds = (
+            ToolConfig.SEARCH_AGENT_LOCAL_FETCH_CONNECT_TIMEOUT_SECONDS
+        )
+        self.local_fetch_read_timeout_seconds = ToolConfig.SEARCH_AGENT_LOCAL_FETCH_READ_TIMEOUT_SECONDS
         
         # Initialize tokenizer for accurate counting if available
         self.tokenizer = None
@@ -77,11 +86,11 @@ class SearchSubAgent:
             tbs = self._google_recency_tbs(time_range)
             if tbs:
                 serp_kwargs["time_range"] = tbs
-            with self._brightdata_client_cls(token=self.brightdata_api_key) as client:
-                serp_results = client.search.google(
-                    query=merged_query,
-                    **serp_kwargs,
-                )
+            serp_results = self._call_with_retry(
+                operation_name="search_tool",
+                timeout_seconds=self.search_timeout_seconds,
+                func=lambda: self._search_once(merged_query, serp_kwargs),
+            )
             return self._normalize_serp_results(
                 query=query,
                 merged_query=merged_query,
@@ -108,11 +117,14 @@ class SearchSubAgent:
                 "local_attempt": local_result
             }
         try:
-            with self._brightdata_client_cls(token=self.brightdata_api_key) as client:
-                unlocker_result = client.scrape_url(url=url)
+            unlocker_result = self._call_with_retry(
+                operation_name="unlocker_extract",
+                timeout_seconds=self.unlocker_timeout_seconds,
+                func=lambda: self._unlocker_once(url),
+            )
             normalized = self._normalize_unlocker_result(url=url, payload=unlocker_result)
             if normalized.get("error"):
-                logger.error(f"Unlocker extraction returned error for {url}: {normalized.get('error')}")
+                logger.warning(f"Unlocker extraction returned error for {url}: {normalized.get('error')}")
                 return {
                     "error": normalized.get("error"),
                     "local_attempt": local_result,
@@ -190,16 +202,24 @@ class SearchSubAgent:
         Basic local extraction as fast path before using Unlocker.
         """
         try:
-            response = requests.get(
-                url,
-                timeout=(5, 20),
-                headers={
-                    "User-Agent": (
-                        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                        "AppleWebKit/537.36 (KHTML, like Gecko) "
-                        "Chrome/124.0.0.0 Safari/537.36"
-                    )
-                },
+            response = self._call_with_retry(
+                operation_name="local_fetch",
+                timeout_seconds=self.local_fetch_connect_timeout_seconds
+                + self.local_fetch_read_timeout_seconds + 1,
+                func=lambda: requests.get(
+                    url,
+                    timeout=(
+                        self.local_fetch_connect_timeout_seconds,
+                        self.local_fetch_read_timeout_seconds,
+                    ),
+                    headers={
+                        "User-Agent": (
+                            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                            "AppleWebKit/537.36 (KHTML, like Gecko) "
+                            "Chrome/124.0.0.0 Safari/537.36"
+                        )
+                    },
+                ),
             )
             response.raise_for_status()
             html = response.text or ""
@@ -220,6 +240,54 @@ class SearchSubAgent:
             }
         except Exception as e:
             return {"error": f"Local fetch failed: {e}"}
+
+    def _search_once(self, merged_query: str, serp_kwargs: Dict[str, Any]) -> Any:
+        with self._brightdata_client_cls(token=self.brightdata_api_key) as client:
+            return client.search.google(query=merged_query, **serp_kwargs)
+
+    def _unlocker_once(self, url: str) -> Any:
+        with self._brightdata_client_cls(token=self.brightdata_api_key) as client:
+            return client.scrape_url(url=url)
+
+    def _call_with_retry(self, operation_name: str, timeout_seconds: float, func):
+        last_err: Optional[Exception] = None
+        total_attempts = self.max_retries + 1
+        for attempt in range(1, total_attempts + 1):
+            executor = ThreadPoolExecutor(max_workers=1)
+            try:
+                future = executor.submit(func)
+                return future.result(timeout=timeout_seconds)
+            except FuturesTimeoutError as err:
+                last_err = TimeoutError(
+                    f"{operation_name} timeout after {timeout_seconds}s (attempt {attempt}/{total_attempts})"
+                )
+                logger.warning(str(last_err))
+            except Exception as err:
+                last_err = err
+                logger.warning(
+                    "%s failed (attempt %s/%s): %s",
+                    operation_name,
+                    attempt,
+                    total_attempts,
+                    err,
+                )
+            finally:
+                executor.shutdown(wait=False, cancel_futures=True)
+            if attempt < total_attempts:
+                time.sleep(min(1.0, 0.2 * attempt))
+        raise RuntimeError(
+            f"{operation_name} failed after {total_attempts} attempts: {last_err}"
+        )
+
+    @staticmethod
+    def _is_unlocker_error_result(result: Dict[str, Any]) -> bool:
+        if not isinstance(result, dict):
+            return False
+        unlocker_attempt = result.get("unlocker_attempt")
+        if isinstance(unlocker_attempt, dict) and unlocker_attempt.get("error"):
+            return True
+        message = str(result.get("error", "")).lower()
+        return "unlocker" in message
 
     def _normalize_unlocker_result(self, url: str, payload: Any) -> Dict[str, Any]:
         """
@@ -646,9 +714,14 @@ class SearchSubAgent:
                             logger.info(f"Sub-Agent extracting: {url}")
                             result = self._extract_tool(url)
                             if isinstance(result, dict) and result.get("error"):
-                                logger.error(
-                                    f"extract_tool returned error for url={url!r}: {result.get('error')}"
-                                )
+                                if self._is_unlocker_error_result(result):
+                                    logger.warning(
+                                        f"extract_tool unlocker returned warning for url={url!r}: {result.get('error')}"
+                                    )
+                                else:
+                                    logger.error(
+                                        f"extract_tool returned error for url={url!r}: {result.get('error')}"
+                                    )
                             
                             # Log full extraction results to dedicated logger
                             search_logger.info(f"--- Extract Results for '{url}' ---")

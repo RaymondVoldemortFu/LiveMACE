@@ -2,7 +2,9 @@ import asyncio
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
+import pytest
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 if str(BACKEND_DIR) not in sys.path:
@@ -80,3 +82,45 @@ def test_account_test_endpoint_requires_explicit_model_base_url_and_key():
 
     assert result["success"] is False
     assert result["message"] == "Model is required"
+
+
+def test_llm_client_call_retries_then_succeeds(monkeypatch):
+    client = object.__new__(LLMClient)
+    client.model = "gpt-4o-mini"
+    client.max_retries = 2
+    client._last_wire_tool_calls = None
+    client.is_gemini_model = lambda: False
+
+    message = SimpleNamespace(content="ok")
+    response = SimpleNamespace(choices=[SimpleNamespace(message=message)])
+    mocked_create = MagicMock(side_effect=[RuntimeError("transient"), response])
+    client.client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(create=mocked_create)
+        )
+    )
+
+    out = client.call(messages=[{"role": "user", "content": "hello"}])
+    assert out is message
+    assert mocked_create.call_count == 2
+
+
+def test_llm_client_call_raises_after_max_retries(monkeypatch):
+    client = object.__new__(LLMClient)
+    client.model = "gpt-4o-mini"
+    client.max_retries = 1
+    client._last_wire_tool_calls = None
+    client.is_gemini_model = lambda: False
+
+    mocked_create = MagicMock(side_effect=RuntimeError("always fails"))
+    client.client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(create=mocked_create)
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="always fails"):
+        client.call(messages=[{"role": "user", "content": "hello"}])
+
+    # retries=1 => total attempts=2
+    assert mocked_create.call_count == 2

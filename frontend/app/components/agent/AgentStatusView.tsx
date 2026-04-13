@@ -140,6 +140,22 @@ export default function AgentStatusView({ accounts }: AgentStatusViewProps) {
         })
     }
 
+    const extractThinkContent = (content: string | null | undefined): { think: string; main: string } => {
+        const raw = content || ''
+        const thinkRegex = /<think>([\s\S]*?)<\/think>/gi
+        let thinkParts: string[] = []
+        let match: RegExpExecArray | null
+        while ((match = thinkRegex.exec(raw)) !== null) {
+            const part = (match[1] || '').trim()
+            if (part) thinkParts.push(part)
+        }
+        const main = raw.replace(thinkRegex, '').trim()
+        return {
+            think: thinkParts.join('\n\n'),
+            main,
+        }
+    }
+
     const renderStep = (step: AgentStep) => {
         if (step.role === 'memory') {
             return (
@@ -173,6 +189,7 @@ export default function AgentStatusView({ accounts }: AgentStatusViewProps) {
                 displayContent = step.content.substring(match[0].length).trim()
             }
         }
+        const { think: thinkContent, main: mainContent } = extractThinkContent(displayContent || '')
         const normalizedToolCalls = normalizeToolCalls(step.tool_calls)
 
         return (
@@ -207,9 +224,18 @@ export default function AgentStatusView({ accounts }: AgentStatusViewProps) {
                 </div>
                 
                 <div className={`max-w-[80%] rounded-lg p-3 ${isUser ? 'bg-primary text-primary-foreground' : 'bg-muted border'} overflow-hidden break-all [overflow-wrap:anywhere]`}>
-                    {displayContent && (
+                    {mainContent && (
                         <div className="whitespace-pre-wrap text-sm break-all [overflow-wrap:anywhere]">
-                            {displayContent}
+                            {mainContent}
+                        </div>
+                    )}
+
+                    {thinkContent && (
+                        <div className="mt-2 rounded border border-amber-200 bg-amber-50 p-2">
+                            <div className="mb-1 text-xs font-bold text-amber-700">Think</div>
+                            <pre className="whitespace-pre-wrap text-xs text-amber-900 break-all [overflow-wrap:anywhere]">
+                                {thinkContent}
+                            </pre>
                         </div>
                     )}
                     

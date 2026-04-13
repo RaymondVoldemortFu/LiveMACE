@@ -55,6 +55,8 @@ services:
     volumes:
       # Required by backend/services/container_service.py to manage sandbox containers
       - /var/run/docker.sock:/var/run/docker.sock
+      # Persist backend log files to host directory
+      - ./backend/logs:/app/logs
 
   frontend:
     build:
