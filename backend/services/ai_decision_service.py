@@ -331,6 +331,11 @@ def _clip_reason_for_db(reason: object, max_bytes: int = 65000) -> str:
 def save_ai_decision(db: Session, account_id: int, decision: Dict, portfolio: Dict, executed: bool = False, order_id: Optional[int] = None, execution_price: Optional[float] = None, execution_quantity: Optional[float] = None) -> None:
     """Save AI decision to the decision log"""
     try:
+        # Check if logging should be skipped (e.g., when execute_trade already logged)
+        if decision.get("skip_logging"):
+            logger.info(f"Skipping AIDecisionLog for account {account_id} (execute_trade already logged)")
+            return
+
         # Fetch account from database using account_id
         from database.models import Account as AccountModel
         fresh_account = db.query(AccountModel).filter(AccountModel.id == account_id).first()
