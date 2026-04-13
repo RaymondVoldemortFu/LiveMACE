@@ -40,6 +40,15 @@ def initialize_services():
         setup_market_tasks()
         logger.info("Market scheduled tasks have been set up")
 
+        # Startup self-healing: if no 1h curve points exist in the past hour,
+        # backfill them immediately to avoid empty/stale frontend 1h chart after downtime.
+        from services.asset_curve_cache_service import backfill_recent_1h_curve_on_startup
+        backfilled_1h_points = backfill_recent_1h_curve_on_startup()
+        logger.info(
+            "1h asset-curve startup backfill completed, points_written=%s",
+            backfilled_1h_points,
+        )
+
         # Start automatic cryptocurrency trading task via reset to ensure market data & proper job ID
         from services.scheduler import reset_auto_trading_job
         try:

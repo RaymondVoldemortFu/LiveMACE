@@ -3,10 +3,12 @@ from __future__ import annotations
 from typing import Dict, List, Tuple
 
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 
 from database.connection import SessionLocal
 from database.models import AssetCurveSnapshot
 from services.asset_curve_calculator import get_all_asset_curves_data_new
+from services.time_source import now_utc
 
 
 VALID_ASSET_CURVE_TIMEFRAMES = {"5m", "1h", "1d"}
@@ -35,6 +37,12 @@ def _validate_timeframe(timeframe: str) -> str:
 def get_curve_point_limit(timeframe: str) -> int:
     normalized = _validate_timeframe(timeframe)
     return ASSET_CURVE_MAX_POINTS[normalized]
+
+
+def should_backfill_recent_1h(max_timestamp: int | None, now_ts: int) -> bool:
+    if max_timestamp is None:
+        return True
+    return int(max_timestamp) < int(now_ts) - 3600
 
 
 def refresh_asset_curve_cache(db: Session, timeframe: str) -> int:
@@ -141,5 +149,22 @@ def refresh_asset_curve_cache_job(timeframe: str) -> None:
     db = SessionLocal()
     try:
         refresh_asset_curve_cache(db, timeframe)
+    finally:
+        db.close()
+
+
+def backfill_recent_1h_curve_on_startup() -> int:
+    """Startup self-healing: backfill when no 1h curve exists in last hour."""
+    db = SessionLocal()
+    try:
+        max_ts = (
+            db.query(func.max(AssetCurveSnapshot.timestamp))
+            .filter(AssetCurveSnapshot.timeframe == "1h")
+            .scalar()
+        )
+        now_ts = int(now_utc().timestamp())
+        if not should_backfill_recent_1h(max_ts, now_ts):
+            return 0
+        return refresh_asset_curve_cache(db, "1h")
     finally:
         db.close()
