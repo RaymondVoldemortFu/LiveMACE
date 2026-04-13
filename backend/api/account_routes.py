@@ -5,7 +5,7 @@ Account and Asset Curve API Routes (Cleaned)
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import logging
 import re
 import requests
@@ -76,6 +76,24 @@ async def list_all_accounts(db: Session = Depends(get_db)):
     except Exception as e:
         logger.error(f"Failed to list accounts: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to list accounts: {str(e)}")
+
+
+@router.get("/decision-schedule")
+async def get_decision_schedule():
+    """Get AI decision scheduler status."""
+    try:
+        from services.scheduler import get_ai_trade_schedule_status
+
+        status = get_ai_trade_schedule_status()
+        next_utc = datetime.fromisoformat(status["next_decision_time_utc"])
+        next_utc8 = next_utc.astimezone(timezone(timedelta(hours=8)))
+        return {
+            **status,
+            "next_decision_time_utc8": next_utc8.isoformat(),
+        }
+    except Exception as e:
+        logger.error(f"Failed to get decision schedule: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get decision schedule: {str(e)}")
 
 
 @router.get("/{account_id}/overview")

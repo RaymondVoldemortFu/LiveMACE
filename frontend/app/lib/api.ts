@@ -302,6 +302,19 @@ export async function getAccounts(): Promise<TradingAccount[]> {
   return response.json()
 }
 
+export interface DecisionSchedule {
+  job_id: string
+  interval_seconds: string
+  first_execution_time: string
+  next_decision_time_utc: string
+  next_decision_time_utc8: string
+}
+
+export async function getDecisionSchedule(): Promise<DecisionSchedule> {
+  const response = await apiRequest('/account/decision-schedule')
+  return response.json()
+}
+
 export async function getOverview(): Promise<any> {
   const response = await apiRequest('/account/overview')
   return response.json()
