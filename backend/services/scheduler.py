@@ -213,11 +213,10 @@ class TaskScheduler:
             
         self.scheduler.add_job(
             func=task_func,
-            trigger=IntervalTrigger(seconds=interval_seconds),
+            trigger=IntervalTrigger(seconds=interval_seconds, start_date=start_date),
             args=args,
             kwargs=kwargs,
             id=task_id,
-            start_date=start_date,
             replace_existing=True,
             max_instances=1,
             coalesce=True,

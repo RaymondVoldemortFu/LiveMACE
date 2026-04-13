@@ -5,8 +5,9 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from apscheduler.triggers.interval import IntervalTrigger
 
-from services.scheduler import plan_first_and_recurring_runs
+from services.scheduler import TaskScheduler, plan_first_and_recurring_runs
 
 
 def test_plan_first_and_recurring_runs_before_first_time():
@@ -68,4 +69,31 @@ def test_plan_first_and_recurring_runs_rejects_invalid_interval():
     first = datetime(2026, 4, 13, 10, 12, 0, tzinfo=timezone.utc)
     with pytest.raises(ValueError):
         plan_first_and_recurring_runs(first, interval_seconds=0, now=first)
+
+
+def test_add_interval_task_passes_start_date_into_interval_trigger():
+    class _RecorderScheduler:
+        def __init__(self):
+            self.running = True
+            self.calls = []
+
+        def add_job(self, **kwargs):
+            self.calls.append(kwargs)
+
+    scheduler = TaskScheduler()
+    scheduler.scheduler = _RecorderScheduler()
+    scheduler._started = True
+
+    start_date = datetime(2026, 4, 13, 21, 58, 0, tzinfo=timezone.utc)
+    scheduler.add_interval_task(
+        task_func=lambda: None,
+        interval_seconds=900,
+        task_id="test_interval",
+        start_date=start_date,
+    )
+
+    assert len(scheduler.scheduler.calls) == 1
+    trigger = scheduler.scheduler.calls[0]["trigger"]
+    assert isinstance(trigger, IntervalTrigger)
+    assert trigger.start_date == start_date
 

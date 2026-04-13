@@ -36,7 +36,7 @@ MODEL_LIST = [
     # openai
     "gpt-5.4",
     # deepseek
-    "deepseek-v3.2-thinking",
+    "deepseek-v3.2#thinking",
     # google
     "gemini-3.1-pro-preview",
     # xai
@@ -44,7 +44,7 @@ MODEL_LIST = [
     # model end with -all is reverse engineered from official connect api, should be avoid
     "grok-4.20-beta-0309-reasoning",   
     # qwen
-    "qwen3-max",
+    "qwen3-max-2026-01-23",
 ]
 
 DEFAULT_AGENT_TYPE = "react"
