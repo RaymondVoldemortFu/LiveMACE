@@ -369,6 +369,41 @@ class AccountSnapshot(Base):
     )
 
 
+class AssetCurveSnapshot(Base):
+    """
+    Persisted asset curve points for frontend charting.
+    Rows are appended/updated by timeframe-specific background jobs.
+    """
+    __tablename__ = "asset_curve_snapshots"
+
+    id = Column(Integer, primary_key=True, index=True)
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False, index=True)
+    timeframe = Column(String(10), nullable=False, index=True)  # "5m" | "1h" | "1d"
+    timestamp = Column(Integer, nullable=False, index=True)  # UTC epoch seconds
+    datetime_str = Column(String(50), nullable=False)
+
+    user_id = Column(Integer, nullable=False, index=True)
+    username = Column(String(100), nullable=False)
+
+    total_assets = Column(DECIMAL(18, 6), nullable=False)
+    initial_capital = Column(DECIMAL(18, 6), nullable=False)
+    profit = Column(DECIMAL(18, 6), nullable=False)
+    profit_percentage = Column(Float, nullable=False)
+    cash = Column(DECIMAL(18, 6), nullable=False)
+    positions_value = Column(DECIMAL(18, 6), nullable=False)
+
+    created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
+    updated_at = Column(
+        TIMESTAMP, server_default=func.current_timestamp(), onupdate=func.current_timestamp()
+    )
+
+    account = relationship("Account")
+
+    __table_args__ = (
+        UniqueConstraint("account_id", "timeframe", "timestamp", name="uix_asset_curve_snapshot_key"),
+    )
+
+
 class AssetMetadata(Base):
     """
     Asset Metadata - Static information about tradable assets for rule evaluation

@@ -14,7 +14,11 @@ from services.scheduler import add_account_snapshot_job, remove_account_snapshot
 from database.models import Trade, AIDecisionLog
 from datetime import datetime
 import logging
-from services.asset_curve_calculator import get_all_asset_curves_data_new
+from services.asset_curve_cache_service import (
+    get_asset_curve_cache,
+    get_curve_point_limit,
+    refresh_asset_curve_cache,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -90,14 +94,14 @@ async def broadcast_asset_curve_update(timeframe: str = "1h"):
 
 
 def get_all_asset_curves_data(db: Session, timeframe: str = "1h"):
-    """Get timeframe-based asset curve data for all accounts - WebSocket version
-    
-    Uses the new algorithm that draws curves by accounts and creates all-time lists.
-    
-    Args:
-        timeframe: Time period for the curve, options: "5m", "1h", "1d"
-    """
-    return get_all_asset_curves_data_new(db, timeframe)
+    """Get timeframe-based asset curve data for all accounts from persisted cache."""
+    point_limit = get_curve_point_limit(timeframe)
+    cached = get_asset_curve_cache(db, timeframe, limit_timestamps=point_limit)
+    if cached:
+        return cached
+
+    refresh_asset_curve_cache(db, timeframe)
+    return get_asset_curve_cache(db, timeframe, limit_timestamps=point_limit)
 
 
 manager = ConnectionManager()

@@ -620,6 +620,10 @@ def remove_user_snapshot_job(user_id: int):
 def setup_market_tasks():
     """Set up crypto market-related scheduled tasks"""
     from services.market_kline_service import refresh_market_klines, KLINE_REFRESH_INTERVAL_SECONDS
+    from services.asset_curve_cache_service import (
+        ASSET_CURVE_CACHE_REFRESH_SECONDS,
+        refresh_asset_curve_cache_job,
+    )
 
     # Prefetch and persist market kline data for cache usage
     task_scheduler.add_interval_task(
@@ -628,6 +632,27 @@ def setup_market_tasks():
         task_id="market_kline_refresh"
     )
     logger.info(f"Market kline refresh scheduled every {KLINE_REFRESH_INTERVAL_SECONDS}s")
+
+    # Persist asset curve points by timeframe to avoid on-request recomputation.
+    warmup_time = datetime.now(timezone.utc) + timedelta(seconds=3)
+    for timeframe, refresh_seconds in ASSET_CURVE_CACHE_REFRESH_SECONDS.items():
+        task_scheduler.add_date_task(
+            task_func=lambda tf=timeframe: refresh_asset_curve_cache_job(tf),
+            run_date=warmup_time,
+            task_id=f"asset_curve_cache_warmup_{timeframe}",
+            misfire_grace_time=refresh_seconds,
+        )
+        task_scheduler.add_interval_task(
+            task_func=lambda tf=timeframe: refresh_asset_curve_cache_job(tf),
+            interval_seconds=refresh_seconds,
+            task_id=f"asset_curve_cache_refresh_{timeframe}",
+            start_date=warmup_time + timedelta(seconds=refresh_seconds),
+        )
+        logger.info(
+            "Asset curve cache refresh scheduled: timeframe=%s interval=%ss",
+            timeframe,
+            refresh_seconds,
+        )
 
 
 def _ensure_market_data_ready() -> None:
