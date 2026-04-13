@@ -2,6 +2,7 @@ import sys
 from pathlib import Path
 
 import fakeredis
+import pytest
 
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
@@ -240,5 +241,19 @@ def test_round_stats_record_hit_rate_fields():
         tool_cache.clear_round(round_id)
         assert fake_client.exists(stats_key) == 0
     finally:
+        tool_cache._client = original_client
+
+
+def test_acquire_lock_does_not_mask_inner_exception():
+    _, original_client = _use_fake_redis()
+    round_id = tool_cache.create_round_id(scope="pytest")
+
+    try:
+        with tool_cache.use_round(round_id):
+            with pytest.raises(RuntimeError, match="inner-failure"):
+                with tool_cache.acquire_lock("get_kline_data", {"symbol": "BTC"}):
+                    raise RuntimeError("inner-failure")
+    finally:
+        tool_cache.clear_round(round_id)
         tool_cache._client = original_client
 

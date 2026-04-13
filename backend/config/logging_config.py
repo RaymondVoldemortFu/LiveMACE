@@ -3,12 +3,25 @@ import logging.handlers
 import os
 import sys
 import smtplib
+from pathlib import Path
 from email.message import EmailMessage
 from typing import List
+
+import dotenv
 
 
 def _parse_recipients(raw: str) -> List[str]:
     return [item.strip() for item in (raw or "").split(",") if item.strip()]
+
+
+def _load_logging_env() -> None:
+    """Load backend .env before reading logging-related env vars."""
+    backend_dir = Path(__file__).resolve().parent.parent
+    backend_env = backend_dir / ".env"
+    if backend_env.exists():
+        dotenv.load_dotenv(dotenv_path=backend_env, override=False)
+        return
+    dotenv.load_dotenv(dotenv.find_dotenv(usecwd=True), override=False)
 
 
 class ErrorEmailHandler(logging.Handler):
@@ -65,6 +78,8 @@ def setup_logging():
         "[%(asctime)s] %(levelname)s [%(name)s:%(lineno)s] %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S"
     )
+
+    _load_logging_env()
 
     # Root logger
     root_logger = logging.getLogger()
@@ -123,7 +138,19 @@ def setup_logging():
         root_logger.addHandler(email_handler)
         logging.info("Error email alert enabled, recipients=%s", recipients)
     else:
-        logging.info("Error email alert disabled (missing EMAIL_NAME/EMAIL_AUTH/SMTP_SERVER/ERROR_EMAIL_TO)")
+        missing_keys = []
+        if not email_from:
+            missing_keys.append("EMAIL_NAME")
+        if not email_auth:
+            missing_keys.append("EMAIL_AUTH")
+        if not smtp_server:
+            missing_keys.append("SMTP_SERVER")
+        if not recipients:
+            missing_keys.append("ERROR_EMAIL_TO")
+        logging.info(
+            "Error email alert disabled (missing: %s)",
+            ",".join(missing_keys) if missing_keys else "unknown",
+        )
 
     # --- Specialized Loggers ---
 

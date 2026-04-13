@@ -31,6 +31,16 @@ except ImportError:
     logger.warning("sentence-transformers not installed. Install with: pip install sentence-transformers")
 
 
+def _is_index_already_exists_error(error: Exception) -> bool:
+    """Return True when Pinecone reports index already exists (HTTP 409)."""
+    text = str(error or "")
+    status = getattr(error, "status", None)
+    if status == 409:
+        return True
+    upper_text = text.upper()
+    return "ALREADY_EXISTS" in upper_text or "ALREADY EXISTS" in upper_text
+
+
 class PineconeMemory(MemoryInterface):
     """
     Pinecone cloud vector database memory system.
@@ -70,12 +80,21 @@ class PineconeMemory(MemoryInterface):
             # Get or create index
             if index_name not in pc.list_indexes().names():
                 logger.info(f"Creating Pinecone index: {index_name}")
-                pc.create_index(
-                    name=index_name,
-                    dimension=self.embedding_dim,
-                    metric="cosine",
-                    spec=ServerlessSpec(cloud="aws", region=environment)
-                )
+                try:
+                    pc.create_index(
+                        name=index_name,
+                        dimension=self.embedding_dim,
+                        metric="cosine",
+                        spec=ServerlessSpec(cloud="aws", region=environment)
+                    )
+                except Exception as create_err:
+                    if _is_index_already_exists_error(create_err):
+                        logger.info(
+                            "Pinecone index already exists (likely concurrent startup): %s",
+                            index_name,
+                        )
+                    else:
+                        raise
 
             self.index = pc.Index(index_name)
 
