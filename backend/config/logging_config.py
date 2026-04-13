@@ -2,6 +2,49 @@ import logging
 import logging.handlers
 import os
 import sys
+import smtplib
+from email.message import EmailMessage
+from typing import List
+
+
+def _parse_recipients(raw: str) -> List[str]:
+    return [item.strip() for item in (raw or "").split(",") if item.strip()]
+
+
+class ErrorEmailHandler(logging.Handler):
+    """Send ERROR-level log records via SMTP email."""
+
+    def __init__(
+        self,
+        smtp_server: str,
+        smtp_port: int,
+        from_addr: str,
+        password: str,
+        recipients: List[str],
+        subject_prefix: str = "[open-alpha-arena]",
+    ):
+        super().__init__(level=logging.ERROR)
+        self.smtp_server = smtp_server
+        self.smtp_port = smtp_port
+        self.from_addr = from_addr
+        self.password = password
+        self.recipients = recipients
+        self.subject_prefix = subject_prefix
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            message = EmailMessage()
+            message["From"] = self.from_addr
+            message["To"] = ", ".join(self.recipients)
+            message["Subject"] = f"{self.subject_prefix} ERROR {record.name}"
+            message.set_content(self.format(record))
+
+            with smtplib.SMTP_SSL(self.smtp_server, self.smtp_port, timeout=10) as client:
+                client.login(self.from_addr, self.password)
+                client.send_message(message)
+        except Exception:
+            self.handleError(record)
+
 
 def setup_logging():
     """
@@ -53,6 +96,34 @@ def setup_logging():
     error_handler.setFormatter(formatter)
     error_handler.setLevel(logging.ERROR)
     root_logger.addHandler(error_handler)
+
+    # Error email alert handler (optional)
+    email_from = (os.getenv("EMAIL_NAME") or "").strip()
+    email_auth = (os.getenv("EMAIL_AUTH") or "").strip()
+    smtp_server = (os.getenv("SMTP_SERVER") or "").strip()
+    smtp_port_raw = (os.getenv("SMTP_PORT") or "465").strip()
+    recipients = _parse_recipients(os.getenv("ERROR_EMAIL_TO", ""))
+
+    if email_from and email_auth and smtp_server and recipients:
+        try:
+            smtp_port = int(smtp_port_raw)
+            if smtp_port <= 0:
+                raise ValueError("SMTP_PORT must be > 0")
+        except Exception as err:
+            raise RuntimeError(f"Invalid SMTP_PORT={smtp_port_raw!r}") from err
+
+        email_handler = ErrorEmailHandler(
+            smtp_server=smtp_server,
+            smtp_port=smtp_port,
+            from_addr=email_from,
+            password=email_auth,
+            recipients=recipients,
+        )
+        email_handler.setFormatter(formatter)
+        root_logger.addHandler(email_handler)
+        logging.info("Error email alert enabled, recipients=%s", recipients)
+    else:
+        logging.info("Error email alert disabled (missing EMAIL_NAME/EMAIL_AUTH/SMTP_SERVER/ERROR_EMAIL_TO)")
 
     # --- Specialized Loggers ---
 
