@@ -387,7 +387,17 @@ def get_kline_data(symbol: str, market: str = "CRYPTO", period: str = "1d", coun
             source, data = _load_from_provider()
             if data is not None:
                 logger.info(f"Got K-line data for {key} from {source}, total {len(data)} items")
-                _save_klines(symbol_norm, market_norm, period, data)
+                try:
+                    _save_klines(symbol_norm, market_norm, period, data)
+                except Exception as save_err:
+                    # K-line tool should prioritize returning successfully fetched market data.
+                    # Persistence failure is observable via warning but must not fail the tool call.
+                    logger.warning(
+                        "K-line DB persistence failed for %s period=%s, returning provider data: %s",
+                        key,
+                        period,
+                        save_err,
+                    )
                 tool_cache.set_json(
                     "get_kline_data",
                     cache_args,
