@@ -322,3 +322,6 @@ chroma_db
 .cursor
 
 temp
+*.sqlite
+backend/script/results/*
+
