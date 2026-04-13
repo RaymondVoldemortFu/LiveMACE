@@ -85,6 +85,22 @@ def on_startup():
                 "MySQL: could not ALTER ai_decision_logs.reason to TEXT (may already be TEXT): %s",
                 exc,
             )
+        try:
+            with engine.begin() as conn:
+                conn.execute(
+                    text(
+                        "ALTER TABLE agent_traces "
+                        "MODIFY COLUMN content LONGTEXT NULL, "
+                        "MODIFY COLUMN tool_calls LONGTEXT NULL, "
+                        "MODIFY COLUMN tool_output LONGTEXT NULL"
+                    )
+                )
+            _startup_log.info("MySQL: agent_traces content/tool_calls/tool_output widened to LONGTEXT")
+        except Exception as exc:
+            _startup_log.warning(
+                "MySQL: could not ALTER agent_traces columns to LONGTEXT (may already be LONGTEXT): %s",
+                exc,
+            )
     # Seed trading configs if empty
     db: Session = SessionLocal()
     try:

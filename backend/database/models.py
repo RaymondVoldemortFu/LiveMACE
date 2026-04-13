@@ -2,6 +2,7 @@ from sqlalchemy import Column, Integer, String, DECIMAL, TIMESTAMP, ForeignKey, 
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 import datetime
+from sqlalchemy.dialects.mysql import LONGTEXT
 
 from .connection import Base
 
@@ -261,10 +262,10 @@ class AgentTrace(Base):
     account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False)
     step_number = Column(Integer, nullable=False)
     role = Column(String(20), nullable=False)  # user, assistant, tool, system
-    # Use TEXT for MySQL compatibility (VARCHAR(50000) exceeds row limits under utf8mb4).
-    content = Column(Text, nullable=True)
-    tool_calls = Column(Text, nullable=True)
-    tool_output = Column(Text, nullable=True)
+    # Use LONGTEXT for MySQL to avoid overflow with long memory/reasoning traces.
+    content = Column(Text().with_variant(LONGTEXT(), "mysql"), nullable=True)
+    tool_calls = Column(Text().with_variant(LONGTEXT(), "mysql"), nullable=True)
+    tool_output = Column(Text().with_variant(LONGTEXT(), "mysql"), nullable=True)
     created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
 
     account = relationship("Account")
