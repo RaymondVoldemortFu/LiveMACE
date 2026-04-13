@@ -320,3 +320,8 @@ data.db-journal
 chroma_db
 *.sqlite3
 .cursor
+
+temp
+*.sqlite
+backend/script/results/*
+

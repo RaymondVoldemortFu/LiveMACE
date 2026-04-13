@@ -7,6 +7,18 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from services.evaluation.base import BaseEvaluator
 
 
+BUILTIN_DYNAMIC_TOOL_SCHEMAS: Dict[str, Dict[str, Any]] = {
+    # Sampled from DB traces: routing-enabled agents emit this meta tool call.
+    "select_tools": {
+        "type": "object",
+        "properties": {
+            "task": {"type": "string"},
+        },
+        "required": ["task"],
+    }
+}
+
+
 def _safe_json_loads(value: Any) -> Any:
     if value is None:
         return None
@@ -115,7 +127,11 @@ class ToolUseMetricsEvaluator(BaseEvaluator):
         for trace in traces:
             seen_calls = set()
             for step in trace.get("steps", []):
-                total_steps += 1
+                # Step definition for budget metric:
+                # one LLM assistant output (with zero or more tool calls) counts as one step.
+                # Tool result rows should not increase step count.
+                if step.get("role") == "assistant":
+                    total_steps += 1
                 tool_calls = step.get("tool_calls") or []
                 if not tool_calls:
                     continue
@@ -127,6 +143,9 @@ class ToolUseMetricsEvaluator(BaseEvaluator):
                     schema = None
                     if name:
                         schema = tool_schemas.get(name)
+                        if schema is None and name in BUILTIN_DYNAMIC_TOOL_SCHEMAS:
+                            schema = BUILTIN_DYNAMIC_TOOL_SCHEMAS[name]
+                            dynamic_schema_hits += 1
                         if schema is None and tool_schema_resolver:
                             if name not in resolved_schema_cache:
                                 resolved_schema_cache[name] = tool_schema_resolver(name)
@@ -187,7 +206,7 @@ class ToolUseMetricsEvaluator(BaseEvaluator):
                 "notes": [
                     "invalid_or_noop_rate includes error/empty outputs, invalid outputs, invalid params, and repeated identical calls",
                     "schema validation first checks preloaded schemas, then dynamically resolves tools found in llm trace",
-                    "tool_calls_per_step approximates budget usage due to missing latency/token data",
+                    "tool_calls_per_step uses assistant messages as steps (one assistant output + multiple tool returns = one step)",
                 ]
             },
         }
