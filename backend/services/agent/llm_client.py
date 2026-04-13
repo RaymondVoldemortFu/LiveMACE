@@ -5,6 +5,7 @@ import base64
 import copy
 import logging
 import os
+import time
 from typing import Any, List, Optional, Sequence
 
 import httpx
@@ -97,6 +98,8 @@ class LLMClient:
 
         # Gemini 路径使用自定义 httpx.Client；OpenAI() 会持有其引用，须通过 client.close() 释放连接。
         self._closed = False
+        # Retry count for transient upstream/provider errors.
+        self.max_retries = max(0, int(os.getenv("LLM_REQUEST_MAX_RETRIES", "2")))
 
     def close(self) -> None:
         """关闭底层 HTTP 客户端（含自定义 httpx.Client）。长驻进程在丢弃 LLMClient 前应调用，避免套接字泄漏。"""
@@ -194,11 +197,29 @@ class LLMClient:
             if tools:
                 request_kwargs["tools"] = self._sanitize_openai_tools_for_gemini(tools)
 
-        response = self.client.chat.completions.create(
-            **request_kwargs,
-        )
+        response = self._create_with_retry(request_kwargs)
 
         return response.choices[0].message
+
+    def _create_with_retry(self, request_kwargs: dict[str, Any]):
+        attempts = self.max_retries + 1
+        last_err: Exception | None = None
+        for attempt in range(1, attempts + 1):
+            try:
+                return self.client.chat.completions.create(**request_kwargs)
+            except Exception as err:
+                last_err = err
+                if attempt >= attempts:
+                    break
+                logger.warning(
+                    "LLM request failed (attempt %s/%s), retrying: %s",
+                    attempt,
+                    attempts,
+                    err,
+                )
+                time.sleep(min(1.0, 0.2 * attempt))
+        assert last_err is not None
+        raise last_err
 
     @staticmethod
     def _has_any_thought_sig(d: dict[str, Any]) -> bool:

@@ -36,7 +36,7 @@ MODEL_LIST = [
     # openai
     "gpt-5.4",
     # deepseek
-    "deepseek-v3.2",
+    "deepseek-v3.2-thinking",
     # google
     "gemini-3.1-pro-preview",
     # xai
