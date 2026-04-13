@@ -324,4 +324,4 @@ chroma_db
 temp
 *.sqlite
 backend/script/results/*
-
+*.sql

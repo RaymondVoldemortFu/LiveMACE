@@ -395,6 +395,7 @@ def main() -> int:
         AgentMemory,
         AccountSnapshot,
         RuleEvaluationResult,
+        AssetCurveSnapshot,
     )
 
     api_key = (os.getenv("API_KEY") or "").strip()
@@ -437,6 +438,7 @@ def main() -> int:
                 AgentMemory,
                 AccountSnapshot,
                 RuleEvaluationResult,
+                AssetCurveSnapshot,
             ],
         )
         if deleted_count > 0:

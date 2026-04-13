@@ -76,7 +76,8 @@ def refresh_asset_curve_cache(db: Session, timeframe: str) -> int:
     for point in points:
         account_id = int(point["account_id"])
         timestamp = int(point["timestamp"])
-        row = existing_map.get((account_id, timestamp))
+        key = (account_id, timestamp)
+        row = existing_map.get(key)
         if row is None:
             row = AssetCurveSnapshot(
                 account_id=account_id,
@@ -84,6 +85,7 @@ def refresh_asset_curve_cache(db: Session, timeframe: str) -> int:
                 timestamp=timestamp,
             )
             db.add(row)
+            existing_map[key] = row
 
         row.datetime_str = str(point["datetime_str"])
         row.user_id = int(point["user_id"])
