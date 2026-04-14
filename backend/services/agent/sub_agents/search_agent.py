@@ -49,6 +49,8 @@ class SearchSubAgent:
         self.max_context_tokens = ToolConfig.MAX_CONTEXT_TOKENS
         self.agent_name = agent_name or "SearchSubAgent"
         self.max_retries = ToolConfig.SEARCH_AGENT_MAX_RETRIES
+        # Hotfix: cap tool executions per single LLM response to prevent search storms.
+        self.max_tools_per_step = 20
         self.search_timeout_seconds = ToolConfig.SEARCH_AGENT_SEARCH_TIMEOUT_SECONDS
         self.unlocker_timeout_seconds = ToolConfig.SEARCH_AGENT_UNLOCKER_TIMEOUT_SECONDS
         self.local_fetch_connect_timeout_seconds = (
@@ -659,6 +661,13 @@ class SearchSubAgent:
                 # Check for tool calls
                 tool_calls = msg.tool_calls if hasattr(msg, 'tool_calls') else (msg_dict.get('tool_calls') or [])
                 if tool_calls:
+                    if len(tool_calls) > self.max_tools_per_step:
+                        agent_logger.warning(
+                            f"[{agent_name}] Tool calls overflow in one step: requested={len(tool_calls)}, "
+                            f"capped={self.max_tools_per_step}"
+                        )
+                        tool_calls = list(tool_calls)[:self.max_tools_per_step]
+
                     # Last step cannot safely execute more tools; force a structured final response.
                     if step == self.max_steps - 1:
                         agent_logger.warning(
