@@ -130,8 +130,15 @@ class LLMClient:
     def is_gemini_model_name(model: str | None) -> bool:
         return "gemini" in (model or "").strip().lower()
 
+    @staticmethod
+    def is_grok_model_name(model: str | None) -> bool:
+        return "grok" in (model or "").strip().lower()
+
     def is_gemini_model(self) -> bool:
         return self.is_gemini_model_name(self.model)
+
+    def is_grok_model(self) -> bool:
+        return self.is_grok_model_name(self.model)
 
     @staticmethod
     def _gemini_thought_signature_placeholder_value() -> str:
@@ -191,8 +198,11 @@ class LLMClient:
             "messages": self._normalize_messages_for_api(messages, model=self.model),
             "tools": tools,
             "temperature": 0.4,
-            "max_tokens": 4000,
         }
+        if self.is_grok_model():
+            request_kwargs["max_completion_tokens"] = 4000
+        else:
+            request_kwargs["max_tokens"] = 4000
         request_kwargs["timeout"] = self.default_timeout_seconds if timeout is None else timeout
         if response_format is not None:
             request_kwargs["response_format"] = response_format

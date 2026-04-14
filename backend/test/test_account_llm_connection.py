@@ -90,6 +90,7 @@ def test_llm_client_call_retries_then_succeeds(monkeypatch):
     client.max_retries = 2
     client._last_wire_tool_calls = None
     client.is_gemini_model = lambda: False
+    client.default_timeout_seconds = 30.0
 
     message = SimpleNamespace(content="ok")
     response = SimpleNamespace(choices=[SimpleNamespace(message=message)])
@@ -111,6 +112,7 @@ def test_llm_client_call_raises_after_max_retries(monkeypatch):
     client.max_retries = 1
     client._last_wire_tool_calls = None
     client.is_gemini_model = lambda: False
+    client.default_timeout_seconds = 30.0
 
     mocked_create = MagicMock(side_effect=RuntimeError("always fails"))
     client.client = SimpleNamespace(
@@ -124,3 +126,53 @@ def test_llm_client_call_raises_after_max_retries(monkeypatch):
 
     # retries=1 => total attempts=2
     assert mocked_create.call_count == 2
+
+
+def test_llm_client_call_uses_max_completion_tokens_for_grok_model():
+    client = object.__new__(LLMClient)
+    client.model = "grok-3"
+    client.max_retries = 0
+    client._last_wire_tool_calls = None
+    client.is_gemini_model = lambda: False
+    client.is_grok_model = lambda: True
+    client.default_timeout_seconds = 30.0
+
+    message = SimpleNamespace(content="ok")
+    response = SimpleNamespace(choices=[SimpleNamespace(message=message)])
+    mocked_create = MagicMock(return_value=response)
+    client.client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(create=mocked_create)
+        )
+    )
+
+    out = client.call(messages=[{"role": "user", "content": "hello"}])
+    assert out is message
+    kwargs = mocked_create.call_args.kwargs
+    assert kwargs.get("max_completion_tokens") == 4000
+    assert "max_tokens" not in kwargs
+
+
+def test_llm_client_call_keeps_max_tokens_for_non_grok_model():
+    client = object.__new__(LLMClient)
+    client.model = "gpt-4o-mini"
+    client.max_retries = 0
+    client._last_wire_tool_calls = None
+    client.is_gemini_model = lambda: False
+    client.is_grok_model = lambda: False
+    client.default_timeout_seconds = 30.0
+
+    message = SimpleNamespace(content="ok")
+    response = SimpleNamespace(choices=[SimpleNamespace(message=message)])
+    mocked_create = MagicMock(return_value=response)
+    client.client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(create=mocked_create)
+        )
+    )
+
+    out = client.call(messages=[{"role": "user", "content": "hello"}])
+    assert out is message
+    kwargs = mocked_create.call_args.kwargs
+    assert kwargs.get("max_tokens") == 4000
+    assert "max_completion_tokens" not in kwargs
