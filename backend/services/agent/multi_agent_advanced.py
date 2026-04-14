@@ -21,6 +21,7 @@ from .tools import ToolRegistry
 from services.time_source import now_in_tz
 
 logger = logging.getLogger(__name__)
+llm_logger = logging.getLogger("llm_trace")
 
 CRYPTO_SYMBOLS = {"BTC", "ETH", "SOL", "BNB", "XRP", "DOGE"}
 US_SYMBOLS = {"AAPL", "NVDA", "GOOGL", "META", "AMZN", "TSLA", "PG", "JNJ", "UNH", "JPM", "V", "BA", "XOM", "NEE", "AMT", "PLD", "LIN"}
@@ -40,6 +41,32 @@ class AdvancedMultiAgent(BaseAgent):
 
         self.context: List[str] = []
         self.evidence_log: List[Dict[str, Any]] = []
+
+    def _agent_label(self) -> str:
+        return self.agent_name or self.__class__.__name__
+
+    def _log_llm_trace(
+        self,
+        *,
+        current_sub_agent: str,
+        phase: str,
+        payload: Dict[str, Any],
+    ) -> None:
+        entry = {
+            "agent_name": self._agent_label(),
+            "current_sub_agent": current_sub_agent,
+            "phase": phase,
+            "payload": payload,
+        }
+        try:
+            llm_logger.info(json.dumps(entry, ensure_ascii=False))
+        except Exception:
+            llm_logger.info(
+                "advanced_multi_agent_llm_trace agent=%s sub_agent=%s phase=%s",
+                self._agent_label(),
+                current_sub_agent,
+                phase,
+            )
 
     def _notify_evaluator(self, trace_id: Optional[str]) -> None:
         if not trace_id:
@@ -669,6 +696,14 @@ class AdvancedMultiAgent(BaseAgent):
         expected_calls = self._expected_execution_calls(execution_plan)
 
         for _ in range(24):
+            self._log_llm_trace(
+                current_sub_agent="ExecutionAgent",
+                phase="request",
+                payload={
+                    "messages": messages,
+                    "tools": stage_tools if stage_tools else None,
+                },
+            )
             resp = self.llm.call(messages, tools=stage_tools if stage_tools else None)
             msg_content = resp.content or ""
             tool_calls, tool_guard_warnings = LLMClient.apply_tool_call_guardrails(
@@ -683,6 +718,14 @@ class AdvancedMultiAgent(BaseAgent):
                 resp_dict["tool_calls"] = tool_calls
             else:
                 resp_dict.pop("tool_calls", None)
+            self._log_llm_trace(
+                current_sub_agent="ExecutionAgent",
+                phase="response",
+                payload={
+                    "message": resp_dict,
+                    "tool_guard_warnings": tool_guard_warnings,
+                },
+            )
             messages.append(resp_dict)
 
             if on_step:
@@ -839,6 +882,14 @@ class AdvancedMultiAgent(BaseAgent):
             current_tools = agent_tools
             if agent_name == "NewsAgent" and news_search_calls >= self.NEWS_AGENT_MAX_SEARCH_CALLS:
                 current_tools = []
+            self._log_llm_trace(
+                current_sub_agent=agent_name,
+                phase="request",
+                payload={
+                    "messages": messages,
+                    "tools": current_tools if current_tools else None,
+                },
+            )
             resp = self.llm.call(messages, tools=current_tools if current_tools else None)
 
             msg_content = resp.content or ""
@@ -854,6 +905,14 @@ class AdvancedMultiAgent(BaseAgent):
                 resp_dict["tool_calls"] = tool_calls
             else:
                 resp_dict.pop("tool_calls", None)
+            self._log_llm_trace(
+                current_sub_agent=agent_name,
+                phase="response",
+                payload={
+                    "message": resp_dict,
+                    "tool_guard_warnings": tool_guard_warnings,
+                },
+            )
             messages.append(resp_dict)
 
             if on_step:
@@ -945,7 +1004,17 @@ class AdvancedMultiAgent(BaseAgent):
             )
             fallback_messages = list(messages[:2])
             fallback_messages[1] = {"role": "user", "content": fallback_user_prompt}
+            self._log_llm_trace(
+                current_sub_agent=agent_name,
+                phase="fallback_request",
+                payload={"messages": fallback_messages, "tools": None},
+            )
             resp = self.llm.call(fallback_messages)
+            self._log_llm_trace(
+                current_sub_agent=agent_name,
+                phase="fallback_response",
+                payload={"content": resp.content or ""},
+            )
             current_response = resp.content or ""
 
         return current_response
@@ -976,8 +1045,18 @@ class AdvancedMultiAgent(BaseAgent):
                 prices=prices,
                 step=step,
             )
+            self._log_llm_trace(
+                current_sub_agent="Manager",
+                phase="request",
+                payload={"messages": manager_messages, "tools": None},
+            )
             resp = self.llm.call(manager_messages)
             content = resp.content or ""
+            self._log_llm_trace(
+                current_sub_agent="Manager",
+                phase="response",
+                payload={"content": content},
+            )
 
             if on_step:
                 on_step(
