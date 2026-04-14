@@ -22,6 +22,8 @@ _DEFAULT_GEMINI_THOUGHT_SIG_PLACEHOLDER = base64.b64encode(
 ).decode("ascii")
 
 logger = logging.getLogger(__name__)
+llm_client_logger = logging.getLogger("llm_client")
+_DEFAULT_LLM_REQUEST_TIMEOUT_SECONDS = 20 * 60
 
 
 class LLMClient:
@@ -100,6 +102,9 @@ class LLMClient:
         self._closed = False
         # Retry count for transient upstream/provider errors.
         self.max_retries = max(0, int(os.getenv("LLM_REQUEST_MAX_RETRIES", "2")))
+        self.default_timeout_seconds = float(
+            os.getenv("LLM_REQUEST_TIMEOUT_SECONDS", str(_DEFAULT_LLM_REQUEST_TIMEOUT_SECONDS))
+        )
 
     def close(self) -> None:
         """关闭底层 HTTP 客户端（含自定义 httpx.Client）。长驻进程在丢弃 LLMClient 前应调用，避免套接字泄漏。"""
@@ -185,8 +190,7 @@ class LLMClient:
             "temperature": 0.4,
             "max_tokens": 4000,
         }
-        if timeout is not None:
-            request_kwargs["timeout"] = timeout
+        request_kwargs["timeout"] = self.default_timeout_seconds if timeout is None else timeout
         if response_format is not None:
             request_kwargs["response_format"] = response_format
 
@@ -197,18 +201,66 @@ class LLMClient:
             if tools:
                 request_kwargs["tools"] = self._sanitize_openai_tools_for_gemini(tools)
 
-        response = self._create_with_retry(request_kwargs)
+        tool_count = len(tools) if isinstance(tools, (list, tuple)) else 0
+        message_count = len(request_kwargs.get("messages") or [])
+        call_id = f"{int(time.time() * 1000)}-{id(self)}"
+        llm_client_logger.info(
+            "llm_call_start call_id=%s model=%s message_count=%s tool_count=%s timeout=%s response_format=%s",
+            call_id,
+            self.model,
+            message_count,
+            tool_count,
+            request_kwargs.get("timeout"),
+            bool(response_format),
+        )
+
+        response = self._create_with_retry(
+            request_kwargs,
+            call_id=call_id,
+            message_count=message_count,
+            tool_count=tool_count,
+        )
 
         return response.choices[0].message
 
-    def _create_with_retry(self, request_kwargs: dict[str, Any]):
+    def _create_with_retry(
+        self,
+        request_kwargs: dict[str, Any],
+        *,
+        call_id: str,
+        message_count: int,
+        tool_count: int,
+    ):
         attempts = self.max_retries + 1
         last_err: Exception | None = None
+        call_start = time.perf_counter()
         for attempt in range(1, attempts + 1):
             try:
-                return self.client.chat.completions.create(**request_kwargs)
+                response = self.client.chat.completions.create(**request_kwargs)
+                elapsed_ms = int((time.perf_counter() - call_start) * 1000)
+                llm_client_logger.info(
+                    "llm_call_success call_id=%s model=%s attempt=%s/%s elapsed_ms=%s message_count=%s tool_count=%s",
+                    call_id,
+                    self.model,
+                    attempt,
+                    attempts,
+                    elapsed_ms,
+                    message_count,
+                    tool_count,
+                )
+                return response
             except Exception as err:
                 last_err = err
+                elapsed_ms = int((time.perf_counter() - call_start) * 1000)
+                llm_client_logger.warning(
+                    "llm_call_attempt_failed call_id=%s model=%s attempt=%s/%s elapsed_ms=%s error=%s",
+                    call_id,
+                    self.model,
+                    attempt,
+                    attempts,
+                    elapsed_ms,
+                    str(err),
+                )
                 if attempt >= attempts:
                     break
                 logger.warning(
@@ -219,6 +271,17 @@ class LLMClient:
                 )
                 time.sleep(min(1.0, 0.2 * attempt))
         assert last_err is not None
+        elapsed_ms = int((time.perf_counter() - call_start) * 1000)
+        llm_client_logger.error(
+            "llm_call_failed call_id=%s model=%s attempts=%s elapsed_ms=%s message_count=%s tool_count=%s error=%s",
+            call_id,
+            self.model,
+            attempts,
+            elapsed_ms,
+            message_count,
+            tool_count,
+            str(last_err),
+        )
         raise last_err
 
     @staticmethod

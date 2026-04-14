@@ -136,7 +136,10 @@ class SearchSubAgent:
             normalized["local_attempt"] = local_result
             return normalized
         except Exception as e:
-            logger.exception(f"Extract failed: {e}")
+            if "unlocker_extract failed" in str(e):
+                logger.warning(f"Extract warning: {e}")
+            else:
+                logger.exception(f"Extract failed: {e}")
             return {"error": str(e), "local_attempt": local_result}
 
     def _merge_topic_into_query(self, query: str, topic: str = "general") -> str:

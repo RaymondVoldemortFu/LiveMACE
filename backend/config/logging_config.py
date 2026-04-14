@@ -264,6 +264,19 @@ def setup_logging():
     tool_cache_handler.setLevel(logging.DEBUG)
     tool_cache_logger.addHandler(tool_cache_handler)
 
+    # 10. LLM Client Logger (Independent file, no propagation)
+    llm_client_logger = logging.getLogger("llm_client")
+    llm_client_logger.setLevel(logging.INFO)
+    llm_client_logger.propagate = False
+
+    llm_client_log_file = os.path.join(log_dir, "llm_client.log")
+    llm_client_handler = logging.handlers.TimedRotatingFileHandler(
+        llm_client_log_file, when="midnight", interval=1, backupCount=30, encoding="utf-8"
+    )
+    llm_client_handler.setFormatter(formatter)
+    llm_client_logger.addHandler(llm_client_handler)
+    llm_client_logger.info("LLM client logger initialized")
+
     # Uvicorn loggers integration
     logging.getLogger("uvicorn").handlers = []
     logging.getLogger("uvicorn.access").handlers = []
