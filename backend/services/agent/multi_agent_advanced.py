@@ -671,9 +671,18 @@ class AdvancedMultiAgent(BaseAgent):
         for _ in range(24):
             resp = self.llm.call(messages, tools=stage_tools if stage_tools else None)
             msg_content = resp.content or ""
-            tool_calls = resp.tool_calls
+            tool_calls, tool_guard_warnings = LLMClient.apply_tool_call_guardrails(
+                getattr(resp, "tool_calls", None),
+                model=getattr(self.llm, "model", None),
+            )
+            if tool_guard_warnings:
+                logger.warning("Tool-call guardrails triggered: %s", " | ".join(tool_guard_warnings))
 
             resp_dict = self.llm.build_assistant_message_dict(resp)
+            if tool_calls:
+                resp_dict["tool_calls"] = tool_calls
+            else:
+                resp_dict.pop("tool_calls", None)
             messages.append(resp_dict)
 
             if on_step:
@@ -688,9 +697,9 @@ class AdvancedMultiAgent(BaseAgent):
 
             if tool_calls:
                 for tc in tool_calls:
-                    name = tc.function.name
+                    tc_id, name, tc_arguments = LLMClient.tool_call_parts(tc)
                     try:
-                        args = json.loads(tc.function.arguments or "{}")
+                        args = json.loads(tc_arguments or "{}")
                     except Exception as e:
                         args = {}
                         result = {"error": f"Invalid tool arguments for {name}: {e}"}
@@ -709,7 +718,7 @@ class AdvancedMultiAgent(BaseAgent):
 
                     tool_msg = {
                         "role": "tool",
-                        "tool_call_id": tc.id,
+                        "tool_call_id": tc_id,
                         "name": name,
                         "content": json.dumps(result, ensure_ascii=False),
                     }
@@ -719,12 +728,14 @@ class AdvancedMultiAgent(BaseAgent):
                         on_step(
                             {
                                 "role": "tool",
-                                "tool_call_id": tc.id,
+                                "tool_call_id": tc_id,
                                 "name": name,
                                 "content": json.dumps(result, ensure_ascii=False),
                                 "metadata": {"agent": "ExecutionAgent"},
                             }
                         )
+                if tool_guard_warnings:
+                    messages.append(LLMClient.tool_guardrail_warning_user_message(tool_guard_warnings))
                 if expected_calls > 0 and len(executed_trades) < expected_calls:
                     remaining = expected_calls - len(executed_trades)
                     next_step = execution_plan[len(executed_trades)] if len(executed_trades) < len(execution_plan) else {}
@@ -831,9 +842,18 @@ class AdvancedMultiAgent(BaseAgent):
             resp = self.llm.call(messages, tools=current_tools if current_tools else None)
 
             msg_content = resp.content or ""
-            tool_calls = resp.tool_calls
+            tool_calls, tool_guard_warnings = LLMClient.apply_tool_call_guardrails(
+                getattr(resp, "tool_calls", None),
+                model=getattr(self.llm, "model", None),
+            )
+            if tool_guard_warnings:
+                logger.warning("Tool-call guardrails triggered: %s", " | ".join(tool_guard_warnings))
 
             resp_dict = self.llm.build_assistant_message_dict(resp)
+            if tool_calls:
+                resp_dict["tool_calls"] = tool_calls
+            else:
+                resp_dict.pop("tool_calls", None)
             messages.append(resp_dict)
 
             if on_step:
@@ -848,9 +868,9 @@ class AdvancedMultiAgent(BaseAgent):
 
             if tool_calls:
                 for tc in tool_calls:
-                    name = tc.function.name
+                    tc_id, name, tc_arguments = LLMClient.tool_call_parts(tc)
                     try:
-                        args = json.loads(tc.function.arguments or "{}")
+                        args = json.loads(tc_arguments or "{}")
                     except Exception as e:
                         args = {}
                         result = {"error": f"Invalid tool arguments for {name}: {e}"}
@@ -882,7 +902,7 @@ class AdvancedMultiAgent(BaseAgent):
 
                     tool_msg = {
                         "role": "tool",
-                        "tool_call_id": tc.id,
+                        "tool_call_id": tc_id,
                         "name": name,
                         "content": json.dumps(result, ensure_ascii=False),
                     }
@@ -892,12 +912,14 @@ class AdvancedMultiAgent(BaseAgent):
                         on_step(
                             {
                                 "role": "tool",
-                                "tool_call_id": tc.id,
+                                "tool_call_id": tc_id,
                                 "name": name,
                                 "content": json.dumps(result, ensure_ascii=False),
                                 "metadata": {"agent": agent_name},
                             }
                         )
+                if tool_guard_warnings:
+                    messages.append(LLMClient.tool_guardrail_warning_user_message(tool_guard_warnings))
                 if agent_name == "NewsAgent" and news_search_calls >= self.NEWS_AGENT_MAX_SEARCH_CALLS:
                     messages.append(
                         {

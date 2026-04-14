@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import copy
+import json
 import logging
 import os
 import time
@@ -27,6 +28,8 @@ _DEFAULT_LLM_REQUEST_TIMEOUT_SECONDS = 20 * 60
 
 
 class LLMClient:
+    MAX_TOOL_CALLS_PER_ASSISTANT_TURN = 20
+
     """
     可用于 Agent 的 OpenAI SDK 封装。
     所有模型（含名称中带 gemini、经 OpenAI 兼容网关转发的情形）均走 chat.completions。
@@ -534,6 +537,106 @@ class LLMClient:
         if not tool_calls:
             return None
         return [LLMClient._tool_call_dict_roundtrip(tc) for tc in tool_calls]
+
+    @staticmethod
+    def tool_call_parts(tc: Any) -> tuple[str, str, str]:
+        """Return (tool_call_id, function_name, function_arguments_json_text)."""
+        if isinstance(tc, dict):
+            fn = tc.get("function") if isinstance(tc.get("function"), dict) else {}
+            tc_id = str(tc.get("id") or "")
+            return tc_id, str(fn.get("name") or ""), str(fn.get("arguments") or "{}")
+        fn_obj = getattr(tc, "function", None)
+        tc_id = str(getattr(tc, "id", "") or "")
+        fn_name = str(getattr(fn_obj, "name", "") or "")
+        fn_args = str(getattr(fn_obj, "arguments", "{}") or "{}")
+        return tc_id, fn_name, fn_args
+
+    @staticmethod
+    def _canonical_tool_call_arguments(arguments_text: str) -> str:
+        text = str(arguments_text or "{}")
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            return text.strip()
+        try:
+            return json.dumps(parsed, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        except Exception:
+            return text.strip()
+
+    @staticmethod
+    def _tool_call_dedupe_signature(tc: dict[str, Any]) -> str:
+        _, name, args_text = LLMClient.tool_call_parts(tc)
+        # tc_id is intentionally excluded from signature so duplicated invocations with different ids are filtered.
+        return f"{name}|{LLMClient._canonical_tool_call_arguments(args_text)}"
+
+    @staticmethod
+    def apply_tool_call_guardrails(
+        tool_calls: Optional[List[Any]],
+        *,
+        model: str | None = None,
+        max_calls: int | None = None,
+    ) -> tuple[list[dict[str, Any]], list[str]]:
+        """
+        Apply per-assistant-turn tool-call guardrails:
+        1) hard cap count
+        2) remove repeated identical (name+arguments) calls in the same turn.
+        """
+        if not tool_calls:
+            return [], []
+
+        cap = int(max_calls or LLMClient.MAX_TOOL_CALLS_PER_ASSISTANT_TURN)
+        cap = max(1, cap)
+        raw = [LLMClient._tool_call_dict_roundtrip(tc) for tc in tool_calls]
+        raw_count = len(raw)
+        warnings: list[str] = []
+
+        capped = raw[:cap]
+        truncated_count = max(0, raw_count - len(capped))
+        if truncated_count > 0:
+            warnings.append(
+                f"Tool-call limit exceeded: requested {raw_count}, capped at {cap}, dropped {truncated_count}."
+            )
+
+        deduped: list[dict[str, Any]] = []
+        seen_signatures: set[str] = set()
+        duplicate_count = 0
+        for tc in capped:
+            sig = LLMClient._tool_call_dedupe_signature(tc)
+            if sig in seen_signatures:
+                duplicate_count += 1
+                continue
+            seen_signatures.add(sig)
+            deduped.append(tc)
+
+        if duplicate_count > 0:
+            warnings.append(
+                f"Repeated identical tool calls detected in one response; filtered {duplicate_count} duplicate calls."
+            )
+
+        if warnings:
+            llm_client_logger.warning(
+                "tool_call_guardrail_applied model=%s requested=%s capped=%s deduped=%s warnings=%s",
+                model or "",
+                raw_count,
+                len(capped),
+                len(deduped),
+                " | ".join(warnings),
+            )
+
+        return deduped, warnings
+
+    @staticmethod
+    def tool_guardrail_warning_user_message(warnings: Sequence[str]) -> dict[str, str]:
+        warn_text = " | ".join([str(w).strip() for w in warnings if str(w).strip()])
+        return {
+            "role": "user",
+            "content": (
+                "Guardrail warning: Your previous response had excessive or repeated tool calls. "
+                f"{warn_text} "
+                "Only the retained tool calls were executed and added to context. "
+                "Do not repeat identical tool calls in one response."
+            ),
+        }
 
     @staticmethod
     def build_message_dict(

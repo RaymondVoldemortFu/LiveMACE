@@ -50,7 +50,7 @@ class SearchSubAgent:
         self.agent_name = agent_name or "SearchSubAgent"
         self.max_retries = ToolConfig.SEARCH_AGENT_MAX_RETRIES
         # Hotfix: cap tool executions per single LLM response to prevent search storms.
-        self.max_tools_per_step = 20
+        self.max_tools_per_step = LLMClient.MAX_TOOL_CALLS_PER_ASSISTANT_TURN
         self.search_timeout_seconds = ToolConfig.SEARCH_AGENT_SEARCH_TIMEOUT_SECONDS
         self.unlocker_timeout_seconds = ToolConfig.SEARCH_AGENT_UNLOCKER_TIMEOUT_SECONDS
         self.local_fetch_connect_timeout_seconds = (
@@ -653,6 +653,19 @@ class SearchSubAgent:
 
                 # Handle message object for logging/history
                 msg_dict = self.llm_client.build_assistant_message_dict(msg)
+                tool_calls, tool_guard_warnings = LLMClient.apply_tool_call_guardrails(
+                    getattr(msg, "tool_calls", None),
+                    model=getattr(self.llm_client, "model", None),
+                    max_calls=self.max_tools_per_step,
+                )
+                if tool_calls:
+                    msg_dict["tool_calls"] = tool_calls
+                else:
+                    msg_dict.pop("tool_calls", None)
+                if tool_guard_warnings:
+                    agent_logger.warning(
+                        f"[{agent_name}] Tool-call guardrails triggered: {' | '.join(tool_guard_warnings)}"
+                    )
                 messages.append(msg_dict)
 
                 # Log Response
@@ -662,15 +675,8 @@ class SearchSubAgent:
                 agent_logger.info(f"[{agent_name}] Sub-Agent Content: {content}")
 
                 # Check for tool calls
-                tool_calls = msg.tool_calls if hasattr(msg, 'tool_calls') else (msg_dict.get('tool_calls') or [])
+                tool_calls = msg_dict.get("tool_calls") or []
                 if tool_calls:
-                    if len(tool_calls) > self.max_tools_per_step:
-                        agent_logger.warning(
-                            f"[{agent_name}] Tool calls overflow in one step: requested={len(tool_calls)}, "
-                            f"capped={self.max_tools_per_step}"
-                        )
-                        tool_calls = list(tool_calls)[:self.max_tools_per_step]
-
                     # Last step cannot safely execute more tools; force a structured final response.
                     if step == self.max_steps - 1:
                         agent_logger.warning(
@@ -681,15 +687,7 @@ class SearchSubAgent:
 
                     agent_logger.info(f"[{agent_name}] Sub-Agent requested {len(tool_calls)} tools")
                     for tc in tool_calls:
-                        # Support both object and dict formats
-                        if isinstance(tc, dict):
-                            func_name = tc.get('function', {}).get('name')
-                            tc_id = tc.get('id')
-                            tc_arguments = tc.get('function', {}).get('arguments', '{}')
-                        else:
-                            func_name = tc.function.name
-                            tc_id = tc.id
-                            tc_arguments = tc.function.arguments
+                        tc_id, func_name, tc_arguments = LLMClient.tool_call_parts(tc)
                         try:
                             args = json.loads(tc_arguments or "{}")
                         except json.JSONDecodeError as e:
@@ -747,6 +745,8 @@ class SearchSubAgent:
                             "name": func_name,
                             "content": json.dumps(result, ensure_ascii=False)
                         })
+                    if tool_guard_warnings:
+                        messages.append(LLMClient.tool_guardrail_warning_user_message(tool_guard_warnings))
                     if self.llm_client.is_gemini_model():
                         messages.append(LLMClient.gemini_post_tool_user_message())
                 else:
