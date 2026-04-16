@@ -11,6 +11,7 @@ from typing import Any, List, Optional, Sequence
 
 import httpx
 from openai import OpenAI
+from openai.types.chat.chat_completion_message import ChatCompletionMessage
 
 # Gemini 经部分兼容网关时：并行 functionCall 往往只在第一个 part 带 thought_signature，
 # 回传时若后续 part 缺失，上游会 400（如 position 2 / get_account_state）。
@@ -29,6 +30,7 @@ _DEFAULT_LLM_REQUEST_TIMEOUT_SECONDS = 20 * 60
 
 class LLMClient:
     MAX_TOOL_CALLS_PER_ASSISTANT_TURN = 20
+    THINKING_TIMEOUT_GUARDRAIL_SECONDS = 10 * 60
 
     """
     可用于 Agent 的 OpenAI SDK 封装。
@@ -108,6 +110,8 @@ class LLMClient:
         self.default_timeout_seconds = float(
             os.getenv("LLM_REQUEST_TIMEOUT_SECONDS", str(_DEFAULT_LLM_REQUEST_TIMEOUT_SECONDS))
         )
+        self._long_timeout_strikes = 0
+        self._last_long_timeout_elapsed_ms: Optional[int] = None
 
     def close(self) -> None:
         """关闭底层 HTTP 客户端（含自定义 httpx.Client）。长驻进程在丢弃 LLMClient 前应调用，避免套接字泄漏。"""
@@ -193,6 +197,7 @@ class LLMClient:
         直接返回 ChatCompletionMessage，便于后续追加到 messages 历史中。
         """
         self._last_wire_tool_calls = None
+        self._last_long_timeout_elapsed_ms = None
         request_kwargs = {
             "model": self.model,
             "messages": self._normalize_messages_for_api(messages, model=self.model),
@@ -226,13 +231,20 @@ class LLMClient:
             request_kwargs.get("timeout"),
             bool(response_format),
         )
-
-        response = self._create_with_retry(
-            request_kwargs,
-            call_id=call_id,
-            message_count=message_count,
-            tool_count=tool_count,
-        )
+        try:
+            response = self._create_with_retry(
+                request_kwargs,
+                call_id=call_id,
+                message_count=message_count,
+                tool_count=tool_count,
+            )
+        except Exception:
+            if self._last_long_timeout_elapsed_ms is not None:
+                return self._build_timeout_guardrail_message(
+                    elapsed_ms=self._last_long_timeout_elapsed_ms,
+                    call_id=call_id,
+                )
+            raise
 
         return response.choices[0].message
 
@@ -295,7 +307,42 @@ class LLMClient:
             tool_count,
             str(last_err),
         )
+        if self._is_timeout_error(last_err):
+            threshold_ms = int(self.THINKING_TIMEOUT_GUARDRAIL_SECONDS * 1000)
+            if elapsed_ms >= threshold_ms:
+                self._last_long_timeout_elapsed_ms = elapsed_ms
         raise last_err
+
+    @staticmethod
+    def _is_timeout_error(err: Exception) -> bool:
+        if isinstance(err, TimeoutError):
+            return True
+        if isinstance(err, httpx.TimeoutException):
+            return True
+        text = str(err or "").lower()
+        return "timeout" in text or "timed out" in text
+
+    def _build_timeout_guardrail_message(self, *, elapsed_ms: int, call_id: str) -> ChatCompletionMessage:
+        self._long_timeout_strikes += 1
+        if self._long_timeout_strikes >= 2:
+            content = "<TRADE_DONE>"
+            llm_client_logger.error(
+                "llm_timeout_guardrail_force_done call_id=%s model=%s strikes=%s elapsed_ms=%s",
+                call_id,
+                self.model,
+                self._long_timeout_strikes,
+                elapsed_ms,
+            )
+        else:
+            content = "warning: thinking timeout"
+            llm_client_logger.warning(
+                "llm_timeout_guardrail_warning call_id=%s model=%s strikes=%s elapsed_ms=%s",
+                call_id,
+                self.model,
+                self._long_timeout_strikes,
+                elapsed_ms,
+            )
+        return ChatCompletionMessage(role="assistant", content=content, tool_calls=None)
 
     @staticmethod
     def _has_any_thought_sig(d: dict[str, Any]) -> bool:

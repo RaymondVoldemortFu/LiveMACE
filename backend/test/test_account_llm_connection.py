@@ -176,3 +176,84 @@ def test_llm_client_call_keeps_max_tokens_for_non_grok_model():
     kwargs = mocked_create.call_args.kwargs
     assert kwargs.get("max_tokens") == 4000
     assert "max_completion_tokens" not in kwargs
+
+
+def test_llm_client_long_timeout_first_strike_returns_warning(monkeypatch):
+    client = object.__new__(LLMClient)
+    client.model = "gpt-4o-mini"
+    client.max_retries = 0
+    client._last_wire_tool_calls = None
+    client.is_gemini_model = lambda: False
+    client.is_grok_model = lambda: False
+    client.default_timeout_seconds = 30.0
+    client._long_timeout_strikes = 0
+    client._last_long_timeout_elapsed_ms = None
+
+    mocked_create = MagicMock(side_effect=TimeoutError("request timeout"))
+    client.client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(create=mocked_create)
+        )
+    )
+
+    import services.agent.llm_client as llm_client_module
+    counters = iter([0.0, 601.0, 601.0])
+    monkeypatch.setattr(llm_client_module.time, "perf_counter", lambda: next(counters))
+
+    out = client.call(messages=[{"role": "user", "content": "hello"}])
+    assert (out.content or "").lower() == "warning: thinking timeout"
+    assert client._long_timeout_strikes == 1
+
+
+def test_llm_client_long_timeout_second_strike_forces_trade_done(monkeypatch):
+    client = object.__new__(LLMClient)
+    client.model = "gpt-4o-mini"
+    client.max_retries = 0
+    client._last_wire_tool_calls = None
+    client.is_gemini_model = lambda: False
+    client.is_grok_model = lambda: False
+    client.default_timeout_seconds = 30.0
+    client._long_timeout_strikes = 1
+    client._last_long_timeout_elapsed_ms = None
+
+    mocked_create = MagicMock(side_effect=TimeoutError("request timeout"))
+    client.client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(create=mocked_create)
+        )
+    )
+
+    import services.agent.llm_client as llm_client_module
+    counters = iter([0.0, 601.0, 601.0])
+    monkeypatch.setattr(llm_client_module.time, "perf_counter", lambda: next(counters))
+
+    out = client.call(messages=[{"role": "user", "content": "hello"}])
+    assert (out.content or "").strip() == "<TRADE_DONE>"
+    assert client._long_timeout_strikes == 2
+
+
+def test_llm_client_short_timeout_does_not_trigger_guardrail(monkeypatch):
+    client = object.__new__(LLMClient)
+    client.model = "gpt-4o-mini"
+    client.max_retries = 0
+    client._last_wire_tool_calls = None
+    client.is_gemini_model = lambda: False
+    client.is_grok_model = lambda: False
+    client.default_timeout_seconds = 30.0
+    client._long_timeout_strikes = 0
+    client._last_long_timeout_elapsed_ms = None
+
+    mocked_create = MagicMock(side_effect=TimeoutError("request timeout"))
+    client.client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(create=mocked_create)
+        )
+    )
+
+    import services.agent.llm_client as llm_client_module
+    counters = iter([0.0, 120.0, 120.0])
+    monkeypatch.setattr(llm_client_module.time, "perf_counter", lambda: next(counters))
+
+    with pytest.raises(TimeoutError):
+        client.call(messages=[{"role": "user", "content": "hello"}])
+    assert client._long_timeout_strikes == 0
