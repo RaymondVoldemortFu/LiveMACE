@@ -182,10 +182,11 @@ class RedisToolCache:
         acquired = False
         try:
             acquired = bool(lock.acquire(blocking=True))
-            yield acquired
         except Exception as e:
             logger.warning(f"Tool cache lock failed (tool={tool_name}): {e}")
-            yield False
+            acquired = False
+        try:
+            yield acquired
         finally:
             if acquired:
                 try:

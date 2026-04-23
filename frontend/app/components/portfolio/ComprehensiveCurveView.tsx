@@ -15,6 +15,7 @@ import { Card } from '@/components/ui/card'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Button } from '@/components/ui/button'
 import { isBaselineAccountName } from '@/lib/baselineAccounts'
+import { getDecisionSchedule } from '@/lib/api'
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend)
 
@@ -124,6 +125,7 @@ export default function ComprehensiveCurveView({ data: initialData, accounts = [
   const [error, setError] = useState<string | null>(null)
   const [isInitialized, setIsInitialized] = useState(false)
   const [category, setCategory] = useState<CurveCategory>('avg-by-model')
+  const [nextDecisionTimeUtc8, setNextDecisionTimeUtc8] = useState<string>('加载中...')
 
   const locale = typeof navigator !== 'undefined' ? navigator.language : undefined
   const currency2Formatter = new Intl.NumberFormat(locale, {
@@ -190,6 +192,44 @@ export default function ComprehensiveCurveView({ data: initialData, accounts = [
     if (initialData && !isInitialized && timeframe === '1h') {
       setData(initialData)
       setIsInitialized(true)
+    }
+  }, [])
+
+  useEffect(() => {
+    let mounted = true
+
+    const formatUtc8 = (isoString: string): string => {
+      const date = new Date(isoString)
+      if (Number.isNaN(date.getTime())) return '时间格式错误'
+      return date.toLocaleString('zh-CN', {
+        timeZone: 'Asia/Shanghai',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+      })
+    }
+
+    const fetchSchedule = async () => {
+      try {
+        const schedule = await getDecisionSchedule()
+        if (!mounted) return
+        setNextDecisionTimeUtc8(formatUtc8(schedule.next_decision_time_utc8))
+      } catch (err) {
+        console.error('Failed to fetch decision schedule', err)
+        if (!mounted) return
+        setNextDecisionTimeUtc8('获取失败')
+      }
+    }
+
+    fetchSchedule()
+    const timer = setInterval(fetchSchedule, 30000)
+    return () => {
+      mounted = false
+      clearInterval(timer)
     }
   }, [])
 
@@ -345,6 +385,9 @@ export default function ComprehensiveCurveView({ data: initialData, accounts = [
                 <TabsTrigger value="1d">1 Day</TabsTrigger>
               </TabsList>
             </Tabs>
+            <div className="text-sm text-muted-foreground">
+              下一次决策时间(UTC+8): <span className="font-medium text-foreground">{nextDecisionTimeUtc8}</span>
+            </div>
           </div>
           <div className="flex items-center justify-center h-[72vh]">
             <div className="text-muted-foreground">{loading ? 'Loading...' : error || 'No asset data available'}</div>
@@ -366,17 +409,22 @@ export default function ComprehensiveCurveView({ data: initialData, accounts = [
             </TabsList>
           </Tabs>
 
-          <div className="flex flex-wrap gap-2">
-            {CATEGORY_ORDER.map((c) => (
-              <Button
-                key={c}
-                size="sm"
-                variant={category === c ? 'default' : 'outline'}
-                onClick={() => setCategory(c)}
-              >
-                {CATEGORY_LABEL[c]}
-              </Button>
-            ))}
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="text-sm text-muted-foreground">
+              下一次决策时间(UTC+8): <span className="font-medium text-foreground">{nextDecisionTimeUtc8}</span>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {CATEGORY_ORDER.map((c) => (
+                <Button
+                  key={c}
+                  size="sm"
+                  variant={category === c ? 'default' : 'outline'}
+                  onClick={() => setCategory(c)}
+                >
+                  {CATEGORY_LABEL[c]}
+                </Button>
+              ))}
+            </div>
           </div>
         </div>
 

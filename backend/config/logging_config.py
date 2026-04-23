@@ -2,6 +2,62 @@ import logging
 import logging.handlers
 import os
 import sys
+import smtplib
+from pathlib import Path
+from email.message import EmailMessage
+from typing import List
+
+import dotenv
+
+
+def _parse_recipients(raw: str) -> List[str]:
+    return [item.strip() for item in (raw or "").split(",") if item.strip()]
+
+
+def _load_logging_env() -> None:
+    """Load backend .env before reading logging-related env vars."""
+    backend_dir = Path(__file__).resolve().parent.parent
+    backend_env = backend_dir / ".env"
+    if backend_env.exists():
+        dotenv.load_dotenv(dotenv_path=backend_env, override=False)
+        return
+    dotenv.load_dotenv(dotenv.find_dotenv(usecwd=True), override=False)
+
+
+class ErrorEmailHandler(logging.Handler):
+    """Send ERROR-level log records via SMTP email."""
+
+    def __init__(
+        self,
+        smtp_server: str,
+        smtp_port: int,
+        from_addr: str,
+        password: str,
+        recipients: List[str],
+        subject_prefix: str = "[open-alpha-arena]",
+    ):
+        super().__init__(level=logging.ERROR)
+        self.smtp_server = smtp_server
+        self.smtp_port = smtp_port
+        self.from_addr = from_addr
+        self.password = password
+        self.recipients = recipients
+        self.subject_prefix = subject_prefix
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            message = EmailMessage()
+            message["From"] = self.from_addr
+            message["To"] = ", ".join(self.recipients)
+            message["Subject"] = f"{self.subject_prefix} ERROR {record.name}"
+            message.set_content(self.format(record))
+
+            with smtplib.SMTP_SSL(self.smtp_server, self.smtp_port, timeout=10) as client:
+                client.login(self.from_addr, self.password)
+                client.send_message(message)
+        except Exception:
+            self.handleError(record)
+
 
 def setup_logging():
     """
@@ -22,6 +78,8 @@ def setup_logging():
         "[%(asctime)s] %(levelname)s [%(name)s:%(lineno)s] %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S"
     )
+
+    _load_logging_env()
 
     # Root logger
     root_logger = logging.getLogger()
@@ -53,6 +111,46 @@ def setup_logging():
     error_handler.setFormatter(formatter)
     error_handler.setLevel(logging.ERROR)
     root_logger.addHandler(error_handler)
+
+    # Error email alert handler (optional)
+    email_from = (os.getenv("EMAIL_NAME") or "").strip()
+    email_auth = (os.getenv("EMAIL_AUTH") or "").strip()
+    smtp_server = (os.getenv("SMTP_SERVER") or "").strip()
+    smtp_port_raw = (os.getenv("SMTP_PORT") or "465").strip()
+    recipients = _parse_recipients(os.getenv("ERROR_EMAIL_TO", ""))
+
+    if email_from and email_auth and smtp_server and recipients:
+        try:
+            smtp_port = int(smtp_port_raw)
+            if smtp_port <= 0:
+                raise ValueError("SMTP_PORT must be > 0")
+        except Exception as err:
+            raise RuntimeError(f"Invalid SMTP_PORT={smtp_port_raw!r}") from err
+
+        email_handler = ErrorEmailHandler(
+            smtp_server=smtp_server,
+            smtp_port=smtp_port,
+            from_addr=email_from,
+            password=email_auth,
+            recipients=recipients,
+        )
+        email_handler.setFormatter(formatter)
+        root_logger.addHandler(email_handler)
+        logging.info("Error email alert enabled, recipients=%s", recipients)
+    else:
+        missing_keys = []
+        if not email_from:
+            missing_keys.append("EMAIL_NAME")
+        if not email_auth:
+            missing_keys.append("EMAIL_AUTH")
+        if not smtp_server:
+            missing_keys.append("SMTP_SERVER")
+        if not recipients:
+            missing_keys.append("ERROR_EMAIL_TO")
+        logging.info(
+            "Error email alert disabled (missing: %s)",
+            ",".join(missing_keys) if missing_keys else "unknown",
+        )
 
     # --- Specialized Loggers ---
 
@@ -165,6 +263,19 @@ def setup_logging():
     tool_cache_handler.setFormatter(formatter)
     tool_cache_handler.setLevel(logging.DEBUG)
     tool_cache_logger.addHandler(tool_cache_handler)
+
+    # 10. LLM Client Logger (Independent file, no propagation)
+    llm_client_logger = logging.getLogger("llm_client")
+    llm_client_logger.setLevel(logging.INFO)
+    llm_client_logger.propagate = False
+
+    llm_client_log_file = os.path.join(log_dir, "llm_client.log")
+    llm_client_handler = logging.handlers.TimedRotatingFileHandler(
+        llm_client_log_file, when="midnight", interval=1, backupCount=30, encoding="utf-8"
+    )
+    llm_client_handler.setFormatter(formatter)
+    llm_client_logger.addHandler(llm_client_handler)
+    llm_client_logger.info("LLM client logger initialized")
 
     # Uvicorn loggers integration
     logging.getLogger("uvicorn").handlers = []

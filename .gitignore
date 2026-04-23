@@ -323,3 +323,7 @@ chroma_db
 .claude
 .github
 backend/eval_outputs/
+temp
+*.sqlite
+backend/script/results/*
+*.sql

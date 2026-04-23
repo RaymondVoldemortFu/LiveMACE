@@ -3,12 +3,15 @@ from __future__ import annotations
 
 import base64
 import copy
+import json
 import logging
 import os
+import time
 from typing import Any, List, Optional, Sequence
 
 import httpx
 from openai import OpenAI
+from openai.types.chat.chat_completion_message import ChatCompletionMessage
 
 # Gemini 经部分兼容网关时：并行 functionCall 往往只在第一个 part 带 thought_signature，
 # 回传时若后续 part 缺失，上游会 400（如 position 2 / get_account_state）。
@@ -21,9 +24,14 @@ _DEFAULT_GEMINI_THOUGHT_SIG_PLACEHOLDER = base64.b64encode(
 ).decode("ascii")
 
 logger = logging.getLogger(__name__)
+llm_client_logger = logging.getLogger("llm_client")
+_DEFAULT_LLM_REQUEST_TIMEOUT_SECONDS = 20 * 60
 
 
 class LLMClient:
+    MAX_TOOL_CALLS_PER_ASSISTANT_TURN = 20
+    THINKING_TIMEOUT_GUARDRAIL_SECONDS = 10 * 60
+
     """
     可用于 Agent 的 OpenAI SDK 封装。
     所有模型（含名称中带 gemini、经 OpenAI 兼容网关转发的情形）均走 chat.completions。
@@ -97,6 +105,13 @@ class LLMClient:
 
         # Gemini 路径使用自定义 httpx.Client；OpenAI() 会持有其引用，须通过 client.close() 释放连接。
         self._closed = False
+        # Retry count for transient upstream/provider errors.
+        self.max_retries = max(0, int(os.getenv("LLM_REQUEST_MAX_RETRIES", "2")))
+        self.default_timeout_seconds = float(
+            os.getenv("LLM_REQUEST_TIMEOUT_SECONDS", str(_DEFAULT_LLM_REQUEST_TIMEOUT_SECONDS))
+        )
+        self._long_timeout_strikes = 0
+        self._last_long_timeout_elapsed_ms: Optional[int] = None
 
     def close(self) -> None:
         """关闭底层 HTTP 客户端（含自定义 httpx.Client）。长驻进程在丢弃 LLMClient 前应调用，避免套接字泄漏。"""
@@ -119,8 +134,15 @@ class LLMClient:
     def is_gemini_model_name(model: str | None) -> bool:
         return "gemini" in (model or "").strip().lower()
 
+    @staticmethod
+    def is_grok_model_name(model: str | None) -> bool:
+        return "grok" in (model or "").strip().lower()
+
     def is_gemini_model(self) -> bool:
         return self.is_gemini_model_name(self.model)
+
+    def is_grok_model(self) -> bool:
+        return self.is_grok_model_name(self.model)
 
     @staticmethod
     def _gemini_thought_signature_placeholder_value() -> str:
@@ -175,15 +197,18 @@ class LLMClient:
         直接返回 ChatCompletionMessage，便于后续追加到 messages 历史中。
         """
         self._last_wire_tool_calls = None
+        self._last_long_timeout_elapsed_ms = None
         request_kwargs = {
             "model": self.model,
             "messages": self._normalize_messages_for_api(messages, model=self.model),
             "tools": tools,
             "temperature": 0.4,
-            "max_tokens": 4000,
         }
-        if timeout is not None:
-            request_kwargs["timeout"] = timeout
+        if self.is_grok_model():
+            request_kwargs["max_completion_tokens"] = 4000
+        else:
+            request_kwargs["max_tokens"] = 4000
+        request_kwargs["timeout"] = self.default_timeout_seconds if timeout is None else timeout
         if response_format is not None:
             request_kwargs["response_format"] = response_format
 
@@ -194,11 +219,130 @@ class LLMClient:
             if tools:
                 request_kwargs["tools"] = self._sanitize_openai_tools_for_gemini(tools)
 
-        response = self.client.chat.completions.create(
-            **request_kwargs,
+        tool_count = len(tools) if isinstance(tools, (list, tuple)) else 0
+        message_count = len(request_kwargs.get("messages") or [])
+        call_id = f"{int(time.time() * 1000)}-{id(self)}"
+        llm_client_logger.info(
+            "llm_call_start call_id=%s model=%s message_count=%s tool_count=%s timeout=%s response_format=%s",
+            call_id,
+            self.model,
+            message_count,
+            tool_count,
+            request_kwargs.get("timeout"),
+            bool(response_format),
         )
+        try:
+            response = self._create_with_retry(
+                request_kwargs,
+                call_id=call_id,
+                message_count=message_count,
+                tool_count=tool_count,
+            )
+        except Exception:
+            if self._last_long_timeout_elapsed_ms is not None:
+                return self._build_timeout_guardrail_message(
+                    elapsed_ms=self._last_long_timeout_elapsed_ms,
+                    call_id=call_id,
+                )
+            raise
 
         return response.choices[0].message
+
+    def _create_with_retry(
+        self,
+        request_kwargs: dict[str, Any],
+        *,
+        call_id: str,
+        message_count: int,
+        tool_count: int,
+    ):
+        attempts = self.max_retries + 1
+        last_err: Exception | None = None
+        call_start = time.perf_counter()
+        for attempt in range(1, attempts + 1):
+            try:
+                response = self.client.chat.completions.create(**request_kwargs)
+                elapsed_ms = int((time.perf_counter() - call_start) * 1000)
+                llm_client_logger.info(
+                    "llm_call_success call_id=%s model=%s attempt=%s/%s elapsed_ms=%s message_count=%s tool_count=%s",
+                    call_id,
+                    self.model,
+                    attempt,
+                    attempts,
+                    elapsed_ms,
+                    message_count,
+                    tool_count,
+                )
+                return response
+            except Exception as err:
+                last_err = err
+                elapsed_ms = int((time.perf_counter() - call_start) * 1000)
+                llm_client_logger.warning(
+                    "llm_call_attempt_failed call_id=%s model=%s attempt=%s/%s elapsed_ms=%s error=%s",
+                    call_id,
+                    self.model,
+                    attempt,
+                    attempts,
+                    elapsed_ms,
+                    str(err),
+                )
+                if attempt >= attempts:
+                    break
+                logger.warning(
+                    "LLM request failed (attempt %s/%s), retrying: %s",
+                    attempt,
+                    attempts,
+                    err,
+                )
+                time.sleep(min(1.0, 0.2 * attempt))
+        assert last_err is not None
+        elapsed_ms = int((time.perf_counter() - call_start) * 1000)
+        llm_client_logger.error(
+            "llm_call_failed call_id=%s model=%s attempts=%s elapsed_ms=%s message_count=%s tool_count=%s error=%s",
+            call_id,
+            self.model,
+            attempts,
+            elapsed_ms,
+            message_count,
+            tool_count,
+            str(last_err),
+        )
+        if self._is_timeout_error(last_err):
+            threshold_ms = int(self.THINKING_TIMEOUT_GUARDRAIL_SECONDS * 1000)
+            if elapsed_ms >= threshold_ms:
+                self._last_long_timeout_elapsed_ms = elapsed_ms
+        raise last_err
+
+    @staticmethod
+    def _is_timeout_error(err: Exception) -> bool:
+        if isinstance(err, TimeoutError):
+            return True
+        if isinstance(err, httpx.TimeoutException):
+            return True
+        text = str(err or "").lower()
+        return "timeout" in text or "timed out" in text
+
+    def _build_timeout_guardrail_message(self, *, elapsed_ms: int, call_id: str) -> ChatCompletionMessage:
+        self._long_timeout_strikes += 1
+        if self._long_timeout_strikes >= 2:
+            content = "<TRADE_DONE>"
+            llm_client_logger.error(
+                "llm_timeout_guardrail_force_done call_id=%s model=%s strikes=%s elapsed_ms=%s",
+                call_id,
+                self.model,
+                self._long_timeout_strikes,
+                elapsed_ms,
+            )
+        else:
+            content = "warning: thinking timeout"
+            llm_client_logger.warning(
+                "llm_timeout_guardrail_warning call_id=%s model=%s strikes=%s elapsed_ms=%s",
+                call_id,
+                self.model,
+                self._long_timeout_strikes,
+                elapsed_ms,
+            )
+        return ChatCompletionMessage(role="assistant", content=content, tool_calls=None)
 
     @staticmethod
     def _has_any_thought_sig(d: dict[str, Any]) -> bool:
@@ -450,6 +594,106 @@ class LLMClient:
         if not tool_calls:
             return None
         return [LLMClient._tool_call_dict_roundtrip(tc) for tc in tool_calls]
+
+    @staticmethod
+    def tool_call_parts(tc: Any) -> tuple[str, str, str]:
+        """Return (tool_call_id, function_name, function_arguments_json_text)."""
+        if isinstance(tc, dict):
+            fn = tc.get("function") if isinstance(tc.get("function"), dict) else {}
+            tc_id = str(tc.get("id") or "")
+            return tc_id, str(fn.get("name") or ""), str(fn.get("arguments") or "{}")
+        fn_obj = getattr(tc, "function", None)
+        tc_id = str(getattr(tc, "id", "") or "")
+        fn_name = str(getattr(fn_obj, "name", "") or "")
+        fn_args = str(getattr(fn_obj, "arguments", "{}") or "{}")
+        return tc_id, fn_name, fn_args
+
+    @staticmethod
+    def _canonical_tool_call_arguments(arguments_text: str) -> str:
+        text = str(arguments_text or "{}")
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            return text.strip()
+        try:
+            return json.dumps(parsed, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        except Exception:
+            return text.strip()
+
+    @staticmethod
+    def _tool_call_dedupe_signature(tc: dict[str, Any]) -> str:
+        _, name, args_text = LLMClient.tool_call_parts(tc)
+        # tc_id is intentionally excluded from signature so duplicated invocations with different ids are filtered.
+        return f"{name}|{LLMClient._canonical_tool_call_arguments(args_text)}"
+
+    @staticmethod
+    def apply_tool_call_guardrails(
+        tool_calls: Optional[List[Any]],
+        *,
+        model: str | None = None,
+        max_calls: int | None = None,
+    ) -> tuple[list[dict[str, Any]], list[str]]:
+        """
+        Apply per-assistant-turn tool-call guardrails:
+        1) hard cap count
+        2) remove repeated identical (name+arguments) calls in the same turn.
+        """
+        if not tool_calls:
+            return [], []
+
+        cap = int(max_calls or LLMClient.MAX_TOOL_CALLS_PER_ASSISTANT_TURN)
+        cap = max(1, cap)
+        raw = [LLMClient._tool_call_dict_roundtrip(tc) for tc in tool_calls]
+        raw_count = len(raw)
+        warnings: list[str] = []
+
+        capped = raw[:cap]
+        truncated_count = max(0, raw_count - len(capped))
+        if truncated_count > 0:
+            warnings.append(
+                f"Tool-call limit exceeded: requested {raw_count}, capped at {cap}, dropped {truncated_count}."
+            )
+
+        deduped: list[dict[str, Any]] = []
+        seen_signatures: set[str] = set()
+        duplicate_count = 0
+        for tc in capped:
+            sig = LLMClient._tool_call_dedupe_signature(tc)
+            if sig in seen_signatures:
+                duplicate_count += 1
+                continue
+            seen_signatures.add(sig)
+            deduped.append(tc)
+
+        if duplicate_count > 0:
+            warnings.append(
+                f"Repeated identical tool calls detected in one response; filtered {duplicate_count} duplicate calls."
+            )
+
+        if warnings:
+            llm_client_logger.warning(
+                "tool_call_guardrail_applied model=%s requested=%s capped=%s deduped=%s warnings=%s",
+                model or "",
+                raw_count,
+                len(capped),
+                len(deduped),
+                " | ".join(warnings),
+            )
+
+        return deduped, warnings
+
+    @staticmethod
+    def tool_guardrail_warning_user_message(warnings: Sequence[str]) -> dict[str, str]:
+        warn_text = " | ".join([str(w).strip() for w in warnings if str(w).strip()])
+        return {
+            "role": "user",
+            "content": (
+                "Guardrail warning: Your previous response had excessive or repeated tool calls. "
+                f"{warn_text} "
+                "Only the retained tool calls were executed and added to context. "
+                "Do not repeat identical tool calls in one response."
+            ),
+        }
 
     @staticmethod
     def build_message_dict(

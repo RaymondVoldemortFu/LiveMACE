@@ -1,13 +1,14 @@
 """
 Asset Curve Calculator - New Algorithm
 Draws curve by accounts, creates all-time list for every account: time, cash, positions.
-Gets latest 20 close prices for all symbols, then fills curve with cash + sum(symbol price * position).
+Gets latest N close prices for all symbols, then fills curve with cash + sum(symbol price * position).
 """
 
 from sqlalchemy.orm import Session, joinedload
 from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime, timezone
 from decimal import Decimal
+from bisect import bisect_right
 import logging
 
 from database.models import Trade, Account, AgentPeriodCheckpoint
@@ -61,6 +62,21 @@ def _align_curve_timestamp(timeframe: str, ts_sec: int) -> int:
     return ts_sec
 
 
+def _lookup_price_with_last_close(price_map: Dict[int, float], ts: int) -> Optional[float]:
+    """Lookup close price at ts; if missing, fallback to latest close before ts."""
+    if not price_map:
+        return None
+    direct = price_map.get(ts)
+    if direct is not None:
+        return float(direct)
+
+    keys = sorted(price_map.keys())
+    idx = bisect_right(keys, ts) - 1
+    if idx < 0:
+        return None
+    return float(price_map[keys[idx]])
+
+
 def _list_active_accounts(db: Session) -> List[Account]:
     # Account.is_active is stored as a string in this project; keep this tolerant
     # so we don't accidentally return no accounts due to casing/data drift.
@@ -72,7 +88,7 @@ def _list_active_accounts(db: Session) -> List[Account]:
     return db.query(Account).all()
 
 
-def get_all_asset_curves_data_new(db: Session, timeframe: str = "1h") -> List[Dict]:
+def get_all_asset_curves_data_new(db: Session, timeframe: str = "1h", points: int = 20) -> List[Dict]:
     """
     New algorithm for asset curve calculation by accounts.
     
@@ -89,6 +105,8 @@ def get_all_asset_curves_data_new(db: Session, timeframe: str = "1h") -> List[Di
         if not accounts:
             return []
 
+        points = max(1, int(points))
+
         # For 1h timeframe, use checkpoints as the source of truth.
         # This guarantees the curve deltas match the right-side hourly PnL.
         if timeframe == "1h":
@@ -100,7 +118,7 @@ def get_all_asset_curves_data_new(db: Session, timeframe: str = "1h") -> List[Di
                 .filter(AgentPeriodCheckpoint.interval_seconds == interval_seconds)
                 .distinct()
                 .order_by(AgentPeriodCheckpoint.period_end.desc())
-                .limit(200)
+                .limit(points)
                 .all()
             )
             period_ends = [r[0] for r in period_end_rows if r and r[0] is not None]
@@ -188,11 +206,11 @@ def get_all_asset_curves_data_new(db: Session, timeframe: str = "1h") -> List[Di
         
         logging.info(f"Found {len(unique_symbols)} unique symbols: {unique_symbols}")
         
-        # Step 3: Get latest 20 close prices for all symbols
+        # Step 3: Get latest N close prices for all symbols
         symbol_klines = {}
         for symbol, market in unique_symbols:
             try:
-                klines = get_kline_data(symbol, market, timeframe, 20)
+                klines = get_kline_data(symbol, market, timeframe, points)
                 if klines:
                     symbol_klines[(symbol, market)] = klines
                     logging.info(f"Fetched {len(klines)} klines for {symbol}.{market}")
@@ -524,6 +542,11 @@ def _create_account_timeline(
                 if pos.quantity > 0:
                     try:
                         price = get_last_price(pos.symbol, pos.market)
+                        if price is None or float(price) <= 0:
+                            price = _lookup_price_with_last_close(
+                                close_maps.get((pos.symbol, pos.market), {}),
+                                ts,
+                            )
                         if price and price > 0:
                             price_dec = Decimal(str(price))
                             quantity_dec = Decimal(str(pos.quantity))
@@ -548,7 +571,32 @@ def _create_account_timeline(
 
                             positions_value += float(position_equity)
                     except Exception as e:
-                        logging.warning(f"Could not get price for {pos.symbol}.{pos.market}: {e}")
+                        fallback_price = _lookup_price_with_last_close(
+                            close_maps.get((pos.symbol, pos.market), {}),
+                            ts,
+                        )
+                        if fallback_price is not None and fallback_price > 0:
+                            price_dec = Decimal(str(fallback_price))
+                            quantity_dec = Decimal(str(pos.quantity))
+                            avg_cost_dec = Decimal(str(pos.avg_cost))
+                            leverage_dec = Decimal(str(pos.leverage)) if pos.leverage and pos.leverage > 0 else Decimal("1")
+
+                            if leverage_dec > 1:
+                                entry_margin = (quantity_dec * avg_cost_dec) / leverage_dec
+                                side = (getattr(pos, "side", None) or "LONG").upper()
+                                if side == "SHORT":
+                                    unrealized_pnl = quantity_dec * (avg_cost_dec - price_dec)
+                                else:
+                                    unrealized_pnl = quantity_dec * (price_dec - avg_cost_dec)
+                                position_equity = entry_margin + unrealized_pnl
+                            else:
+                                side = (getattr(pos, "side", None) or "LONG").upper()
+                                signed_qty_dec = -quantity_dec if side == "SHORT" else quantity_dec
+                                position_equity = signed_qty_dec * price_dec
+
+                            positions_value += float(position_equity)
+                        else:
+                            logging.warning(f"Could not get price for {pos.symbol}.{pos.market}: {e}")
         else:
             # For historical points, use replayed position states from trade history.
             # This avoids using current Position rows to infer history (which is lossy).
@@ -557,7 +605,10 @@ def _create_account_timeline(
                     if float(pos.get("quantity", 0)) <= 0:
                         continue
 
-                    close = close_maps.get((symbol, market), {}).get(ts)
+                    close = _lookup_price_with_last_close(
+                        close_maps.get((symbol, market), {}),
+                        ts,
+                    )
                     if close is None:
                         continue
 
@@ -606,7 +657,7 @@ def _create_account_timeline(
     return timeline
 
 
-def get_account_asset_curve(db: Session, account_id: int, timeframe: str = "1h") -> List[Dict]:
+def get_account_asset_curve(db: Session, account_id: int, timeframe: str = "1h", points: int = 20) -> List[Dict]:
     """
     Get asset curve data for a specific account.
     
@@ -628,6 +679,8 @@ def get_account_asset_curve(db: Session, account_id: int, timeframe: str = "1h")
         if not account:
             return []
         
+        points = max(1, int(points))
+
         # For 1h timeframe, use checkpoints as the source of truth.
         if timeframe == "1h":
             interval_seconds = 3600
@@ -638,7 +691,7 @@ def get_account_asset_curve(db: Session, account_id: int, timeframe: str = "1h")
                     AgentPeriodCheckpoint.interval_seconds == interval_seconds,
                 )
                 .order_by(AgentPeriodCheckpoint.period_end.desc())
-                .limit(20)
+                .limit(points)
                 .all()
             )
             if not rows:
@@ -697,11 +750,11 @@ def get_account_asset_curve(db: Session, account_id: int, timeframe: str = "1h")
                 "positions_value": 0.0,
             }]
         
-        # Get latest 20 close prices for account's symbols
+        # Get latest N close prices for account's symbols
         symbol_klines = {}
         for symbol, market in unique_symbols:
             try:
-                klines = get_kline_data(symbol, market, timeframe, 20)
+                klines = get_kline_data(symbol, market, timeframe, points)
                 if klines:
                     symbol_klines[(symbol, market)] = klines
             except Exception as e:

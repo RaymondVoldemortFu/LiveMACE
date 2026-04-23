@@ -201,6 +201,17 @@ class ReActAgent(BaseAgent):
 
             # Convert to dict preserving provider-specific extra fields (e.g. Gemini thought_signature)
             resp_dict = self.llm.build_assistant_message_dict(resp)
+            tool_calls, tool_guard_warnings = LLMClient.apply_tool_call_guardrails(
+                getattr(resp, "tool_calls", None),
+                model=getattr(self.llm, "model", None),
+            )
+            if tool_calls:
+                resp_dict["tool_calls"] = tool_calls
+            else:
+                resp_dict.pop("tool_calls", None)
+            if tool_guard_warnings:
+                logger.warning("Tool-call guardrails triggered: %s", " | ".join(tool_guard_warnings))
+                agent_logger.warning("Tool-call guardrails triggered: %s", " | ".join(tool_guard_warnings))
 
             # Requirement 1: Log raw LLM response
             llm_logger.info(f"--- Step {step+1}/{self.max_steps} Response ---")
@@ -211,7 +222,6 @@ class ReActAgent(BaseAgent):
             if on_step:
                 on_step(resp_dict)
 
-            tool_calls = resp.tool_calls
             content = resp.content
 
             # Requirement 2: Log LLM output content and tool calls
@@ -227,8 +237,7 @@ class ReActAgent(BaseAgent):
                 logger.info(f"LLM requested {len(tool_calls)} tool calls")
                 tool_messages = []
                 for tc in tool_calls:
-                    name = tc.function.name
-                    args_str = tc.function.arguments or "{}"
+                    tc_id, name, args_str = LLMClient.tool_call_parts(tc)
                     parse_error = None
                     try:
                         args = json.loads(args_str)
@@ -325,7 +334,7 @@ class ReActAgent(BaseAgent):
                     tool_messages.append(
                         {
                             "role": "tool",
-                            "tool_call_id": tc.id,
+                            "tool_call_id": tc_id,
                             "name": name,
                             "content": json.dumps(model_result, ensure_ascii=False),
                             "_trace_content": json.dumps(result, ensure_ascii=False),
@@ -345,6 +354,11 @@ class ReActAgent(BaseAgent):
                         trace_tool_msg = dict(model_msg)
                         trace_tool_msg["content"] = tool_msg["_trace_content"]
                         on_step(trace_tool_msg)
+                if tool_guard_warnings:
+                    warn_msg = LLMClient.tool_guardrail_warning_user_message(tool_guard_warnings)
+                    messages.append(warn_msg)
+                    if on_step:
+                        on_step(dict(warn_msg))
                 if self.llm.is_gemini_model():
                     messages.append(LLMClient.gemini_post_tool_user_message())
                 continue
@@ -352,16 +366,31 @@ class ReActAgent(BaseAgent):
             # 2) 没有工具调用，按协议处理最终输出
             text_content = content or ""
             if self._is_trade_done_message(text_content):
-                decision = {
-                    "operation": "hold",
-                    "symbol": "",
-                    "direction": "long",
-                    "target_portion_of_balance": 0.0,
-                    "leverage": 1,
-                    "reason": f"Tool-mode terminated by token {termination_token}",
-                    "protocol": "tool",
-                    "executed_trades": executed_trades,
-                }
+                # Only write fallback decision if no execute_trade was called
+                if not executed_trades:
+                    decision = {
+                        "operation": "hold",
+                        "symbol": "",
+                        "direction": "long",
+                        "target_portion_of_balance": 0.0,
+                        "leverage": 1,
+                        "reason": f"Tool-mode terminated by token {termination_token}",
+                        "protocol": "tool",
+                        "executed_trades": executed_trades,
+                    }
+                else:
+                    # execute_trade was called, don't write duplicate decision
+                    decision = {
+                        "operation": "hold",  # placeholder, won't be logged
+                        "symbol": "",
+                        "direction": "long",
+                        "target_portion_of_balance": 0.0,
+                        "leverage": 1,
+                        "reason": "",
+                        "protocol": "tool",
+                        "executed_trades": executed_trades,
+                        "skip_logging": True,  # signal to skip AIDecisionLog
+                    }
                 logger.info(
                     f"Agent terminated tool-mode loop with token. executed_trade_calls={len(executed_trades)}"
                 )

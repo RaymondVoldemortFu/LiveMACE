@@ -11,7 +11,7 @@ for arg in "$@"; do
     --fresh) FRESH=1 ;;
     -h|--help)
       echo "Usage: $0 [--fresh]"
-      echo "  --fresh  Remove MySQL volume (wipe DB), rebuild stack, run create_accounts_from_env.py --mode all-combinations"
+      echo "  --fresh  Remove MySQL volume (wipe DB), rebuild stack, run create_accounts_from_env.py (default all-combinations mode)"
       echo "           (requires ACCOUNT_COMBO_CSV_PATH in backend/.env, e.g. ./config/account_combinations.example.csv)"
       exit 0
       ;;
@@ -60,8 +60,8 @@ if [[ "${FRESH}" -eq 1 ]]; then
     echo "[ERROR] Backend did not become healthy on :5611. Check: docker compose logs backend"
     exit 1
   fi
-  echo "[INFO] Running account batch script: --mode all-combinations (API_KEY/BASE_URL + ACCOUNT_COMBO_CSV_PATH from backend/.env)..."
-  docker compose exec -T backend uv run python script/create_accounts_from_env.py --mode all-combinations
+  echo "[INFO] Running account batch script (default all-combinations mode; API_KEY/BASE_URL + ACCOUNT_COMBO_CSV_PATH from backend/.env)..."
+  docker compose exec -T backend uv run python script/create_accounts_from_env.py
 fi
 
 echo "[INFO] Deployment done."

@@ -28,6 +28,7 @@ dependencies = [
     "tiktoken>=0.12.0",
     "brightdata-sdk>=2.3.0",
     "redis",
+    "matplotlib>=3.10.8",
 ]
 
 [[tool.uv.index]]

@@ -85,6 +85,22 @@ def on_startup():
                 "MySQL: could not ALTER ai_decision_logs.reason to TEXT (may already be TEXT): %s",
                 exc,
             )
+        try:
+            with engine.begin() as conn:
+                conn.execute(
+                    text(
+                        "ALTER TABLE agent_traces "
+                        "MODIFY COLUMN content LONGTEXT NULL, "
+                        "MODIFY COLUMN tool_calls LONGTEXT NULL, "
+                        "MODIFY COLUMN tool_output LONGTEXT NULL"
+                    )
+                )
+            _startup_log.info("MySQL: agent_traces content/tool_calls/tool_output widened to LONGTEXT")
+        except Exception as exc:
+            _startup_log.warning(
+                "MySQL: could not ALTER agent_traces columns to LONGTEXT (may already be LONGTEXT): %s",
+                exc,
+            )
     # Seed trading configs if empty
     db: Session = SessionLocal()
     try:
@@ -102,29 +118,6 @@ def on_startup():
                     )
                 )
             db.commit()
-        # Ensure only default user and its account exist
-        # Delete all non-default users and their accounts
-        from database.models import Position, Order, Trade
-        
-        non_default_users = db.query(User).filter(User.username != "default").all()
-        for user in non_default_users:
-            # Get user's account IDs
-            account_ids = [acc.id for acc in db.query(Account).filter(Account.user_id == user.id).all()]
-            
-            if account_ids:
-                # Delete trades, orders, positions associated with these accounts
-                db.query(Trade).filter(Trade.account_id.in_(account_ids)).delete(synchronize_session=False)
-                db.query(Order).filter(Order.account_id.in_(account_ids)).delete(synchronize_session=False)
-                db.query(Position).filter(Position.account_id.in_(account_ids)).delete(synchronize_session=False)
-                
-                # Now delete the accounts
-                db.query(Account).filter(Account.user_id == user.id).delete(synchronize_session=False)
-            
-            # Delete the user
-            db.delete(user)
-        
-        db.commit()
-        
         # Ensure default user exists
         default_user = db.query(User).filter(User.username == "default").first()
         if not default_user:

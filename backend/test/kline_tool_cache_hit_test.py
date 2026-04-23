@@ -2,6 +2,7 @@ import sys
 from pathlib import Path
 
 import fakeredis
+import pytest
 
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
@@ -240,5 +241,43 @@ def test_round_stats_record_hit_rate_fields():
         tool_cache.clear_round(round_id)
         assert fake_client.exists(stats_key) == 0
     finally:
+        tool_cache._client = original_client
+
+
+def test_acquire_lock_does_not_mask_inner_exception():
+    _, original_client = _use_fake_redis()
+    round_id = tool_cache.create_round_id(scope="pytest")
+
+    try:
+        with tool_cache.use_round(round_id):
+            with pytest.raises(RuntimeError, match="inner-failure"):
+                with tool_cache.acquire_lock("get_kline_data", {"symbol": "BTC"}):
+                    raise RuntimeError("inner-failure")
+    finally:
+        tool_cache.clear_round(round_id)
+        tool_cache._client = original_client
+
+
+def test_get_kline_data_returns_provider_data_when_db_save_fails(monkeypatch):
+    _, original_client = _use_fake_redis()
+
+    def _fake_fetch(symbol, period, count, start_time, end_time):
+        return [{"timestamp": 1, "close": 123.45}]
+
+    def _failing_save(*args, **kwargs):
+        raise RuntimeError("db write failed")
+
+    monkeypatch.setattr(market_data, "get_kline_data_from_hyperliquid", _fake_fetch)
+    monkeypatch.setattr(market_data, "_save_klines", _failing_save)
+
+    round_id = tool_cache.create_round_id(scope="pytest")
+    try:
+        with tool_cache.use_round(round_id):
+            result = market_data.get_kline_data(
+                "BTC", "CRYPTO", period="1m", count=20, start_time=1, end_time=2
+            )
+        assert result == [{"timestamp": 1, "close": 123.45}]
+    finally:
+        tool_cache.clear_round(round_id)
         tool_cache._client = original_client
 

@@ -14,10 +14,39 @@ from services.scheduler import add_account_snapshot_job, remove_account_snapshot
 from database.models import Trade, AIDecisionLog
 from datetime import datetime
 import logging
-from services.asset_curve_calculator import get_all_asset_curves_data_new
+from services.asset_curve_cache_service import (
+    get_asset_curve_cache,
+    get_curve_point_limit,
+    refresh_asset_curve_cache,
+)
 
 
 logger = logging.getLogger(__name__)
+
+
+def _compute_position_equity(position, price: float | None) -> float | None:
+    """Compute per-position equity using the same semantics as asset calculator."""
+    if price is None:
+        return None
+    try:
+        quantity = float(position.quantity)
+        avg_cost = float(position.avg_cost)
+        leverage = int(position.leverage or 1)
+        side = str(getattr(position, "side", "") or "").upper()
+
+        if leverage > 1:
+            entry_margin = (quantity * avg_cost) / float(leverage)
+            if side == "SHORT":
+                unrealized_pnl = quantity * (avg_cost - float(price))
+            else:
+                unrealized_pnl = quantity * (float(price) - avg_cost)
+            return entry_margin + unrealized_pnl
+
+        is_short_spot = side in {"SHORT", "SELL"}
+        signed_quantity = -quantity if is_short_spot else quantity
+        return signed_quantity * float(price)
+    except Exception:
+        return None
 
 
 class ConnectionManager:
@@ -90,14 +119,14 @@ async def broadcast_asset_curve_update(timeframe: str = "1h"):
 
 
 def get_all_asset_curves_data(db: Session, timeframe: str = "1h"):
-    """Get timeframe-based asset curve data for all accounts - WebSocket version
-    
-    Uses the new algorithm that draws curves by accounts and creates all-time lists.
-    
-    Args:
-        timeframe: Time period for the curve, options: "5m", "1h", "1d"
-    """
-    return get_all_asset_curves_data_new(db, timeframe)
+    """Get timeframe-based asset curve data for all accounts from persisted cache."""
+    point_limit = get_curve_point_limit(timeframe)
+    cached = get_asset_curve_cache(db, timeframe, limit_timestamps=point_limit)
+    if cached:
+        return cached
+
+    refresh_asset_curve_cache(db, timeframe)
+    return get_asset_curve_cache(db, timeframe, limit_timestamps=point_limit)
 
 
 manager = ConnectionManager()
@@ -176,7 +205,7 @@ async def _send_snapshot_optimized(db: Session, account_id: int):
             "avg_cost": float(p.avg_cost),
             "leverage": p.leverage,
             "last_price": float(price) if price is not None else None,
-            "market_value": (float(price) * float(p.quantity)) if price is not None else None,
+            "market_value": _compute_position_equity(p, float(price) if price is not None else None),
             "notional_value": (float(price) * float(p.quantity) * p.leverage) if price is not None else None,
         })
 
@@ -320,7 +349,7 @@ async def _send_snapshot(db: Session, account_id: int):
             "avg_cost": float(p.avg_cost),
             "leverage": p.leverage,
             "last_price": float(price) if price is not None else None,
-            "market_value": (float(price) * float(p.quantity)) if price is not None else None,
+            "market_value": _compute_position_equity(p, float(price) if price is not None else None),
             "notional_value": (float(price) * float(p.quantity) * p.leverage) if price is not None else None,
         })
 

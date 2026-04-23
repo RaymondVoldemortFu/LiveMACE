@@ -5,14 +5,14 @@ Every run also ensures baseline accounts (buy_hold, grid) exist for the target u
 with duplicate check by agent_type only — not part of model batch creation.
 
 Examples:
-1) Create preset model accounts:
+1) Create model accounts for all account config combinations from .env (default):
    python script/create_accounts_from_env.py
 
 2) Update existing same-name accounts instead of skipping:
    python script/create_accounts_from_env.py --update-existing
 
-3) Create all model accounts for account config combinations from .env:
-   python script/create_accounts_from_env.py --mode all-combinations
+3) Create one account per model using single-mode defaults from .env:
+   python script/create_accounts_from_env.py --mode single
 
 Optional env vars:
 - API_KEY / BASE_URL (required)
@@ -30,12 +30,13 @@ from pathlib import Path
 from typing import Dict, List, Tuple, Sequence, Type
 
 import dotenv
+from sqlalchemy import or_
 
 MODEL_LIST = [
     # openai
     "gpt-5.4",
     # deepseek
-    "deepseek-v3.2",
+    "deepseek-v3.2#thinking",
     # google
     "gemini-3.1-pro-preview",
     # xai
@@ -43,7 +44,7 @@ MODEL_LIST = [
     # model end with -all is reverse engineered from official connect api, should be avoid
     "grok-4.20-beta-0309-reasoning",   
     # qwen
-    "qwen3-max",
+    "qwen3-max-2026-01-23",
 ]
 
 DEFAULT_AGENT_TYPE = "react"
@@ -51,7 +52,9 @@ DEFAULT_INITIAL_CAPITAL = Decimal("10000")
 DEFAULT_PLACEHOLDER_ACCOUNT_NAME = "GPT"
 # Non-LLM baselines: always ensured in main(), separate from MODEL_LIST batch logic.
 BASELINE_AGENT_TYPES: Tuple[str, ...] = ("buy_hold", "grid")
-DEFAULT_CREATE_MODE = "single"
+SINGLE_CREATE_MODE = "single"
+ALL_COMBINATIONS_MODE = "all-combinations"
+DEFAULT_CREATE_MODE = ALL_COMBINATIONS_MODE
 ACCOUNT_FIELD_KEYS = [
     "account_type",
     "agent_type",
@@ -89,12 +92,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--mode",
-        choices=[DEFAULT_CREATE_MODE, "all-combinations"],
+        choices=[SINGLE_CREATE_MODE, ALL_COMBINATIONS_MODE],
         default=DEFAULT_CREATE_MODE,
         help=(
             "Account creation mode: "
-            "'single' creates one account per model using API_KEY/BASE_URL; "
-            "'all-combinations' creates one account per model for each row in ACCOUNT_COMBO_CSV_PATH."
+            "'all-combinations' (default) creates one account per model for each row in ACCOUNT_COMBO_CSV_PATH; "
+            "'single' creates one account per model using ACCOUNT_DEFAULT_*."
         ),
     )
     return parser.parse_args()
@@ -244,7 +247,7 @@ def _build_all_combinations_configs() -> List[Tuple[str, Dict[str, str]]]:
 
 
 def build_account_configs(mode: str) -> List[Tuple[str, Dict[str, str]]]:
-    if mode == DEFAULT_CREATE_MODE:
+    if mode == SINGLE_CREATE_MODE:
         return [("default", _build_single_mode_config())]
     return _build_all_combinations_configs()
 
@@ -300,29 +303,57 @@ def ensure_schema_ready(db_base, db_engine) -> None:
     db_base.metadata.create_all(bind=db_engine)
 
 
-def ensure_baseline_accounts(db, user_id: int, AccountModel) -> Tuple[int, int]:
+def ensure_baseline_accounts(
+    db,
+    user_id: int,
+    AccountModel,
+    update_existing: bool = False,
+) -> Tuple[int, int, int]:
     """
-    Create buy_hold / grid baseline accounts (AI type, no model/api_key).
-    Idempotent: skips when the same user already has that agent_type.
+    Create/update baseline accounts (buy_hold, grid) exactly once per spec.
+    Idempotent: avoids duplicates by checking (name OR agent_type).
     """
     created = 0
+    updated = 0
     skipped = 0
-    for agent_type in BASELINE_AGENT_TYPES:
+    for baseline_spec in BASELINE_ACCOUNT_SPECS:
+        baseline_name = baseline_spec["name"]
+        baseline_agent_type = baseline_spec["agent_type"]
         existing = (
             db.query(AccountModel)
-            .filter(AccountModel.user_id == user_id, AccountModel.agent_type == agent_type)
+            .filter(
+                AccountModel.user_id == user_id,
+                or_(
+                    AccountModel.name == baseline_name,
+                    AccountModel.agent_type == baseline_agent_type,
+                ),
+            )
             .first()
         )
         if existing:
+            if update_existing:
+                existing.model = None
+                existing.base_url = None
+                existing.api_key = None
+                existing.account_type = "AI"
+                existing.name = baseline_name
+                existing.agent_type = baseline_agent_type
+                existing.memory_enabled = "false"
+                existing.tool_routing_enabled = "false"
+                existing.enable_rule_aware = "false"
+                existing.is_active = "true"
+                updated += 1
+                print(f"[BASELINE UPDATED] {baseline_name} (id={existing.id})")
+                continue
             skipped += 1
-            print(f"[BASELINE SKIP] {agent_type} already exists (id={existing.id})")
+            print(f"[BASELINE SKIP] {baseline_name} already exists (id={existing.id})")
             continue
         account = AccountModel(
             user_id=user_id,
             version="v1",
-            name=agent_type,
+            name=baseline_name,
             account_type="AI",
-            agent_type=agent_type,
+            agent_type=baseline_agent_type,
             memory_enabled="false",
             tool_routing_enabled="false",
             enable_rule_aware="false",
@@ -336,8 +367,8 @@ def ensure_baseline_accounts(db, user_id: int, AccountModel) -> Tuple[int, int]:
         )
         db.add(account)
         created += 1
-        print(f"[BASELINE CREATED] {agent_type}")
-    return created, skipped
+        print(f"[BASELINE CREATED] {baseline_name}")
+    return created, updated, skipped
 
 
 def main() -> int:
@@ -364,6 +395,7 @@ def main() -> int:
         AgentMemory,
         AccountSnapshot,
         RuleEvaluationResult,
+        AssetCurveSnapshot,
     )
 
     api_key = (os.getenv("API_KEY") or "").strip()
@@ -386,6 +418,7 @@ def main() -> int:
     updated = 0
     skipped = 0
     baseline_created = 0
+    baseline_updated = 0
     baseline_skipped = 0
 
     db = SessionLocal()
@@ -405,6 +438,7 @@ def main() -> int:
                 AgentMemory,
                 AccountSnapshot,
                 RuleEvaluationResult,
+                AssetCurveSnapshot,
             ],
         )
         if deleted_count > 0:
@@ -413,7 +447,12 @@ def main() -> int:
         else:
             print(f"[CLEANUP] {cleanup_message}")
 
-        baseline_created, baseline_skipped = ensure_baseline_accounts(db, user.id, Account)
+        baseline_created, baseline_updated, baseline_skipped = ensure_baseline_accounts(
+            db,
+            user.id,
+            Account,
+            update_existing=args.update_existing,
+        )
 
         for config_name, account_config in account_configs:
             for model in MODEL_LIST:
@@ -467,61 +506,13 @@ def main() -> int:
                 created += 1
                 print(f"[CREATED] {name} (model={model}, combo={config_name})")
 
-        # Create/update fixed baseline accounts once per user.
-        for baseline_spec in BASELINE_ACCOUNT_SPECS:
-            baseline_name = baseline_spec["name"]
-            baseline_agent_type = baseline_spec["agent_type"]
-            existing = (
-                db.query(Account)
-                .filter(Account.user_id == user.id, Account.name == baseline_name)
-                .first()
-            )
-            if existing:
-                if args.update_existing:
-                    existing.model = None
-                    existing.base_url = None
-                    existing.api_key = None
-                    existing.account_type = "AI"
-                    existing.agent_type = baseline_agent_type
-                    existing.memory_enabled = "false"
-                    existing.tool_routing_enabled = "false"
-                    existing.enable_rule_aware = "false"
-                    existing.is_active = "true"
-                    updated += 1
-                    print(f"[UPDATED] {baseline_name} (baseline)")
-                else:
-                    skipped += 1
-                    print(f"[SKIPPED] {baseline_name} already exists")
-                continue
-
-            baseline_account = Account(
-                user_id=user.id,
-                version="v1",
-                name=baseline_name,
-                account_type="AI",
-                agent_type=baseline_agent_type,
-                memory_enabled="false",
-                tool_routing_enabled="false",
-                enable_rule_aware="false",
-                is_active="true",
-                model=None,
-                base_url=None,
-                api_key=None,
-                initial_capital=DEFAULT_INITIAL_CAPITAL,
-                current_cash=DEFAULT_INITIAL_CAPITAL,
-                frozen_cash=Decimal("0"),
-            )
-            db.add(baseline_account)
-            created += 1
-            print(f"[CREATED] {baseline_name} (baseline)")
-
         db.commit()
     finally:
         db.close()
 
     total = len(MODEL_LIST) * len(account_configs) + len(BASELINE_ACCOUNT_SPECS)
     print(
-        f"Done. baseline_created={baseline_created}, baseline_skipped={baseline_skipped}, "
+        f"Done. baseline_created={baseline_created}, baseline_updated={baseline_updated}, baseline_skipped={baseline_skipped}, "
         f"created={created}, updated={updated}, skipped={skipped}, total={total}, mode={args.mode}"
     )
     return 0

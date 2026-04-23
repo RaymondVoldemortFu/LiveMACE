@@ -39,6 +39,7 @@ from services.tool_cache import tool_cache
 logger = logging.getLogger(__name__)
 trade_logger = logging.getLogger("trade_execution")
 _ai_trade_run_lock = threading.Lock()
+_baseline_trade_run_lock = threading.Lock()
 
 
 _buy_hold_baseline = BuyHoldBaseline()
@@ -642,32 +643,6 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
         except Exception:
             pass
 
-        # 1) Run baselines (sequential). Re-load each account so ORM state is fresh after agent commits.
-        now = datetime.now(timezone.utc)
-        for account in accounts:
-            if not is_baseline_trading_account(account):
-                continue
-            fresh = get_account(db, account.id)
-            if not fresh:
-                continue
-            agent_type = str(getattr(fresh, "agent_type", "react") or "react").strip().lower()
-            if agent_type != "buy_hold" and agent_type != "grid":
-                nm = (getattr(fresh, "name", "") or "").strip().lower()
-                if nm == "buy_hold":
-                    agent_type = "buy_hold"
-                elif nm == "grid":
-                    agent_type = "grid"
-            if agent_type == "buy_hold":
-                try:
-                    _buy_hold_baseline.run_tick(db, fresh, prices, now=now)
-                except Exception as e:
-                    logger.error(f"BuyHold baseline failed for account={fresh.id} ({fresh.name}): {e}", exc_info=True)
-            elif agent_type == "grid":
-                try:
-                    _grid_baseline.run_tick(db, fresh, prices)
-                except Exception as e:
-                    logger.error(f"Grid baseline failed for account={fresh.id} ({fresh.name}): {e}", exc_info=True)
-
     except Exception as err:
         logger.error(f"AI-driven order placement failed: {err}", exc_info=True)
         if db is not None:
@@ -680,8 +655,8 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
 
 def place_baseline_driven_order() -> None:
     """Run baseline strategies (buy_hold/grid) independently from AI decision schedule."""
-    if not _ai_trade_run_lock.acquire(blocking=False):
-        logger.warning("Trading loop is already running; skip baseline trigger to avoid overlap")
+    if not _baseline_trade_run_lock.acquire(blocking=False):
+        logger.warning("Baseline trading loop is already running; skip this trigger to avoid overlap")
         return
 
     db = None
@@ -719,7 +694,7 @@ def place_baseline_driven_order() -> None:
     finally:
         if db is not None:
             db.close()
-        _ai_trade_run_lock.release()
+        _baseline_trade_run_lock.release()
 
 
 def place_random_crypto_order(max_ratio: float = 0.2) -> None:

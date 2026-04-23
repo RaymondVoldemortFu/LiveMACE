@@ -1,6 +1,5 @@
 import json
 import os
-import sys
 import threading
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -25,13 +24,47 @@ def _load_prompt(path: str) -> str:
         return f.read().strip()
 
 
+def _filter_eval_accounts_with_model(eval_accounts: List[Any]) -> List[Any]:
+    """
+    Tool-use evaluation requires account.model because tool registry initialization
+    constructs SearchSubAgent with that model.
+    """
+    valid_accounts = []
+    skipped_no_model = []
+    skipped_not_tool_suffix = []
+    for account in eval_accounts:
+        account_name = (getattr(account, "name", None) or "").strip()
+        model = (getattr(account, "model", None) or "").strip()
+        if not model:
+            skipped_no_model.append(f"{account.id}:{account.name}")
+            continue
+        if not account_name.endswith("-tool"):
+            skipped_not_tool_suffix.append(f"{account.id}:{account.name}")
+            continue
+        valid_accounts.append(account)
+
+    if skipped_no_model:
+        print(
+            "Skipped accounts without model for tool-use eval: "
+            + ", ".join(skipped_no_model)
+        )
+    if skipped_not_tool_suffix:
+        print(
+            "Skipped accounts not ending with '-tool': "
+            + ", ".join(skipped_not_tool_suffix)
+        )
+    return valid_accounts
+
+
 def _build_registry(db, account_id: int) -> ToolRegistry:
     registry = ToolRegistry()
     register_default_tools(registry, db, account_id)
-    try:
-        register_public_api_tools(registry)
-    except Exception:
-        pass
+    register_public_api_tools(registry)
+    # Disabled fallback swallow for deterministic failure/debugging.
+    # try:
+    #     register_public_api_tools(registry)
+    # except Exception:
+    #     pass
     registry.register(HistoryTool(db, account_id))
     return registry
 
@@ -88,13 +121,14 @@ class DynamicToolSchemaResolver:
             return self.cache[tool_name]
 
         schema = self._try_get_schema(tool_name)
-        if schema is None:
-            # Dynamic load fallback: rebuild registry once and retry.
-            try:
-                self.registry = _build_registry(self.db, self.account_id)
-            except Exception:
-                pass
-            schema = self._try_get_schema(tool_name)
+        # Disabled dynamic rebuild fallback for performance/debug determinism.
+        # if schema is None:
+        #     # Dynamic load fallback: rebuild registry once and retry.
+        #     try:
+        #         self.registry = _build_registry(self.db, self.account_id)
+        #     except Exception:
+        #         pass
+        #     schema = self._try_get_schema(tool_name)
 
         self.cache[tool_name] = schema
         return schema
@@ -184,7 +218,7 @@ def _resolve_trace_dynamic_schemas(
 
 def _resolve_max_workers(total_tasks: int) -> int:
     raw = os.getenv("EVAL_MAX_WORKERS", "").strip()
-    default_workers = min(8, (os.cpu_count() or 4))
+    default_workers = 5
     if raw:
         try:
             configured = int(raw)
@@ -195,6 +229,65 @@ def _resolve_max_workers(total_tasks: int) -> int:
     # For high-cost tasks, keep upper bound to avoid API overload/spikes.
     capped = min(default_workers, 16)
     return max(1, min(capped, max(total_tasks, 1)))
+
+
+def _interleave_jobs_by_account(account_jobs: Dict[int, List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+    """
+    Round-robin job ordering across accounts, to avoid a single account
+    occupying the queue head and making execution look sequential by account.
+    """
+    ordered: List[Dict[str, Any]] = []
+    queues = {k: list(v) for k, v in account_jobs.items() if v}
+    while queues:
+        empty_keys: List[int] = []
+        for account_id in list(queues.keys()):
+            q = queues[account_id]
+            if not q:
+                empty_keys.append(account_id)
+                continue
+            ordered.append(q.pop(0))
+            if not q:
+                empty_keys.append(account_id)
+        for k in empty_keys:
+            queues.pop(k, None)
+    return ordered
+
+
+def _format_account_for_print(account: Any) -> str:
+    return (
+        f"- id={account.id}, name={account.name}, "
+        f"agent_type={account.agent_type}, model={account.model}"
+    )
+
+
+def _print_startup_config(
+    eval_time: str,
+    output_path: str,
+    judge_model: str,
+    judge_base_url: str,
+    judge_api_key: str,
+    eval_accounts: List[Any],
+) -> None:
+    configured_workers = (os.getenv("EVAL_MAX_WORKERS", "").strip() or "auto")
+    default_workers = 5
+    upper_bound = min(default_workers if configured_workers == "auto" else int(configured_workers), 16) \
+        if configured_workers.isdigit() and int(configured_workers) > 0 else min(default_workers, 16)
+
+    print("\n=== Tool Use Eval Configuration ===")
+    print(f"generated_at(UTC): {eval_time}")
+    print(f"output_path: {output_path}")
+    print(f"judge_model: {judge_model}")
+    print(f"judge_base_url: {judge_base_url or '(default OpenAI endpoint)'}")
+    print(f"judge_api_key_set: {'yes' if judge_api_key else 'no'}")
+    print(f"EVAL_LLM_TIMEOUT_SEC: {(os.getenv('EVAL_LLM_TIMEOUT_SEC') or '90').strip()}")
+    print(f"EVAL_LLM_TIMEOUT_RETRIES: {(os.getenv('EVAL_LLM_TIMEOUT_RETRIES') or '2').strip()}")
+    print(f"EVAL_MAX_WORKERS: {configured_workers}")
+    print("worker_policy: global workers = min(16, configured_or_default, total_trace_jobs), and at least 1")
+    print(f"worker_upper_bound_before_trace_count: {upper_bound}")
+    print(f"accounts_to_evaluate: {len(eval_accounts)}")
+    for account in eval_accounts:
+        print(_format_account_for_print(account))
+    print("=== End Configuration ===\n")
 
 
 def _get_thread_local_evaluators(
@@ -267,7 +360,7 @@ def run():
     db = next(get_db())
     loader = EvaluationDataLoader(db)
 
-    eval_accounts = loader.get_agent_accounts()
+    eval_accounts = _filter_eval_accounts_with_model(loader.get_agent_accounts())
     eval_time = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     results_dir = os.path.join(os.path.dirname(__file__), "results")
     os.makedirs(results_dir, exist_ok=True)
@@ -280,10 +373,20 @@ def run():
         os.path.dirname(__file__), "sys_prompts_eval", "tool_use_judge.md"
     )
     judge_prompt = _load_prompt(judge_prompt_path)
+    _print_startup_config(
+        eval_time=eval_time,
+        output_path=output_path,
+        judge_model=judge_model,
+        judge_base_url=judge_base_url,
+        judge_api_key=judge_api_key,
+        eval_accounts=eval_accounts,
+    )
 
     results = []
     grouped_scores = defaultdict(lambda: defaultdict(list))
     token_agg = defaultdict(lambda: defaultdict(list))
+    account_jobs: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
+    account_progress: Dict[int, Dict[str, Any]] = {}
 
     for account in eval_accounts:
         traces = loader.get_traces(account.id)
@@ -292,9 +395,15 @@ def run():
         dynamic_schema_resolver = DynamicToolSchemaResolver(db, account.id)
 
         total_traces = len(grouped)
-        processed = 0
-        max_workers = _resolve_max_workers(total_traces)
-        jobs = []
+        account_progress[account.id] = {
+            "name": account.name,
+            "processed": 0,
+            "total": total_traces,
+        }
+        print(
+            f"[{account.name}] traces={total_traces}, "
+            f"agent_type={account.agent_type}, model={account.model}"
+        )
         for trace_id, rows in grouped.items():
             steps = _trace_to_steps(rows)
             account_info = {
@@ -308,111 +417,100 @@ def run():
                 base_tool_schemas=tool_schemas,
                 resolver=dynamic_schema_resolver,
             )
-            jobs.append((trace_id, steps, account_info, trace_dynamic_schemas))
+            account_jobs[account.id].append(
+                {
+                    "trace_id": trace_id,
+                    "steps": steps,
+                    "account_info": account_info,
+                    "base_tool_schemas": tool_schemas,
+                    "trace_dynamic_schemas": trace_dynamic_schemas,
+                    "agent_type": account.agent_type,
+                    "model": account.model,
+                    "account_id": account.id,
+                }
+            )
 
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_map = {
-                executor.submit(
-                    _evaluate_trace_job,
-                    trace_id,
-                    steps,
-                    account_info,
-                    tool_schemas,
-                    trace_dynamic_schemas,
-                    judge_model,
-                    judge_api_key,
-                    judge_base_url,
-                    judge_prompt,
-                ): trace_id
-                for trace_id, steps, account_info, trace_dynamic_schemas in jobs
-            }
+    all_jobs = _interleave_jobs_by_account(account_jobs)
+    global_total = len(all_jobs)
+    global_processed = 0
+    max_workers = _resolve_max_workers(global_total)
+    print(f"[tool-eval] global_jobs={global_total}, workers={max_workers}")
 
-            for future in as_completed(future_map):
-                trace_id = future_map[future]
-                try:
-                    item = future.result()
-                except Exception as exc:
-                    # Keep batch execution stable: record failed trace and continue.
-                    item = {
-                        "trace_id": trace_id,
-                        "account": {
-                            "account_id": account.id,
-                            "account_name": account.name,
-                            "agent_type": account.agent_type,
-                            "model": account.model,
-                        },
-                        "objective_metrics": {
-                            "summary": {
-                                "total_tool_calls": 0,
-                                "unique_tool_calls": 0,
-                                "total_steps": 0,
-                                "tool_calls_per_step": 0.0,
-                                "hallucinated_calls": 0,
-                                "invalid_param_calls": 0,
-                                "error_or_empty_calls": 0,
-                                "invalid_output_calls": 0,
-                                "no_op_calls": 0,
-                                "dynamic_schema_hits": 0,
-                                "dynamic_schema_misses": 0,
-                                "hallucination_rate": 0.0,
-                                "invalid_or_noop_rate": 0.0,
-                            },
-                            "details": {"notes": [f"worker_exception: {type(exc).__name__}"]},
-                        },
-                        "judge_metrics": {
-                            "judge_raw": "",
-                            "judge_parsed": {
-                                "Tool Relevance Score": 0.0,
-                                "Tool Timing / Budgeting Score": 0.0,
-                                "Information Coverage Score": 0.0,
-                                "Synthesis / Faithfulness Score": 0.0,
-                                "reason": f"worker_exception: {type(exc).__name__}",
-                                "raw_response": "",
-                            },
-                            "token_usage": {
-                                "model": judge_model,
-                                "prompt_tokens": 0,
-                                "completion_tokens": 0,
-                                "total_tokens": 0,
-                                "method": "fallback_zero_due_to_exception",
-                            },
-                        },
-                    }
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_map = {
+            executor.submit(
+                _evaluate_trace_job,
+                job["trace_id"],
+                job["steps"],
+                job["account_info"],
+                job["base_tool_schemas"],
+                job["trace_dynamic_schemas"],
+                judge_model,
+                judge_api_key,
+                judge_base_url,
+                judge_prompt,
+            ): job
+            for job in all_jobs
+        }
 
-                objective_metrics = item.get("objective_metrics", {})
-                judge_metrics = item.get("judge_metrics", {})
-                account_info = item.get("account", {})
+        for future in as_completed(future_map):
+            job = future_map[future]
+            trace_id = job["trace_id"]
+            try:
+                item = future.result()
+            except Exception as e:
+                print(
+                    "[tool-eval][worker-error] "
+                    f"trace_id={trace_id} account={job['account_info'].get('account_name')} "
+                    f"model={job.get('model')} error_type={type(e).__name__} error={e}"
+                )
+                raise
 
-                key = (account.agent_type, account.model)
-                grouped_scores[key]["Tool Relevance Score"].append(
-                    judge_metrics.get("judge_parsed", {}).get("Tool Relevance Score", 0)
-                )
-                grouped_scores[key]["Tool Timing / Budgeting Score"].append(
-                    judge_metrics.get("judge_parsed", {}).get("Tool Timing / Budgeting Score", 0)
-                )
-                grouped_scores[key]["Information Coverage Score"].append(
-                    judge_metrics.get("judge_parsed", {}).get("Information Coverage Score", 0)
-                )
-                grouped_scores[key]["Synthesis / Faithfulness Score"].append(
-                    judge_metrics.get("judge_parsed", {}).get("Synthesis / Faithfulness Score", 0)
-                )
-                grouped_scores[key]["Tool Hallucination Rate"].append(
-                    objective_metrics.get("summary", {}).get("hallucination_rate", 0)
-                )
-                grouped_scores[key]["Invalid / No-op Call Rate"].append(
-                    objective_metrics.get("summary", {}).get("invalid_or_noop_rate", 0)
-                )
-                grouped_scores[key]["Tool Cost / Budget Usage"].append(
-                    objective_metrics.get("summary", {}).get("tool_calls_per_step", 0)
-                )
-                token_usage = judge_metrics.get("token_usage", {})
-                token_agg[key]["prompt_tokens"].append(token_usage.get("prompt_tokens", 0))
-                token_agg[key]["completion_tokens"].append(token_usage.get("completion_tokens", 0))
-                token_agg[key]["total_tokens"].append(token_usage.get("total_tokens", 0))
+            objective_metrics = item.get("objective_metrics", {})
+            judge_metrics = item.get("judge_metrics", {})
 
-                results.append(item)
-                processed += 1
-                _print_progress(account.name, processed, total_traces)
+            key = (job["agent_type"], job["model"])
+            grouped_scores[key]["Tool Relevance Score"].append(
+                judge_metrics.get("judge_parsed", {}).get("Tool Relevance Score", 0)
+            )
+            grouped_scores[key]["Tool Timing / Budgeting Score"].append(
+                judge_metrics.get("judge_parsed", {}).get("Tool Timing / Budgeting Score", 0)
+            )
+            grouped_scores[key]["Information Coverage Score"].append(
+                judge_metrics.get("judge_parsed", {}).get("Information Coverage Score", 0)
+            )
+            grouped_scores[key]["Synthesis / Faithfulness Score"].append(
+                judge_metrics.get("judge_parsed", {}).get("Synthesis / Faithfulness Score", 0)
+            )
+            grouped_scores[key]["Tool Hallucination Rate"].append(
+                objective_metrics.get("summary", {}).get("hallucination_rate", 0)
+            )
+            grouped_scores[key]["Invalid / No-op Call Rate"].append(
+                objective_metrics.get("summary", {}).get("invalid_or_noop_rate", 0)
+            )
+            grouped_scores[key]["Tool Cost / Budget Usage"].append(
+                objective_metrics.get("summary", {}).get("tool_calls_per_step", 0)
+            )
+            grouped_scores[key]["Routing Quality Score"].append(
+                (judge_metrics.get("routing_quality") or {}).get("score", 0)
+            )
+            token_usage = judge_metrics.get("token_usage", {})
+            token_agg[key]["prompt_tokens"].append(token_usage.get("prompt_tokens", 0))
+            token_agg[key]["completion_tokens"].append(token_usage.get("completion_tokens", 0))
+            token_agg[key]["total_tokens"].append(token_usage.get("total_tokens", 0))
+
+            results.append(item)
+            global_processed += 1
+            acc_prog = account_progress[job["account_id"]]
+            acc_prog["processed"] += 1
+            _print_progress(
+                acc_prog["name"],
+                trace_id,
+                acc_prog["processed"],
+                acc_prog["total"],
+                global_processed,
+                global_total,
+            )
 
     summary = []
     for (agent_type, model), metrics in grouped_scores.items():
@@ -442,16 +540,25 @@ def run():
     print(f"\nWrote evaluation results to {output_path}")
 
 
-def _print_progress(account_name: str, current: int, total: int):
+def _print_progress(
+    account_name: str,
+    trace_id: str,
+    current: int,
+    total: int,
+    global_current: int,
+    global_total: int,
+):
     if total == 0:
         return
-    width = 30
     ratio = min(max(current / total, 0.0), 1.0)
-    filled = int(width * ratio)
-    bar = "#" * filled + "-" * (width - filled)
-    msg = f"[{account_name}] [{bar}] {current}/{total}"
-    sys.stdout.write("\r" + msg)
-    sys.stdout.flush()
+    percent = ratio * 100
+    global_ratio = min(max(global_current / max(global_total, 1), 0.0), 1.0)
+    global_percent = global_ratio * 100
+    print(
+        f"[tool-eval] account={account_name} progress={current}/{total} "
+        f"({percent:.1f}%) global={global_current}/{global_total} "
+        f"({global_percent:.1f}%) trace_id={trace_id}"
+    )
 
 
 if __name__ == "__main__":

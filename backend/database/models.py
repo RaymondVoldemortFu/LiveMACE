@@ -2,6 +2,7 @@ from sqlalchemy import Column, Integer, String, DECIMAL, TIMESTAMP, ForeignKey, 
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 import datetime
+from sqlalchemy.dialects.mysql import LONGTEXT
 
 from .connection import Base
 
@@ -261,10 +262,10 @@ class AgentTrace(Base):
     account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False)
     step_number = Column(Integer, nullable=False)
     role = Column(String(20), nullable=False)  # user, assistant, tool, system
-    # Use TEXT for MySQL compatibility (VARCHAR(50000) exceeds row limits under utf8mb4).
-    content = Column(Text, nullable=True)
-    tool_calls = Column(Text, nullable=True)
-    tool_output = Column(Text, nullable=True)
+    # Use LONGTEXT for MySQL to avoid overflow with long memory/reasoning traces.
+    content = Column(Text().with_variant(LONGTEXT(), "mysql"), nullable=True)
+    tool_calls = Column(Text().with_variant(LONGTEXT(), "mysql"), nullable=True)
+    tool_output = Column(Text().with_variant(LONGTEXT(), "mysql"), nullable=True)
     created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
 
     account = relationship("Account")
@@ -365,6 +366,41 @@ class AccountSnapshot(Base):
     __table_args__ = (
         # Ensure unique snapshot per account per timestamp
         UniqueConstraint('account_id', 'ts', name='uix_account_snapshot_time'),
+    )
+
+
+class AssetCurveSnapshot(Base):
+    """
+    Persisted asset curve points for frontend charting.
+    Rows are appended/updated by timeframe-specific background jobs.
+    """
+    __tablename__ = "asset_curve_snapshots"
+
+    id = Column(Integer, primary_key=True, index=True)
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False, index=True)
+    timeframe = Column(String(10), nullable=False, index=True)  # "5m" | "1h" | "1d"
+    timestamp = Column(Integer, nullable=False, index=True)  # UTC epoch seconds
+    datetime_str = Column(String(50), nullable=False)
+
+    user_id = Column(Integer, nullable=False, index=True)
+    username = Column(String(100), nullable=False)
+
+    total_assets = Column(DECIMAL(18, 6), nullable=False)
+    initial_capital = Column(DECIMAL(18, 6), nullable=False)
+    profit = Column(DECIMAL(18, 6), nullable=False)
+    profit_percentage = Column(Float, nullable=False)
+    cash = Column(DECIMAL(18, 6), nullable=False)
+    positions_value = Column(DECIMAL(18, 6), nullable=False)
+
+    created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
+    updated_at = Column(
+        TIMESTAMP, server_default=func.current_timestamp(), onupdate=func.current_timestamp()
+    )
+
+    account = relationship("Account")
+
+    __table_args__ = (
+        UniqueConstraint("account_id", "timeframe", "timestamp", name="uix_asset_curve_snapshot_key"),
     )
 
 

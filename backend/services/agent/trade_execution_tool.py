@@ -126,6 +126,18 @@ def execute_trade_tool(
             return {"executed": False, "error": f"Account {account_id} not found"}
 
         if operation == "hold":
+            _save_trade_log(
+                db=db,
+                account=account,
+                operation="hold",
+                symbol=symbol or "",
+                target_portion=0.0,
+                reason=reason,
+                executed=False,
+                order_id=None,
+                leverage=1,
+            )
+            db.commit()
             return {
                 "executed": True,
                 "operation": "hold",

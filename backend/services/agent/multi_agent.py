@@ -110,10 +110,19 @@ class MultiAgent(BaseAgent):
             
             # Log response
             msg_content = resp.content or ""
-            tool_calls = resp.tool_calls
+            tool_calls, tool_guard_warnings = LLMClient.apply_tool_call_guardrails(
+                getattr(resp, "tool_calls", None),
+                model=getattr(self.llm, "model", None),
+            )
+            if tool_guard_warnings:
+                logger.warning("Tool-call guardrails triggered: %s", " | ".join(tool_guard_warnings))
             
             # Add to local messages for continuity
             resp_dict = self.llm.build_assistant_message_dict(resp)
+            if tool_calls:
+                resp_dict["tool_calls"] = tool_calls
+            else:
+                resp_dict.pop("tool_calls", None)
             messages.append(resp_dict)
             
             # Emit step for UI with specific role/color
@@ -134,8 +143,7 @@ class MultiAgent(BaseAgent):
 
             if tool_calls:
                 for tc in tool_calls:
-                    name = tc.function.name
-                    args_str = tc.function.arguments or "{}"
+                    tc_id, name, args_str = LLMClient.tool_call_parts(tc)
                     try:
                         args = json.loads(args_str)
                     except json.JSONDecodeError as e:
@@ -144,7 +152,7 @@ class MultiAgent(BaseAgent):
                         }
                         tool_msg = {
                             "role": "tool",
-                            "tool_call_id": tc.id,
+                            "tool_call_id": tc_id,
                             "name": name,
                             "content": json.dumps(result, ensure_ascii=False)
                         }
@@ -152,7 +160,7 @@ class MultiAgent(BaseAgent):
                         if on_step:
                             on_step({
                                 "role": "tool",
-                                "tool_call_id": tc.id,
+                                "tool_call_id": tc_id,
                                 "name": name,
                                 "content": json.dumps(result, ensure_ascii=False),
                                 "metadata": {"agent": agent_name}
@@ -184,7 +192,7 @@ class MultiAgent(BaseAgent):
                     # Add tool result to messages
                     tool_msg = {
                         "role": "tool",
-                        "tool_call_id": tc.id,
+                        "tool_call_id": tc_id,
                         "name": name,
                         "content": json.dumps(result, ensure_ascii=False)
                     }
@@ -193,11 +201,13 @@ class MultiAgent(BaseAgent):
                     if on_step:
                         on_step({
                             "role": "tool",
-                            "tool_call_id": tc.id,
+                            "tool_call_id": tc_id,
                             "name": name,
                             "content": json.dumps(result, ensure_ascii=False),
                             "metadata": {"agent": agent_name}
                         })
+                if tool_guard_warnings:
+                    messages.append(LLMClient.tool_guardrail_warning_user_message(tool_guard_warnings))
                 if self.llm.is_gemini_model():
                     messages.append(LLMClient.gemini_post_tool_user_message())
             else:

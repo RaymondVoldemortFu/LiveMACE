@@ -3,7 +3,7 @@ import logging
 import os
 import re
 import socket
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .base import BaseAgent
@@ -18,8 +18,13 @@ from .prompts.advanced_multi_agent_prompts import (
     Advanced_MANAGER_PROMPT,
 )
 from .tools import ToolRegistry
+from services.time_source import now_in_tz
 
 logger = logging.getLogger(__name__)
+llm_logger = logging.getLogger("llm_trace")
+
+CRYPTO_SYMBOLS = {"BTC", "ETH", "SOL", "BNB", "XRP", "DOGE"}
+US_SYMBOLS = {"AAPL", "NVDA", "GOOGL", "META", "AMZN", "TSLA", "PG", "JNJ", "UNH", "JPM", "V", "BA", "XOM", "NEE", "AMT", "PLD", "LIN"}
 
 
 class AdvancedMultiAgent(BaseAgent):
@@ -36,6 +41,32 @@ class AdvancedMultiAgent(BaseAgent):
 
         self.context: List[str] = []
         self.evidence_log: List[Dict[str, Any]] = []
+
+    def _agent_label(self) -> str:
+        return self.agent_name or self.__class__.__name__
+
+    def _log_llm_trace(
+        self,
+        *,
+        current_sub_agent: str,
+        phase: str,
+        payload: Dict[str, Any],
+    ) -> None:
+        entry = {
+            "agent_name": self._agent_label(),
+            "current_sub_agent": current_sub_agent,
+            "phase": phase,
+            "payload": payload,
+        }
+        try:
+            llm_logger.info(json.dumps(entry, ensure_ascii=False))
+        except Exception:
+            llm_logger.info(
+                "advanced_multi_agent_llm_trace agent=%s sub_agent=%s phase=%s",
+                self._agent_label(),
+                current_sub_agent,
+                phase,
+            )
 
     def _notify_evaluator(self, trace_id: Optional[str]) -> None:
         if not trace_id:
@@ -149,6 +180,163 @@ class AdvancedMultiAgent(BaseAgent):
             return left.strip(), right.strip()
         return text.strip(), ""
 
+    def _current_time_context(self) -> str:
+        tz_utc_8 = timezone(timedelta(hours=8))
+        current_time_utc_8 = now_in_tz(tz_utc_8).strftime("%Y-%m-%d %H:%M:%S")
+        current_time_utc = now_in_tz(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        return f"Current Time (UTC+8): {current_time_utc_8}\nCurrent Time (UTC): {current_time_utc}"
+
+    def _tradable_universe_context(self) -> str:
+        return (
+            "Tradable Universe (strict):\n"
+            "- Crypto: BTC, ETH, SOL, BNB, XRP, DOGE\n"
+            "- US Stocks: AAPL, NVDA, GOOGL, META, AMZN, TSLA, PG, JNJ, UNH, JPM, V, BA, XOM, NEE, AMT, PLD, LIN"
+        )
+
+    def _infer_market_from_symbol(self, symbol: Any) -> Optional[str]:
+        symbol_text = str(symbol or "").strip().upper()
+        if symbol_text in CRYPTO_SYMBOLS:
+            return "CRYPTO"
+        if symbol_text in US_SYMBOLS:
+            return "US"
+        return None
+
+    def _normalize_execution_plan(self, execution_plan: Any) -> List[Dict[str, Any]]:
+        normalized: List[Dict[str, Any]] = []
+        for item in self._safe_list(execution_plan):
+            if not isinstance(item, dict):
+                continue
+            normalized_item = dict(item)
+            operation = str(normalized_item.get("operation") or "").strip().lower()
+            if operation:
+                normalized_item["operation"] = operation
+
+            size_mode = str(normalized_item.get("size_mode") or "").strip().lower()
+            if size_mode == "close_ratio":
+                normalized_item["size_mode"] = "portion"
+                if normalized_item.get("close_ratio") in (None, ""):
+                    fallback_ratio = normalized_item.get("target_portion_of_balance")
+                    if fallback_ratio not in (None, ""):
+                        normalized_item["close_ratio"] = fallback_ratio
+            elif size_mode:
+                normalized_item["size_mode"] = size_mode
+
+            if operation == "all_in":
+                normalized_item["size_mode"] = "all_in"
+            elif operation == "close_all":
+                normalized_item["size_mode"] = "close_all"
+
+            market = str(normalized_item.get("market") or "").strip().upper()
+            inferred_market = self._infer_market_from_symbol(normalized_item.get("symbol"))
+            if market in {"CRYPTO", "US"}:
+                normalized_item["market"] = market
+            elif inferred_market:
+                normalized_item["market"] = inferred_market
+            normalized.append(normalized_item)
+        return normalized
+
+    def _recommendation_signature(self, candidate: Any) -> str:
+        if not isinstance(candidate, dict):
+            return self._stringify(candidate, max_len=200)
+
+        market = candidate.get("market") or self._infer_market_from_symbol(candidate.get("symbol"))
+        key = {
+            "priority": candidate.get("priority"),
+            "operation": candidate.get("operation"),
+            "symbol": candidate.get("symbol"),
+            "market": market,
+            "direction": candidate.get("direction"),
+            "target_portion_of_balance": candidate.get("target_portion_of_balance"),
+            "usd_amount": candidate.get("usd_amount"),
+            "close_ratio": candidate.get("close_ratio"),
+            "leverage": candidate.get("leverage"),
+        }
+        return json.dumps(key, ensure_ascii=False, sort_keys=True)
+
+    def _collect_recommendations(self, parsed: Dict[str, Any]) -> List[Any]:
+        collected: List[Any] = []
+        primary_recommendations = self._safe_list(parsed.get("recommendations"))
+        legacy_primary = parsed.get("recommendation")
+        legacy_candidates = self._safe_list(parsed.get("trade_candidates") or parsed.get("top_opportunities"))
+
+        if primary_recommendations:
+            collected.extend(primary_recommendations)
+        elif legacy_primary:
+            collected.extend(self._safe_list(legacy_primary))
+
+        collected.extend(legacy_candidates)
+
+        deduped: List[Any] = []
+        seen = set()
+        for candidate in collected:
+            signature = self._recommendation_signature(candidate)
+            if signature in seen:
+                continue
+            seen.add(signature)
+            deduped.append(candidate)
+        return deduped
+
+    def _summarize_recommendations(self, candidates: Any, limit: int = 4) -> List[str]:
+        summaries: List[str] = []
+        for candidate in self._safe_list(candidates)[:limit]:
+            if not isinstance(candidate, dict):
+                continue
+            priority = candidate.get("priority")
+            operation = self._stringify(candidate.get("operation"))
+            symbol = self._stringify(candidate.get("symbol"))
+            market = self._stringify(candidate.get("market") or self._infer_market_from_symbol(candidate.get("symbol")))
+            direction = self._stringify(candidate.get("direction"))
+            leverage = candidate.get("leverage")
+            target_portion = candidate.get("target_portion_of_balance")
+            close_ratio = candidate.get("close_ratio")
+            usd_amount = candidate.get("usd_amount")
+            rationale = self._stringify(candidate.get("rationale") or candidate.get("reason"), max_len=120)
+
+            if not symbol:
+                continue
+
+            parts = []
+            if priority not in (None, ""):
+                parts.append(f"P{priority}")
+            parts.extend([operation or "hold", symbol])
+            if market:
+                parts[-1] = f"{symbol}/{market}"
+            if direction:
+                parts.append(direction)
+            if leverage not in (None, ""):
+                parts.append(f"lev={leverage}")
+            if target_portion not in (None, ""):
+                parts.append(f"portion={target_portion}")
+            if close_ratio not in (None, ""):
+                parts.append(f"close_ratio={close_ratio}")
+            if usd_amount not in (None, ""):
+                parts.append(f"usd={usd_amount}")
+            if rationale:
+                parts.append(rationale)
+            summaries.append(" ".join([p for p in parts if p]))
+        return summaries
+
+    def _prepare_news_search_args(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        prepared = dict(args)
+        query = str(prepared.get("query") or "")
+        query_lower = query.lower()
+        historical_pattern = re.compile(
+            r"\b(history|historical|backtest|archive|previous cycle|last cycle|prior cycle)\b|\b20\d{2}\b"
+        )
+        looks_historical = bool(historical_pattern.search(query_lower))
+
+        topic = str(prepared.get("topic") or "").strip().lower()
+        if not topic or topic == "general":
+            prepared["topic"] = "news"
+
+        time_range = str(prepared.get("time_range") or "").strip().lower()
+        if (not time_range or time_range == "none") and not looks_historical:
+            prepared["time_range"] = "week"
+
+        if "max_results" not in prepared:
+            prepared["max_results"] = 5
+        return prepared
+
     def _build_manager_messages(
         self,
         objective: str,
@@ -171,9 +359,8 @@ class AdvancedMultiAgent(BaseAgent):
             f"Trading objective:\n{objective}\n\n"
             f"Portfolio:\n{json.dumps(portfolio, ensure_ascii=False)}\n\n"
             f"Market Prices:\n{json.dumps(prices, ensure_ascii=False)}\n\n"
-            "Tradable Universe (strict):\n"
-            "- Crypto: BTC, ETH, SOL, BNB, XRP, DOGE\n"
-            "- US Stocks: AAPL, NVDA, GOOGL, META, AMZN, TSLA, PG, JNJ, UNH, JPM, V, BA, XOM, NEE, AMT, PLD, LIN\n\n"
+            f"{self._current_time_context()}\n\n"
+            f"{self._tradable_universe_context()}\n\n"
             f"Evidence Book (use evidence IDs when citing prior findings):\n{self._format_evidence_book()}\n\n"
             f"Current Context:\n{context_str}\n\n"
             f"Known Conflicts/Tensions:\n{self._format_conflicts()}\n\n"
@@ -200,14 +387,27 @@ class AdvancedMultiAgent(BaseAgent):
             system_parts.append(f"Return ONLY JSON:\n{schema_tail}")
         system_prompt = "\n\n".join([p for p in system_parts if p]).strip()
 
-        user_lines = [f"Current task for {agent_name}:", instruction]
-        if agent_name in {"TradingAgent", "AnalystAgent", "CriticAgent"}:
+        user_lines = [f"Current task for {agent_name}:", instruction, "", self._current_time_context()]
+        if agent_name in {"TradingAgent", "NewsAgent"}:
+            user_lines.extend(["", self._tradable_universe_context()])
+        if agent_name in {"TradingAgent", "AnalystAgent", "CriticAgent", "CoderAgent"}:
             user_lines.extend(
                 [
                     "",
                     f"Portfolio:\n{json.dumps(portfolio, ensure_ascii=False)}",
                     "",
                     f"Prices:\n{json.dumps(prices, ensure_ascii=False)}",
+                ]
+            )
+        if agent_name == "CoderAgent":
+            user_lines.extend(
+                [
+                    "",
+                    "Workspace guidance:",
+                    "- Reuse exact file_path values returned by tools when available.",
+                    "- Do not assume a specific workspace file exists unless its path was explicitly provided or confirmed.",
+                    "- If exact file paths are unknown, inspect /workspace first before calling read_file.",
+                    "- When using run_python_script, pass a JSON object with script_content and print() the result.",
                 ]
             )
         user_lines.append("")
@@ -239,6 +439,7 @@ class AdvancedMultiAgent(BaseAgent):
         recommendation_text = ""
         risks: List[str] = []
         sentiment = ""
+        recommendation_summaries: List[str] = []
 
         if parsed:
             summary = self._stringify(
@@ -248,9 +449,17 @@ class AdvancedMultiAgent(BaseAgent):
                 or parsed
             )
 
-            recommendation = parsed.get("recommendation") or parsed.get("recommendation_impact")
-            if recommendation:
-                recommendation_text = self._stringify(recommendation)
+            recommendation_impact = parsed.get("recommendation_impact")
+            if recommendation_impact:
+                recommendation_text = self._stringify(recommendation_impact)
+
+            recommendation_summaries = self._summarize_recommendations(self._collect_recommendations(parsed))
+            if recommendation_summaries:
+                candidate_text = " ; ".join(recommendation_summaries)
+                if recommendation_text:
+                    recommendation_text = f"{recommendation_text} | recommendations={candidate_text}"
+                else:
+                    recommendation_text = candidate_text
 
             risks.extend([self._stringify(r) for r in self._safe_list(parsed.get("risks")) if self._stringify(r)])
             risks.extend([self._stringify(r) for r in self._safe_list(parsed.get("hidden_risks")) if self._stringify(r)])
@@ -260,6 +469,9 @@ class AdvancedMultiAgent(BaseAgent):
             sentiment = self._stringify(parsed.get("sentiment"))
         else:
             summary = self._stringify(raw_text, max_len=600)
+
+        if recommendation_summaries:
+            summary = f"{summary} | ranked_recommendations={' ; '.join(recommendation_summaries)}"
 
         stance = self._derive_stance(f"{summary} {recommendation_text}", sentiment)
 
@@ -277,7 +489,10 @@ class AdvancedMultiAgent(BaseAgent):
     def _build_objective(self, portfolio: Dict[str, Any]) -> str:
         positions = portfolio.get("positions") or {}
         if positions:
-            return "Manage existing exposure and update positioning only when evidence is strong and risk is controlled."
+            return (
+                "Manage existing exposure, but do not tunnel on current holdings. "
+                "Review open positions and continue scanning the rest of the tradable universe for stronger opportunities."
+            )
         return "Seek a high-conviction setup with controlled downside and disciplined position sizing."
 
     def _format_evidence_book(self, limit: int = 10) -> str:
@@ -287,11 +502,11 @@ class AdvancedMultiAgent(BaseAgent):
         items = self.evidence_log[-limit:]
         lines = []
         for ev in items:
-            rec = ev.get("recommendation") or "no explicit recommendation"
+            rec = ev.get("recommendation") or "no explicit actions"
             risks = "; ".join(ev.get("risks") or []) or "no explicit risk flags"
             lines.append(
                 f"- {ev['id']} | {ev['agent']} | stance={ev['stance']} | summary={ev['summary']} | "
-                f"recommendation={rec} | risks={risks}"
+                f"actions={rec} | risks={risks}"
             )
         return "\n".join(lines)
 
@@ -368,12 +583,6 @@ class AdvancedMultiAgent(BaseAgent):
     def _fallback_agent(self) -> Optional[str]:
         if self._agent_call_count("TradingAgent") == 0:
             return "TradingAgent"
-        if self._agent_call_count("NewsAgent") == 0:
-            return "NewsAgent"
-        if self._detect_conflicts() and self._agent_call_count("AnalystAgent") == 0:
-            return "AnalystAgent"
-        if self._agent_call_count("CriticAgent") == 0 and len(self.evidence_log) >= 2:
-            return "CriticAgent"
         return None
 
     def _append_skip_calls(self, skip_calls: Any) -> None:
@@ -388,39 +597,8 @@ class AdvancedMultiAgent(BaseAgent):
     def _validate_finish(
         self, execution_plan: Any, decision: Dict[str, Any], allow_partial: bool = False
     ) -> Tuple[bool, str]:
-        plan_items = self._safe_list(execution_plan)
-        if not plan_items and "execution_plan" not in decision:
-            return False, "Missing execution_plan object."
-
-        missing_core = []
         if self._agent_call_count("TradingAgent") == 0:
-            missing_core.append("TradingAgent")
-        if self._agent_call_count("NewsAgent") == 0:
-            missing_core.append("NewsAgent")
-        if missing_core:
-            return False, f"Finish blocked: missing core evidence from {', '.join(missing_core)}."
-
-        leverage = 1
-        leverages = []
-        for item in plan_items:
-            if isinstance(item, dict):
-                leverages.append(item.get("leverage", 1))
-        if leverages:
-            leverage = max(leverages)
-        try:
-            leverage = int(leverage)
-        except Exception:
-            leverage = 1
-        if leverage > 3 and self._agent_call_count("CriticAgent") == 0 and not allow_partial:
-            return False, "Finish blocked: leveraged action requires critical risk review."
-
-        basis = decision.get("decision_basis") or {}
-        if not basis.get("supporting_evidence_ids"):
-            if allow_partial and self.evidence_log:
-                basis["supporting_evidence_ids"] = [ev["id"] for ev in self.evidence_log[-2:]]
-                decision["decision_basis"] = basis
-            elif not allow_partial:
-                return False, "Finish blocked: decision_basis.supporting_evidence_ids is empty."
+            return False, "Finish blocked: TradingAgent must be called at least once before finishing."
 
         return True, ""
 
@@ -452,9 +630,8 @@ class AdvancedMultiAgent(BaseAgent):
             if not isinstance(step, dict):
                 continue
             op = str(step.get("operation") or "").strip().lower()
-            if not op:
+            if op not in {"open", "close", "hold", "all_in", "close_all"}:
                 continue
-            # Keep hold as an executable step as well for tool-mode trace consistency.
             expected += 1
         return expected
 
@@ -473,31 +650,6 @@ class AdvancedMultiAgent(BaseAgent):
         if "TRADE_DONE" in squashed and len(squashed) <= 32:
             return True
         return False
-
-    def _validate_news_query(self, args: Dict[str, Any]) -> Optional[str]:
-        query = str(args.get("query") or "")
-        if not query.strip():
-            return "News query is empty. Provide a focused, recent-market query."
-
-        years = re.findall(r"\b(20\d{2})\b", query)
-        if not years:
-            return None
-
-        current_year = datetime.now(timezone.utc).year
-        stale_years = []
-        for y in years:
-            try:
-                year_num = int(y)
-            except ValueError:
-                continue
-            if year_num < current_year - 1:
-                stale_years.append(year_num)
-        if stale_years:
-            return (
-                f"Query targets stale year(s): {sorted(set(stale_years))}. "
-                "Focus on current/recent catalysts unless explicitly asked for historical backtest."
-            )
-        return None
 
     def _build_execution_messages(
         self,
@@ -544,11 +696,36 @@ class AdvancedMultiAgent(BaseAgent):
         expected_calls = self._expected_execution_calls(execution_plan)
 
         for _ in range(24):
+            self._log_llm_trace(
+                current_sub_agent="ExecutionAgent",
+                phase="request",
+                payload={
+                    "messages": messages,
+                    "tools": stage_tools if stage_tools else None,
+                },
+            )
             resp = self.llm.call(messages, tools=stage_tools if stage_tools else None)
             msg_content = resp.content or ""
-            tool_calls = resp.tool_calls
+            tool_calls, tool_guard_warnings = LLMClient.apply_tool_call_guardrails(
+                getattr(resp, "tool_calls", None),
+                model=getattr(self.llm, "model", None),
+            )
+            if tool_guard_warnings:
+                logger.warning("Tool-call guardrails triggered: %s", " | ".join(tool_guard_warnings))
 
             resp_dict = self.llm.build_assistant_message_dict(resp)
+            if tool_calls:
+                resp_dict["tool_calls"] = tool_calls
+            else:
+                resp_dict.pop("tool_calls", None)
+            self._log_llm_trace(
+                current_sub_agent="ExecutionAgent",
+                phase="response",
+                payload={
+                    "message": resp_dict,
+                    "tool_guard_warnings": tool_guard_warnings,
+                },
+            )
             messages.append(resp_dict)
 
             if on_step:
@@ -563,9 +740,9 @@ class AdvancedMultiAgent(BaseAgent):
 
             if tool_calls:
                 for tc in tool_calls:
-                    name = tc.function.name
+                    tc_id, name, tc_arguments = LLMClient.tool_call_parts(tc)
                     try:
-                        args = json.loads(tc.function.arguments or "{}")
+                        args = json.loads(tc_arguments or "{}")
                     except Exception as e:
                         args = {}
                         result = {"error": f"Invalid tool arguments for {name}: {e}"}
@@ -584,7 +761,7 @@ class AdvancedMultiAgent(BaseAgent):
 
                     tool_msg = {
                         "role": "tool",
-                        "tool_call_id": tc.id,
+                        "tool_call_id": tc_id,
                         "name": name,
                         "content": json.dumps(result, ensure_ascii=False),
                     }
@@ -594,12 +771,14 @@ class AdvancedMultiAgent(BaseAgent):
                         on_step(
                             {
                                 "role": "tool",
-                                "tool_call_id": tc.id,
+                                "tool_call_id": tc_id,
                                 "name": name,
                                 "content": json.dumps(result, ensure_ascii=False),
                                 "metadata": {"agent": "ExecutionAgent"},
                             }
                         )
+                if tool_guard_warnings:
+                    messages.append(LLMClient.tool_guardrail_warning_user_message(tool_guard_warnings))
                 if expected_calls > 0 and len(executed_trades) < expected_calls:
                     remaining = expected_calls - len(executed_trades)
                     next_step = execution_plan[len(executed_trades)] if len(executed_trades) < len(execution_plan) else {}
@@ -703,12 +882,37 @@ class AdvancedMultiAgent(BaseAgent):
             current_tools = agent_tools
             if agent_name == "NewsAgent" and news_search_calls >= self.NEWS_AGENT_MAX_SEARCH_CALLS:
                 current_tools = []
+            self._log_llm_trace(
+                current_sub_agent=agent_name,
+                phase="request",
+                payload={
+                    "messages": messages,
+                    "tools": current_tools if current_tools else None,
+                },
+            )
             resp = self.llm.call(messages, tools=current_tools if current_tools else None)
 
             msg_content = resp.content or ""
-            tool_calls = resp.tool_calls
+            tool_calls, tool_guard_warnings = LLMClient.apply_tool_call_guardrails(
+                getattr(resp, "tool_calls", None),
+                model=getattr(self.llm, "model", None),
+            )
+            if tool_guard_warnings:
+                logger.warning("Tool-call guardrails triggered: %s", " | ".join(tool_guard_warnings))
 
             resp_dict = self.llm.build_assistant_message_dict(resp)
+            if tool_calls:
+                resp_dict["tool_calls"] = tool_calls
+            else:
+                resp_dict.pop("tool_calls", None)
+            self._log_llm_trace(
+                current_sub_agent=agent_name,
+                phase="response",
+                payload={
+                    "message": resp_dict,
+                    "tool_guard_warnings": tool_guard_warnings,
+                },
+            )
             messages.append(resp_dict)
 
             if on_step:
@@ -723,9 +927,9 @@ class AdvancedMultiAgent(BaseAgent):
 
             if tool_calls:
                 for tc in tool_calls:
-                    name = tc.function.name
+                    tc_id, name, tc_arguments = LLMClient.tool_call_parts(tc)
                     try:
-                        args = json.loads(tc.function.arguments or "{}")
+                        args = json.loads(tc_arguments or "{}")
                     except Exception as e:
                         args = {}
                         result = {"error": f"Invalid tool arguments for {name}: {e}"}
@@ -743,15 +947,12 @@ class AdvancedMultiAgent(BaseAgent):
                                         )
                                     }
                                 else:
-                                    query_issue = self._validate_news_query(args)
-                                    if query_issue:
-                                        result = {"error": query_issue}
-                                    else:
-                                        try:
-                                            result = tool_func(**args)
-                                            news_search_calls += 1
-                                        except Exception as e:
-                                            result = {"error": f"Tool execution failed for {name}: {e}"}
+                                    prepared_args = self._prepare_news_search_args(args)
+                                    try:
+                                        result = tool_func(**prepared_args)
+                                        news_search_calls += 1
+                                    except Exception as e:
+                                        result = {"error": f"Tool execution failed for {name}: {e}"}
                             else:
                                 try:
                                     result = tool_func(**args)
@@ -760,7 +961,7 @@ class AdvancedMultiAgent(BaseAgent):
 
                     tool_msg = {
                         "role": "tool",
-                        "tool_call_id": tc.id,
+                        "tool_call_id": tc_id,
                         "name": name,
                         "content": json.dumps(result, ensure_ascii=False),
                     }
@@ -770,12 +971,14 @@ class AdvancedMultiAgent(BaseAgent):
                         on_step(
                             {
                                 "role": "tool",
-                                "tool_call_id": tc.id,
+                                "tool_call_id": tc_id,
                                 "name": name,
                                 "content": json.dumps(result, ensure_ascii=False),
                                 "metadata": {"agent": agent_name},
                             }
                         )
+                if tool_guard_warnings:
+                    messages.append(LLMClient.tool_guardrail_warning_user_message(tool_guard_warnings))
                 if agent_name == "NewsAgent" and news_search_calls >= self.NEWS_AGENT_MAX_SEARCH_CALLS:
                     messages.append(
                         {
@@ -801,7 +1004,17 @@ class AdvancedMultiAgent(BaseAgent):
             )
             fallback_messages = list(messages[:2])
             fallback_messages[1] = {"role": "user", "content": fallback_user_prompt}
+            self._log_llm_trace(
+                current_sub_agent=agent_name,
+                phase="fallback_request",
+                payload={"messages": fallback_messages, "tools": None},
+            )
             resp = self.llm.call(fallback_messages)
+            self._log_llm_trace(
+                current_sub_agent=agent_name,
+                phase="fallback_response",
+                payload={"content": resp.content or ""},
+            )
             current_response = resp.content or ""
 
         return current_response
@@ -832,8 +1045,18 @@ class AdvancedMultiAgent(BaseAgent):
                 prices=prices,
                 step=step,
             )
+            self._log_llm_trace(
+                current_sub_agent="Manager",
+                phase="request",
+                payload={"messages": manager_messages, "tools": None},
+            )
             resp = self.llm.call(manager_messages)
             content = resp.content or ""
+            self._log_llm_trace(
+                current_sub_agent="Manager",
+                phase="response",
+                payload={"content": content},
+            )
 
             if on_step:
                 on_step(
@@ -905,12 +1128,11 @@ class AdvancedMultiAgent(BaseAgent):
                     )
 
             elif action == "finish":
-                candidate_plan = decision.get("execution_plan")
+                candidate_plan = self._normalize_execution_plan(decision.get("execution_plan"))
                 allow_partial = step >= max(0, self.max_steps - 3)
-                if allow_partial:
-                    basis = decision.setdefault("decision_basis", {}) or {}
-                    if not basis.get("supporting_evidence_ids") and self.evidence_log:
-                        basis["supporting_evidence_ids"] = [ev["id"] for ev in self.evidence_log[-2:]]
+                basis = decision.setdefault("decision_basis", {}) or {}
+                if not basis.get("supporting_evidence_ids") and self.evidence_log:
+                    basis["supporting_evidence_ids"] = [ev["id"] for ev in self.evidence_log[-2:]]
                 ok, msg = self._validate_finish(candidate_plan, decision, allow_partial=allow_partial)
                 if not ok:
                     self.context.append(f"Step {step + 1}: {msg}")
@@ -924,12 +1146,9 @@ class AdvancedMultiAgent(BaseAgent):
                         )
                     continue
 
-                execution_plan = []
-                for item in self._safe_list(candidate_plan):
-                    if isinstance(item, dict):
-                        execution_plan.append(item)
+                execution_plan = list(candidate_plan)
                 if not execution_plan and decision.get("final_decision"):
-                    execution_plan = [decision.get("final_decision")]
+                    execution_plan = self._normalize_execution_plan([decision.get("final_decision")])
 
                 executed_trades = self._run_execution_stage(
                     execution_plan=execution_plan,

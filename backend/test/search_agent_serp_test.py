@@ -1,9 +1,10 @@
 """Unit tests for SearchSubAgent SERP parameter mapping and result normalization."""
 
 import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -183,3 +184,46 @@ def test_search_tool_no_brightdata_returns_error(monkeypatch):
     agent = SearchSubAgent(api_key=None)
     out = agent._search_tool("anything")
     assert out == {"error": "Bright Data client not initialized."}
+
+
+def test_call_with_retry_succeeds_after_retry():
+    agent = SearchSubAgent(api_key=None)
+    agent.max_retries = 2
+
+    state = {"count": 0}
+
+    def flaky():
+        state["count"] += 1
+        if state["count"] < 2:
+            raise RuntimeError("temporary failure")
+        return "ok"
+
+    out = agent._call_with_retry("search_tool", timeout_seconds=1.0, func=flaky)
+    assert out == "ok"
+    assert state["count"] == 2
+
+
+def test_call_with_retry_respects_timeout():
+    agent = SearchSubAgent(api_key=None)
+    agent.max_retries = 0
+
+    def slow():
+        time.sleep(0.2)
+        return "late"
+
+    with pytest.raises(RuntimeError, match="timeout"):
+        agent._call_with_retry("search_tool", timeout_seconds=0.05, func=slow)
+
+
+@patch("services.agent.sub_agents.search_agent.logger.warning")
+def test_extract_tool_unlocker_error_logs_warning(mock_warning):
+    agent = SearchSubAgent(api_key=None)
+    agent._brightdata_client_cls = object
+    agent._extract_with_local_fetch = MagicMock(return_value={"error": "Local fetch failed"})
+    agent._call_with_retry = MagicMock(return_value={"html": "<html><title>x</title><body>too short</body></html>"})
+    agent._normalize_unlocker_result = MagicMock(return_value={"error": "Unlocker content is too short."})
+
+    out = agent._extract_tool("https://example.com")
+
+    assert out["error"] == "Unlocker content is too short."
+    assert any("Unlocker extraction returned error" in str(call.args[0]) for call in mock_warning.call_args_list)

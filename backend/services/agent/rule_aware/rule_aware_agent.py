@@ -181,7 +181,13 @@ class RuleAwareAgent(BaseAgent):
                 resp = self.llm.call(messages, tools=self.tools.openai_tools)
 
                 msg_content = resp.content or ""
-                tool_calls = resp.tool_calls
+                tool_calls, tool_guard_warnings = LLMClient.apply_tool_call_guardrails(
+                    getattr(resp, "tool_calls", None),
+                    model=getattr(self.llm, "model", None),
+                )
+                if tool_guard_warnings:
+                    logger.warning("Tool-call guardrails triggered: %s", " | ".join(tool_guard_warnings))
+                    agent_logger.warning("Tool-call guardrails triggered: %s", " | ".join(tool_guard_warnings))
 
                 # Log to llm_trace
                 llm_logger.info(f"Step {step + 1} - Assistant response: {msg_content[:500]}...")
@@ -189,6 +195,10 @@ class RuleAwareAgent(BaseAgent):
                 # Add assistant message - use build_message_dict to preserve provider-specific
                 # extra fields (e.g. Gemini's thought_signature on tool_calls)
                 resp_dict = self.llm.build_assistant_message_dict(resp)
+                if tool_calls:
+                    resp_dict["tool_calls"] = tool_calls
+                else:
+                    resp_dict.pop("tool_calls", None)
                 messages.append(resp_dict)
 
                 # Accumulate assistant content (handle multi-turn responses)
@@ -219,9 +229,9 @@ class RuleAwareAgent(BaseAgent):
                 if tool_calls:
                     tool_results = []
                     for tc in tool_calls:
-                        func_name = tc.function.name
+                        tc_id, func_name, tc_arguments = LLMClient.tool_call_parts(tc)
                         try:
-                            args = json.loads(tc.function.arguments)
+                            args = json.loads(tc_arguments)
                         except json.JSONDecodeError:
                             args = {}
 
@@ -248,7 +258,7 @@ class RuleAwareAgent(BaseAgent):
 
                         tool_results.append({
                             "role": "tool",
-                            "tool_call_id": tc.id,
+                            "tool_call_id": tc_id,
                             "content": json.dumps(result, ensure_ascii=False) if result else "null"
                         })
 
@@ -258,10 +268,15 @@ class RuleAwareAgent(BaseAgent):
                                 "role": "tool",
                                 "name": func_name,
                                 "content": result,
-                                "metadata": {"tool_call_id": tc.id}
+                                "metadata": {"tool_call_id": tc_id}
                             })
 
                     messages.extend(tool_results)
+                    if tool_guard_warnings:
+                        warn_msg = LLMClient.tool_guardrail_warning_user_message(tool_guard_warnings)
+                        messages.append(warn_msg)
+                        if on_step:
+                            on_step(dict(warn_msg))
                     if self.llm.is_gemini_model() and tool_results:
                         messages.append(LLMClient.gemini_post_tool_user_message())
                     # Reset accumulated content after tool calls

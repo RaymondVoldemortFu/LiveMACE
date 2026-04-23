@@ -40,6 +40,15 @@ def initialize_services():
         setup_market_tasks()
         logger.info("Market scheduled tasks have been set up")
 
+        # Startup self-healing: if no 1h curve points exist in the past hour,
+        # backfill them immediately to avoid empty/stale frontend 1h chart after downtime.
+        from services.asset_curve_cache_service import backfill_recent_1h_curve_on_startup
+        backfilled_1h_points = backfill_recent_1h_curve_on_startup()
+        logger.info(
+            "1h asset-curve startup backfill completed, points_written=%s",
+            backfilled_1h_points,
+        )
+
         # Start automatic cryptocurrency trading task via reset to ensure market data & proper job ID
         from services.scheduler import reset_auto_trading_job
         try:
@@ -47,13 +56,7 @@ def initialize_services():
             logger.info("Automatic cryptocurrency trading task reset initiated in background")
         except Exception as e:
             logger.error(f"Failed to initiate AI auto trading task: {e}")
-            # Fallback to random trading schedule to keep demo functional
-            try:
-                schedule_auto_trading(interval_seconds=300, use_ai=False)
-                jobs = task_scheduler.get_job_info()
-                logger.warning(f"Falling back to random trading schedule. Jobs: {jobs}")
-            except Exception as e2:
-                logger.error(f"Failed to schedule fallback random trading task: {e2}")
+            raise
 
         # Add price cache cleanup task (every 2 minutes)
         from services.price_cache import clear_expired_prices
