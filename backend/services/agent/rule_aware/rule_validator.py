@@ -434,15 +434,7 @@ class RuleValidator:
                         )
                 finally:
                     db.close()
-            elif operation not in ["open"] and target_portion > max_single_asset_pct:
-                # Fallback for non-open operations or missing DB
-                return RuleViolation(
-                    rule, severity,
-                    f"Single asset order {target_portion:.2%} exceeds limit {max_single_asset_pct:.2%}",
-                    actual_value=round(target_portion, 4),
-                    expected_value=f"<= {max_single_asset_pct}"
-                )
-        
+
         # R1-03: Minimum Cash Reserve (formerly R1-04)
         elif rule_id == "R1-03":
             min_cash_pct = params.get("min_cash_pct", 0.10)

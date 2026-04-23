@@ -13,6 +13,7 @@ from database.models import (
     Account, AccountSnapshot, AssetMetadata, RuleEvaluationResult,
     AIDecisionLog, AgentTrace, Position
 )
+from services.market_data import get_last_price
 
 logger = logging.getLogger(__name__)
 
@@ -195,19 +196,25 @@ class RuleEvaluator:
         
         # R1-02: Single Asset Concentration Limit (formerly R1-03)
         # Check if a single position exceeds 15% of total equity
-        if decision.symbol and latest_snapshot:
+        if latest_snapshot is None:
+            logger.warning(f"R1-02: No snapshot available for account {account_id}, skipping concentration check")
+        elif decision.symbol:
             # Get all current positions for this account
             positions = self.db.query(Position).filter(
                 Position.account_id == account_id
             ).all()
-            
+
             total_equity = float(latest_snapshot.total_equity)
             if total_equity > 0:
                 for pos in positions:
-                    # Calculate position notional value (absolute value for long/short)
-                    position_value = abs(float(pos.quantity) * float(pos.current_price or 0))
+                    try:
+                        price = get_last_price(pos.symbol, pos.market)
+                    except Exception:
+                        price = float(pos.avg_cost)
+                    # Notional exposure: quantity * price (consistent with pre-decision check)
+                    position_value = abs(float(pos.quantity) * price)
                     concentration = position_value / total_equity
-                    
+
                     if concentration > 0.15:
                         violations.append({
                             "rule": "R1-02",

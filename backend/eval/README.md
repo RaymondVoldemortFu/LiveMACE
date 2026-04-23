@@ -98,6 +98,77 @@ For each audited `RuleEvaluationResult` row:
 
 ---
 
+## offline_llm_audit_rule_informed.py  *(experimental)*
+
+Variant of `offline_llm_audit.py` that also passes the **mechanical rule check
+results** (violations, gate status, R2 soft scores) from the database to the
+LLM, giving it objective ground truth to work against.
+
+### Key differences from `offline_llm_audit.py`
+
+| | Standard (`offline_llm_audit.py`) | Rule-Informed (this script) |
+|---|---|---|
+| LLM inputs | Rules + market state + agent output | + mechanical violations + R2 scores |
+| Scoring dimensions | S_cov + S_con | S_cov + S_con (same formula) |
+| `final_normalized_score` formula | (cov + con) / 20 | (cov + con) / 20 |
+| DB written by default | Yes | **No** (directory output only) |
+| Extra outputs | — | Trend charts (PNG) + per-model summary |
+
+### Outputs (in `eval_output/rule_informed_<timestamp>/`)
+
+| File | Contents |
+|---|---|
+| `results.json` | Full per-record audit results with original vs new scores |
+| `summary.json` | Per-account aggregate: avg coverage, conflict, LLM audit, derived final |
+| `trend_llm_audit.png` | New LLM audit score over time (one line per account) |
+| `trend_final.png` | LLM audit vs s_rule_sat vs derived final score, per account |
+
+### Quick Start
+
+```bash
+cd backend
+
+# Default: output to eval_output/rule_informed_<ts>/, no DB writes
+uv run python eval/offline_llm_audit_rule_informed.py --db-path ./alpha_arena.sqlite
+
+# Limit to 20 records
+uv run python eval/offline_llm_audit_rule_informed.py --db-path ./alpha_arena.sqlite --limit 20
+
+# Re-audit records that already have scores (compare both methods)
+uv run python eval/offline_llm_audit_rule_informed.py --db-path ./alpha_arena.sqlite --force-reaudit
+
+# Also write new scores back to DB (overwrites existing llm_audit_* fields)
+uv run python eval/offline_llm_audit_rule_informed.py --db-path ./alpha_arena.sqlite --write-db
+
+# Skip chart generation
+uv run python eval/offline_llm_audit_rule_informed.py --db-path ./alpha_arena.sqlite --no-charts
+```
+
+### CLI Options
+
+All options from `offline_llm_audit.py` are supported, plus:
+
+| Flag | Default | Description |
+|---|---|---|
+| `--output-dir PATH` | `eval_output/rule_informed_<ts>/` | Output directory for results + charts |
+| `--write-db` | off | Overwrite `llm_audit_*` fields in DB (default: output dir only) |
+| `--no-charts` | off | Skip PNG chart generation |
+
+### Typical Comparison Workflow
+
+1. Run the standard audit first (populates baseline scores in DB):
+   ```bash
+   uv run python eval/offline_llm_audit.py --db-path ./alpha_arena.sqlite
+   ```
+2. Run the rule-informed audit (DB not overwritten by default):
+   ```bash
+   uv run python eval/offline_llm_audit_rule_informed.py --db-path ./alpha_arena.sqlite --force-reaudit
+   ```
+3. Compare `original_llm_audit_score` vs `new_final_normalized_score` in `results.json`
+   and review the trend charts and summary table.
+
+---
+
 ## rule_aware_stats_report.py
 
 Generate Rule-Aware Agent statistics directly from SQLite without starting backend.
