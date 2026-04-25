@@ -64,11 +64,6 @@ ACCOUNT_FIELD_KEYS = [
     "is_active",
 ]
 
-BASELINE_ACCOUNT_SPECS = [
-    {"name": "buy_hold", "agent_type": "buy_hold"},
-    {"name": "grid", "agent_type": "grid"},
-]
-
 LLM_AGENT_TYPES = {"react", "multi_agent", "advanced_multi_agent", "rule_aware"}
 
 
@@ -510,7 +505,7 @@ def main() -> int:
     finally:
         db.close()
 
-    total = len(MODEL_LIST) * len(account_configs) + len(BASELINE_ACCOUNT_SPECS)
+    total = len(MODEL_LIST) * len(account_configs)
     print(
         f"Done. baseline_created={baseline_created}, baseline_updated={baseline_updated}, baseline_skipped={baseline_skipped}, "
         f"created={created}, updated={updated}, skipped={skipped}, total={total}, mode={args.mode}"
