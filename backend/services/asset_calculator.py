@@ -58,8 +58,13 @@ def calc_positions_market_value(db: Session, account_id: int) -> float:
                 # Position equity = margin + P&L
                 position_equity = entry_margin + unrealized_pnl
             else:
-                # Non-leveraged position: equity = market value
-                position_equity = market_value
+                # Non-leveraged position:
+                # - LONG  equity = +quantity * price
+                # - SHORT equity = -quantity * price
+                # (short spot inventory is a liability and must be signed)
+                side = getattr(p, 'side', None) or "LONG"
+                signed_quantity = -quantity if side.upper() == "SHORT" else quantity
+                position_equity = signed_quantity * price
             
             total += position_equity
         except Exception as e:
