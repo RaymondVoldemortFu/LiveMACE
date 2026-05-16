@@ -144,10 +144,13 @@ def accounts() -> list[dict[str, Any]]:
                 COALESCE(t.step_count, 0) AS step_count,
                 COALESCE(d.decision_count, 0) AS decision_count,
                 COALESCE(d.decision_trace_count, 0) AS decision_trace_count,
+                COALESCE(c.curve_1h_count, 0) AS curve_1h_count,
                 t.first_trace_at,
                 t.last_trace_at,
                 d.first_decision_at,
-                d.last_decision_at
+                d.last_decision_at,
+                c.first_curve_1h_at,
+                c.last_curve_1h_at
             FROM accounts a
             LEFT JOIN (
                 SELECT
@@ -169,6 +172,16 @@ def accounts() -> list[dict[str, Any]]:
                 FROM ai_decision_logs
                 GROUP BY account_id
             ) d ON d.account_id = a.id
+            LEFT JOIN (
+                SELECT
+                    account_id,
+                    COUNT(*) AS curve_1h_count,
+                    MIN(datetime_str) AS first_curve_1h_at,
+                    MAX(datetime_str) AS last_curve_1h_at
+                FROM asset_curve_snapshots
+                WHERE timeframe = '1h'
+                GROUP BY account_id
+            ) c ON c.account_id = a.id
             ORDER BY a.id
             """
         ).fetchall()
@@ -386,6 +399,178 @@ def trace_detail(trace_id: str, account_id: int | None = None) -> dict[str, Any]
         "account": dict(account_row) if account_row else None,
         "steps": normalized_steps,
         "decisions": _rows_to_dicts(decisions),
+    }
+
+
+def _parse_account_ids(account_ids: str | None, required: bool = True) -> list[int]:
+    if not account_ids:
+        if required:
+            raise HTTPException(status_code=400, detail="account_ids is required")
+        return []
+
+    ids = []
+    for raw in account_ids.split(","):
+        text = raw.strip()
+        if not text:
+            continue
+        try:
+            ids.append(int(text))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid account id: {text}") from exc
+
+    ids = list(dict.fromkeys(ids))
+    if required and not ids:
+        raise HTTPException(status_code=400, detail="account_ids is required")
+    return ids
+
+
+@app.get("/api/asset-curves")
+def asset_curves(account_ids: str) -> dict[str, Any]:
+    ids = _parse_account_ids(account_ids)
+    placeholders = ",".join("?" for _ in ids)
+    with _connect() as conn:
+        account_rows = conn.execute(
+            f"""
+            SELECT id, name, model, initial_capital
+            FROM accounts
+            WHERE id IN ({placeholders})
+            ORDER BY id
+            """,
+            ids,
+        ).fetchall()
+        found_ids = {int(row["id"]) for row in account_rows}
+        missing_ids = [account_id for account_id in ids if account_id not in found_ids]
+        if missing_ids:
+            raise HTTPException(status_code=404, detail=f"Unknown account ids: {missing_ids}")
+
+        rows = conn.execute(
+            f"""
+            SELECT
+                account_id,
+                timestamp,
+                datetime_str,
+                total_assets,
+                initial_capital,
+                profit,
+                profit_percentage,
+                cash,
+                positions_value
+            FROM asset_curve_snapshots
+            WHERE timeframe = '1h'
+              AND account_id IN ({placeholders})
+            ORDER BY timestamp ASC, account_id ASC
+            """,
+            ids,
+        ).fetchall()
+
+    series_by_id: dict[int, dict[str, Any]] = {}
+    for account in account_rows:
+        account_id = int(account["id"])
+        series_by_id[account_id] = {
+            "account": dict(account),
+            "timeframe": "1h",
+            "point_count": 0,
+            "first_timestamp": None,
+            "last_timestamp": None,
+            "points": [],
+        }
+
+    for row in rows:
+        account_id = int(row["account_id"])
+        series = series_by_id[account_id]
+        point = {
+            "timestamp": int(row["timestamp"]),
+            "datetime_str": row["datetime_str"],
+            "total_assets": float(row["total_assets"]),
+            "initial_capital": float(row["initial_capital"]),
+            "profit": float(row["profit"]),
+            "profit_percentage": float(row["profit_percentage"]),
+            "cash": float(row["cash"]),
+            "positions_value": float(row["positions_value"]),
+        }
+        if series["first_timestamp"] is None:
+            series["first_timestamp"] = point["timestamp"]
+        series["last_timestamp"] = point["timestamp"]
+        series["point_count"] += 1
+        series["points"].append(point)
+
+    return {"timeframe": "1h", "series": list(series_by_id.values())}
+
+
+@app.get("/api/final-asset-ranking")
+def final_asset_ranking(
+    account_ids: str | None = None,
+    sort_by: str = "profit",
+    sort_dir: str = "desc",
+) -> dict[str, Any]:
+    ids = _parse_account_ids(account_ids, required=False)
+    direction = "ASC" if sort_dir.lower() == "asc" else "DESC"
+    sort_map = {
+        "total_assets": "latest.total_assets",
+        "profit": "latest.profit",
+        "profit_percentage": "latest.profit_percentage",
+        "cash": "latest.cash",
+        "positions_value": "latest.positions_value",
+        "account_id": "latest.account_id",
+        "timestamp": "latest.timestamp",
+    }
+    order_expr = sort_map.get(sort_by, "latest.profit")
+    id_clause = ""
+    params: list[Any] = []
+    if ids:
+        id_clause = "AND s.account_id IN (" + ",".join("?" for _ in ids) + ")"
+        params.extend(ids)
+
+    with _connect() as conn:
+        rows = conn.execute(
+            f"""
+            WITH latest AS (
+                SELECT *
+                FROM (
+                    SELECT
+                        s.*,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY s.account_id
+                            ORDER BY s.timestamp DESC, s.id DESC
+                        ) AS rn
+                    FROM asset_curve_snapshots s
+                    WHERE s.timeframe = '1h'
+                    {id_clause}
+                )
+                WHERE rn = 1
+            )
+            SELECT
+                latest.account_id,
+                a.name AS account_name,
+                a.model,
+                latest.timestamp,
+                latest.datetime_str,
+                latest.total_assets,
+                latest.initial_capital,
+                latest.profit,
+                latest.profit_percentage,
+                latest.cash,
+                latest.positions_value
+            FROM latest
+            JOIN accounts a ON a.id = latest.account_id
+            ORDER BY {order_expr} {direction}, latest.account_id ASC
+            """,
+            params,
+        ).fetchall()
+
+    items = []
+    for idx, row in enumerate(rows, start=1):
+        data = dict(row)
+        data["rank"] = idx
+        for key in ["total_assets", "initial_capital", "profit", "profit_percentage", "cash", "positions_value"]:
+            data[key] = float(data[key])
+        items.append(data)
+
+    return {
+        "timeframe": "1h",
+        "sort_by": sort_by if sort_by in sort_map else "profit",
+        "sort_dir": direction.lower(),
+        "items": items,
     }
 
 
@@ -741,6 +926,123 @@ HTML_PAGE = r"""
       white-space: nowrap;
     }
     td { max-width: 420px; overflow-wrap: anywhere; }
+    .curve-layout {
+      height: 100%;
+      display: grid;
+      grid-template-columns: 340px minmax(0, 1fr);
+      gap: 12px;
+      padding: 12px;
+      min-height: 0;
+    }
+    .checkbox-list { overflow: auto; padding: 8px; min-height: 0; }
+    .checkbox-item {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      gap: 10px;
+      padding: 10px;
+      border-radius: 12px;
+      cursor: pointer;
+    }
+    .checkbox-item:hover { background: var(--panel-2); }
+    .checkbox-item input { margin-top: 2px; min-width: auto; }
+    .curve-stage {
+      position: relative;
+      min-height: 0;
+      overflow: hidden;
+      background: #fff;
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      box-shadow: var(--shadow);
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+    }
+    .curve-summary {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .curve-chart-wrap { min-height: 0; overflow: auto; padding: 12px; }
+    .curve-chart {
+      width: 100%;
+      min-width: 980px;
+      height: 100%;
+      min-height: 520px;
+      display: block;
+      background: linear-gradient(#fff, #fbfdff);
+      border-radius: 12px;
+    }
+    .curve-legend {
+      padding: 10px 14px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      font-size: 12px;
+    }
+    .legend-item { display: inline-flex; align-items: center; gap: 6px; }
+    .legend-swatch { width: 12px; height: 12px; border-radius: 999px; display: inline-block; }
+    .curve-tooltip {
+      position: absolute;
+      pointer-events: none;
+      background: rgba(17, 24, 39, .92);
+      color: #fff;
+      border-radius: 10px;
+      padding: 8px 10px;
+      font-size: 12px;
+      line-height: 1.45;
+      max-width: 360px;
+      display: none;
+      z-index: 5;
+      box-shadow: 0 12px 30px rgba(15, 23, 42, .24);
+    }
+    .ranking-layout {
+      height: 100%;
+      display: grid;
+      grid-template-columns: 340px minmax(0, 1fr);
+      gap: 12px;
+      padding: 12px;
+      min-height: 0;
+    }
+    .ranking-stage {
+      min-height: 0;
+      overflow: hidden;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      box-shadow: var(--shadow);
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+    .ranking-toolbar {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .ranking-table-wrap { min-height: 0; overflow: auto; }
+    .rank-cell {
+      width: 42px;
+      height: 42px;
+      border-radius: 999px;
+      display: grid;
+      place-items: center;
+      background: #f3f4f6;
+      font-weight: 750;
+    }
+    .rank-cell.top1 { background: #fef3c7; color: #92400e; }
+    .rank-cell.top2 { background: #e5e7eb; color: #374151; }
+    .rank-cell.top3 { background: #ffedd5; color: #9a3412; }
+    .positive { color: var(--green); font-weight: 650; }
+    .negative { color: var(--red); font-weight: 650; }
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
     .error {
       color: var(--red);
@@ -753,6 +1055,8 @@ HTML_PAGE = r"""
     @media (max-width: 1150px) {
       .trace-layout { grid-template-columns: 280px 330px minmax(0, 1fr); }
       .db-toolbar { grid-template-columns: 1fr 1fr; }
+      .curve-layout { grid-template-columns: 290px minmax(0, 1fr); }
+      .ranking-layout { grid-template-columns: 290px minmax(0, 1fr); }
     }
   </style>
 </head>
@@ -765,6 +1069,8 @@ HTML_PAGE = r"""
       </div>
       <div class="tabs">
         <button id="tabTrace" class="tab active" type="button">Trace 聊天查看</button>
+        <button id="tabCurve" class="tab" type="button">资产曲线</button>
+        <button id="tabRanking" class="tab" type="button">Final 排名</button>
         <button id="tabDb" class="tab" type="button">DB 检索</button>
       </div>
     </header>
@@ -816,6 +1122,77 @@ HTML_PAGE = r"""
           </section>
         </div>
       </section>
+      <section id="curveView" class="view">
+        <div class="curve-layout">
+          <aside class="panel">
+            <div class="panel-header">
+              <h2>资产曲线账号</h2>
+              <div class="toolbar">
+                <input id="curveAccountSearch" placeholder="搜索 account / model" />
+              </div>
+              <div class="toolbar">
+                <button id="selectAllCurveAccounts" type="button">全选有曲线账号</button>
+                <button id="clearCurveAccounts" type="button">清空</button>
+              </div>
+              <div class="item-sub">固定使用 `asset_curve_snapshots.timeframe = 1h` 的完整数据。</div>
+            </div>
+            <div id="curveAccountsList" class="checkbox-list"></div>
+          </aside>
+          <section class="curve-stage">
+            <div class="curve-summary">
+              <strong id="curveTitle">1h 资产曲线</strong>
+              <span id="curveStats">请选择一个或多个账号</span>
+              <button id="reloadCurve" class="primary" type="button">加载曲线</button>
+            </div>
+            <div class="curve-chart-wrap">
+              <svg id="curveChart" class="curve-chart" role="img" aria-label="1h asset curve"></svg>
+            </div>
+            <div id="curveLegend" class="curve-legend"></div>
+            <div id="curveTooltip" class="curve-tooltip"></div>
+          </section>
+        </div>
+      </section>
+      <section id="rankingView" class="view">
+        <div class="ranking-layout">
+          <aside class="panel">
+            <div class="panel-header">
+              <h2>排名账号</h2>
+              <div class="toolbar">
+                <input id="rankingAccountSearch" placeholder="搜索 account / model" />
+              </div>
+              <div class="toolbar">
+                <button id="selectAllRankingAccounts" type="button">全选有曲线账号</button>
+                <button id="clearRankingAccounts" type="button">清空</button>
+              </div>
+              <div class="item-sub">按每个账号最新的 1h 资产快照计算 final 排名。</div>
+            </div>
+            <div id="rankingAccountsList" class="checkbox-list"></div>
+          </aside>
+          <section class="ranking-stage">
+            <div class="ranking-toolbar">
+              <div>
+                <strong>Final 资产排序</strong>
+                <div id="rankingStats" class="item-sub">请选择账号后加载</div>
+              </div>
+              <div class="toolbar">
+                <select id="rankingSortBy">
+                  <option value="profit" selected>盈利金额</option>
+                  <option value="profit_percentage">收益率</option>
+                  <option value="total_assets">最终资产</option>
+                  <option value="cash">现金</option>
+                  <option value="positions_value">持仓价值</option>
+                </select>
+                <select id="rankingSortDir">
+                  <option value="desc" selected>降序</option>
+                  <option value="asc">升序</option>
+                </select>
+                <button id="reloadRanking" class="primary" type="button">加载排名</button>
+              </div>
+            </div>
+            <div id="rankingTableWrap" class="ranking-table-wrap"></div>
+          </section>
+        </div>
+      </section>
       <section id="dbView" class="view">
         <div class="db-layout">
           <div class="db-toolbar">
@@ -863,6 +1240,11 @@ HTML_PAGE = r"""
       traceLimit: 100,
       selectedTraceId: null,
       selectedTraceAccountId: null,
+      selectedCurveAccountIds: [],
+      curveData: null,
+      curveGeometry: null,
+      selectedRankingAccountIds: [],
+      rankingData: null,
       dbOffset: 0,
       dbTotal: 0,
       dbFilters: [],
@@ -876,7 +1258,12 @@ HTML_PAGE = r"""
       .replaceAll('"', '&quot;')
       .replaceAll("'", '&#039;');
     const fmtTime = (value) => value ? new Date(value).toLocaleString() : '-';
+    const fmtNumber = (value, digits = 2) => Number(value || 0).toLocaleString(undefined, {
+      minimumFractionDigits: digits,
+      maximumFractionDigits: digits,
+    });
     const shortId = (value) => value ? String(value).slice(0, 8) + '...' : '-';
+    const curveColors = ['#2563eb', '#059669', '#dc2626', '#7c3aed', '#d97706', '#0891b2', '#be123c', '#4f46e5', '#16a34a', '#9333ea'];
     const debounce = (fn, ms = 250) => {
       let t = null;
       return (...args) => {
@@ -896,25 +1283,41 @@ HTML_PAGE = r"""
 
     function setTab(name) {
       const trace = name === 'trace';
+      const curve = name === 'curve';
+      const ranking = name === 'ranking';
       $('tabTrace').classList.toggle('active', trace);
-      $('tabDb').classList.toggle('active', !trace);
+      $('tabCurve').classList.toggle('active', curve);
+      $('tabRanking').classList.toggle('active', ranking);
+      $('tabDb').classList.toggle('active', name === 'db');
       $('traceView').classList.toggle('active', trace);
-      $('dbView').classList.toggle('active', !trace);
+      $('curveView').classList.toggle('active', curve);
+      $('rankingView').classList.toggle('active', ranking);
+      $('dbView').classList.toggle('active', name === 'db');
+      if (curve && state.curveData) renderCurveChart();
     }
 
     async function init() {
       $('tabTrace').onclick = () => setTab('trace');
+      $('tabCurve').onclick = () => setTab('curve');
+      $('tabRanking').onclick = () => setTab('ranking');
       $('tabDb').onclick = () => setTab('db');
 
       state.meta = await api('/api/meta');
       $('dbPath').textContent = state.meta.db_path;
       state.accounts = await api('/api/accounts');
       renderAccounts();
+      initCurveControls();
       initDbControls();
 
       if (state.accounts.length > 0) {
         state.selectedAccountId = state.accounts[0].id;
+        state.selectedCurveAccountIds = state.accounts.filter((account) => Number(account.curve_1h_count || 0) > 0).slice(0, 3).map((account) => account.id);
+        state.selectedRankingAccountIds = state.accounts.filter((account) => Number(account.curve_1h_count || 0) > 0).map((account) => account.id);
         await loadTraces(true);
+        renderCurveAccounts();
+        await loadCurve();
+        renderRankingAccounts();
+        await loadRanking();
       }
       await loadRows(true);
     }
@@ -949,6 +1352,283 @@ HTML_PAGE = r"""
           await loadTraces(true);
         };
       });
+    }
+
+    function initCurveControls() {
+      renderCurveAccounts();
+    }
+
+    function renderCurveAccounts() {
+      const q = $('curveAccountSearch').value.trim().toLowerCase();
+      const items = state.accounts.filter((account) => {
+        const text = `${account.id} ${account.name} ${account.model || ''}`.toLowerCase();
+        return !q || text.includes(q);
+      });
+      $('curveAccountsList').innerHTML = items.map((account) => {
+        const count = Number(account.curve_1h_count || 0);
+        const disabled = count === 0;
+        const checked = state.selectedCurveAccountIds.includes(account.id);
+        return `
+          <label class="checkbox-item ${disabled ? 'item-sub' : ''}">
+            <input type="checkbox" data-curve-account-id="${account.id}" ${checked ? 'checked' : ''} ${disabled ? 'disabled' : ''} />
+            <span>
+              <span class="item-title">
+                <span>#${esc(account.id)} ${esc(account.name)}</span>
+                <span class="badge ${count > 0 ? 'green' : 'gray'}">${count.toLocaleString()} points</span>
+              </span>
+              <span class="item-sub">${esc(account.model || account.agent_type || '-')}</span>
+              <span class="item-sub">范围：${esc(fmtTime(account.first_curve_1h_at))} - ${esc(fmtTime(account.last_curve_1h_at))}</span>
+            </span>
+          </label>
+        `;
+      }).join('') || '<div class="empty">没有匹配的 account</div>';
+      document.querySelectorAll('[data-curve-account-id]').forEach((el) => {
+        el.onchange = () => {
+          const id = Number(el.dataset.curveAccountId);
+          if (el.checked && !state.selectedCurveAccountIds.includes(id)) {
+            state.selectedCurveAccountIds.push(id);
+          }
+          if (!el.checked) {
+            state.selectedCurveAccountIds = state.selectedCurveAccountIds.filter((accountId) => accountId !== id);
+          }
+        };
+      });
+    }
+
+    async function loadCurve() {
+      const ids = state.selectedCurveAccountIds;
+      if (!ids.length) {
+        state.curveData = null;
+        $('curveStats').textContent = '请选择一个或多个有 1h 曲线数据的账号';
+        $('curveChart').innerHTML = '';
+        $('curveLegend').innerHTML = '';
+        return;
+      }
+      const params = new URLSearchParams({ account_ids: ids.join(',') });
+      const data = await api(`/api/asset-curves?${params.toString()}`);
+      state.curveData = data;
+      renderCurveChart();
+    }
+
+    function renderCurveChart() {
+      const svg = $('curveChart');
+      const data = state.curveData;
+      if (!data || !data.series.length) {
+        svg.innerHTML = '';
+        $('curveStats').textContent = '没有曲线数据';
+        $('curveLegend').innerHTML = '';
+        return;
+      }
+
+      const nonEmpty = data.series.filter((series) => series.points.length > 0);
+      if (!nonEmpty.length) {
+        svg.innerHTML = '<text x="60" y="80" fill="#6b7280">选中的账号没有 1h 资产曲线数据</text>';
+        $('curveStats').textContent = '0 points';
+        $('curveLegend').innerHTML = '';
+        return;
+      }
+
+      const width = 1200;
+      const height = 620;
+      const margin = { top: 26, right: 34, bottom: 62, left: 82 };
+      const plotW = width - margin.left - margin.right;
+      const plotH = height - margin.top - margin.bottom;
+      const allPoints = nonEmpty.flatMap((series) => series.points);
+      const minX = Math.min(...allPoints.map((point) => point.timestamp));
+      const maxX = Math.max(...allPoints.map((point) => point.timestamp));
+      const minYRaw = Math.min(...allPoints.map((point) => point.total_assets));
+      const maxYRaw = Math.max(...allPoints.map((point) => point.total_assets));
+      const yPad = Math.max((maxYRaw - minYRaw) * 0.08, Math.max(maxYRaw, 1) * 0.005);
+      const minY = minYRaw - yPad;
+      const maxY = maxYRaw + yPad;
+      const xScale = (ts) => margin.left + ((ts - minX) / Math.max(1, maxX - minX)) * plotW;
+      const yScale = (value) => margin.top + (1 - ((value - minY) / Math.max(1, maxY - minY))) * plotH;
+      const yTicks = Array.from({ length: 6 }, (_, i) => minY + ((maxY - minY) * i / 5));
+      const xTicks = Array.from({ length: 6 }, (_, i) => minX + ((maxX - minX) * i / 5));
+
+      const grid = [
+        ...yTicks.map((value) => {
+          const y = yScale(value);
+          return `<line x1="${margin.left}" y1="${y}" x2="${width - margin.right}" y2="${y}" stroke="#e5e7eb" /><text x="${margin.left - 10}" y="${y + 4}" text-anchor="end" fill="#6b7280" font-size="11">${esc(fmtNumber(value, 0))}</text>`;
+        }),
+        ...xTicks.map((value) => {
+          const x = xScale(value);
+          return `<line x1="${x}" y1="${margin.top}" x2="${x}" y2="${height - margin.bottom}" stroke="#f1f5f9" /><text x="${x}" y="${height - margin.bottom + 24}" text-anchor="middle" fill="#6b7280" font-size="11">${esc(new Date(value * 1000).toLocaleDateString())}</text>`;
+        }),
+      ].join('');
+
+      const lines = nonEmpty.map((series, index) => {
+        const color = curveColors[index % curveColors.length];
+        const points = series.points.map((point) => `${xScale(point.timestamp).toFixed(2)},${yScale(point.total_assets).toFixed(2)}`).join(' ');
+        return `<polyline points="${points}" fill="none" stroke="${color}" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" />`;
+      }).join('');
+
+      svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+      svg.innerHTML = `
+        <rect x="0" y="0" width="${width}" height="${height}" fill="transparent" />
+        ${grid}
+        <line x1="${margin.left}" y1="${height - margin.bottom}" x2="${width - margin.right}" y2="${height - margin.bottom}" stroke="#94a3b8" />
+        <line x1="${margin.left}" y1="${margin.top}" x2="${margin.left}" y2="${height - margin.bottom}" stroke="#94a3b8" />
+        <text x="${margin.left}" y="18" fill="#374151" font-size="12">Total Assets</text>
+        ${lines}
+      `;
+
+      const totalPoints = nonEmpty.reduce((sum, series) => sum + series.points.length, 0);
+      const firstTime = new Date(minX * 1000).toLocaleString();
+      const lastTime = new Date(maxX * 1000).toLocaleString();
+      $('curveStats').textContent = `${nonEmpty.length} 个账号，${totalPoints.toLocaleString()} 个 1h 点，${firstTime} - ${lastTime}`;
+      $('curveLegend').innerHTML = nonEmpty.map((series, index) => {
+        const first = series.points[0];
+        const last = series.points[series.points.length - 1];
+        const color = curveColors[index % curveColors.length];
+        return `
+          <span class="legend-item">
+            <span class="legend-swatch" style="background:${color}"></span>
+            <span>#${esc(series.account.id)} ${esc(series.account.name)} · ${series.points.length.toLocaleString()}点 · ${esc(fmtNumber(first.total_assets))} -> ${esc(fmtNumber(last.total_assets))}</span>
+          </span>
+        `;
+      }).join('');
+
+      state.curveGeometry = { width, height, margin, plotW, plotH, minX, maxX, minY, maxY, series: nonEmpty };
+    }
+
+    function nearestPoint(points, timestamp) {
+      let lo = 0;
+      let hi = points.length - 1;
+      while (lo < hi) {
+        const mid = Math.floor((lo + hi) / 2);
+        if (points[mid].timestamp < timestamp) lo = mid + 1;
+        else hi = mid;
+      }
+      const right = points[lo];
+      const left = points[Math.max(0, lo - 1)];
+      if (!left) return right;
+      if (!right) return left;
+      return Math.abs(left.timestamp - timestamp) <= Math.abs(right.timestamp - timestamp) ? left : right;
+    }
+
+    function handleCurvePointer(event) {
+      const geometry = state.curveGeometry;
+      if (!geometry) return;
+      const svg = $('curveChart');
+      const rect = svg.getBoundingClientRect();
+      const x = ((event.clientX - rect.left) / rect.width) * geometry.width;
+      const clampedX = Math.min(geometry.width - geometry.margin.right, Math.max(geometry.margin.left, x));
+      const timestamp = geometry.minX + ((clampedX - geometry.margin.left) / geometry.plotW) * (geometry.maxX - geometry.minX);
+      const rows = geometry.series.map((series, index) => {
+        const point = nearestPoint(series.points, timestamp);
+        return { series, index, point };
+      }).sort((a, b) => b.point.profit - a.point.profit).map((item, rank) => (
+        `<div><span style="color:${curveColors[item.index % curveColors.length]}">●</span> #${rank + 1} · #${esc(item.series.account.id)} ${esc(item.series.account.name)}: 盈利 ${esc(fmtNumber(item.point.profit))} · 资产 ${esc(fmtNumber(item.point.total_assets))} · ${esc(fmtNumber(item.point.profit_percentage, 2))}%</div>`
+      )).join('');
+      const tooltip = $('curveTooltip');
+      tooltip.innerHTML = `<div>${esc(new Date(timestamp * 1000).toLocaleString())} · 按盈利金额排序</div>${rows}`;
+      tooltip.style.display = 'block';
+      tooltip.style.left = `${Math.min(rect.width - 370, Math.max(10, event.clientX - rect.left + 18))}px`;
+      tooltip.style.top = `${Math.max(10, event.clientY - rect.top + 18)}px`;
+    }
+
+    function renderRankingAccounts() {
+      const q = $('rankingAccountSearch').value.trim().toLowerCase();
+      const items = state.accounts.filter((account) => {
+        const text = `${account.id} ${account.name} ${account.model || ''}`.toLowerCase();
+        return !q || text.includes(q);
+      });
+      $('rankingAccountsList').innerHTML = items.map((account) => {
+        const count = Number(account.curve_1h_count || 0);
+        const disabled = count === 0;
+        const checked = state.selectedRankingAccountIds.includes(account.id);
+        return `
+          <label class="checkbox-item ${disabled ? 'item-sub' : ''}">
+            <input type="checkbox" data-ranking-account-id="${account.id}" ${checked ? 'checked' : ''} ${disabled ? 'disabled' : ''} />
+            <span>
+              <span class="item-title">
+                <span>#${esc(account.id)} ${esc(account.name)}</span>
+                <span class="badge ${count > 0 ? 'green' : 'gray'}">${count.toLocaleString()} points</span>
+              </span>
+              <span class="item-sub">${esc(account.model || account.agent_type || '-')}</span>
+              <span class="item-sub">final：${esc(fmtTime(account.last_curve_1h_at))}</span>
+            </span>
+          </label>
+        `;
+      }).join('') || '<div class="empty">没有匹配的 account</div>';
+      document.querySelectorAll('[data-ranking-account-id]').forEach((el) => {
+        el.onchange = () => {
+          const id = Number(el.dataset.rankingAccountId);
+          if (el.checked && !state.selectedRankingAccountIds.includes(id)) {
+            state.selectedRankingAccountIds.push(id);
+          }
+          if (!el.checked) {
+            state.selectedRankingAccountIds = state.selectedRankingAccountIds.filter((accountId) => accountId !== id);
+          }
+        };
+      });
+    }
+
+    async function loadRanking() {
+      const ids = state.selectedRankingAccountIds;
+      if (!ids.length) {
+        state.rankingData = null;
+        $('rankingStats').textContent = '请选择一个或多个有 1h 曲线数据的账号';
+        $('rankingTableWrap').innerHTML = '<div class="empty">请选择账号后加载 final 排名。</div>';
+        return;
+      }
+      const params = new URLSearchParams({
+        account_ids: ids.join(','),
+        sort_by: $('rankingSortBy').value,
+        sort_dir: $('rankingSortDir').value,
+      });
+      const data = await api(`/api/final-asset-ranking?${params.toString()}`);
+      state.rankingData = data;
+      renderRanking(data);
+    }
+
+    function renderRanking(data) {
+      if (!data.items.length) {
+        $('rankingStats').textContent = '没有可排名的 final 资产快照';
+        $('rankingTableWrap').innerHTML = '<div class="empty">选中账号没有 1h final 快照。</div>';
+        return;
+      }
+      const latestTime = data.items.reduce((max, item) => Math.max(max, Number(item.timestamp || 0)), 0);
+      $('rankingStats').textContent = `${data.items.length} 个账号 · 最新 final 时间 ${fmtTime(latestTime ? latestTime * 1000 : null)} · 排序字段 ${data.sort_by}`;
+      const rows = data.items.map((item) => {
+        const profitClass = Number(item.profit) >= 0 ? 'positive' : 'negative';
+        const rankClass = item.rank === 1 ? 'top1' : item.rank === 2 ? 'top2' : item.rank === 3 ? 'top3' : '';
+        return `
+          <tr>
+            <td><span class="rank-cell ${rankClass}">${esc(item.rank)}</span></td>
+            <td>
+              <strong>#${esc(item.account_id)} ${esc(item.account_name)}</strong>
+              <div class="item-sub">${esc(item.model || '-')}</div>
+            </td>
+            <td class="mono">${esc(fmtTime(item.datetime_str))}</td>
+            <td class="mono">${esc(fmtNumber(item.total_assets))}</td>
+            <td class="mono ${profitClass}">${esc(fmtNumber(item.profit))}</td>
+            <td class="mono ${profitClass}">${esc(fmtNumber(item.profit_percentage, 2))}%</td>
+            <td class="mono">${esc(fmtNumber(item.initial_capital))}</td>
+            <td class="mono">${esc(fmtNumber(item.cash))}</td>
+            <td class="mono">${esc(fmtNumber(item.positions_value))}</td>
+          </tr>
+        `;
+      }).join('');
+      $('rankingTableWrap').innerHTML = `
+        <table>
+          <thead>
+            <tr>
+              <th>Rank</th>
+              <th>Account</th>
+              <th>Final Time</th>
+              <th>Total Assets</th>
+              <th>Profit</th>
+              <th>Return</th>
+              <th>Initial</th>
+              <th>Cash</th>
+              <th>Positions</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      `;
     }
 
     async function loadTraces(resetOffset = false) {
@@ -1192,6 +1872,30 @@ HTML_PAGE = r"""
     }
 
     $('accountSearch').oninput = renderAccounts;
+    $('curveAccountSearch').oninput = renderCurveAccounts;
+    $('selectAllCurveAccounts').onclick = () => {
+      state.selectedCurveAccountIds = state.accounts.filter((account) => Number(account.curve_1h_count || 0) > 0).map((account) => account.id);
+      renderCurveAccounts();
+    };
+    $('clearCurveAccounts').onclick = () => {
+      state.selectedCurveAccountIds = [];
+      renderCurveAccounts();
+    };
+    $('reloadCurve').onclick = () => loadCurve();
+    $('curveChart').onmousemove = handleCurvePointer;
+    $('curveChart').onmouseleave = () => { $('curveTooltip').style.display = 'none'; };
+    $('rankingAccountSearch').oninput = renderRankingAccounts;
+    $('selectAllRankingAccounts').onclick = () => {
+      state.selectedRankingAccountIds = state.accounts.filter((account) => Number(account.curve_1h_count || 0) > 0).map((account) => account.id);
+      renderRankingAccounts();
+    };
+    $('clearRankingAccounts').onclick = () => {
+      state.selectedRankingAccountIds = [];
+      renderRankingAccounts();
+    };
+    $('reloadRanking').onclick = () => loadRanking();
+    $('rankingSortBy').onchange = () => loadRanking();
+    $('rankingSortDir').onchange = () => loadRanking();
     $('traceSearch').oninput = debounce(() => loadTraces(true));
     $('traceOperation').oninput = debounce(() => loadTraces(true));
     $('traceSymbol').oninput = debounce(() => loadTraces(true));
