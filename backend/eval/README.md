@@ -40,6 +40,12 @@ uv run python eval/offline_llm_audit.py
 # Limit to 20 records, preview without writing
 uv run python eval/offline_llm_audit.py --limit 20 --dry-run
 
+# Evaluate only and save JSON/CSV outputs without touching the DB
+uv run python eval/offline_llm_audit.py --limit 20 --no-write-db
+
+# Save JSON/CSV outputs while also writing DB scores
+uv run python eval/offline_llm_audit.py --limit 20 --output-dir ./eval_output/standard_sample
+
 # Only audit a specific account
 uv run python eval/offline_llm_audit.py --account-id 3
 
@@ -58,6 +64,30 @@ The script resolves model / key / URL in this order (first wins):
 | 3 | `EVAL_LLM_MODEL`, `EVAL_LLM_API_KEY`, `EVAL_LLM_BASE_URL` in `.env` |
 | 4 (fallback) | `API_KEY`, `BASE_URL` in `.env`, model defaults to `gpt-4.1` |
 
+For Qwen thinking models, you can disable thinking in either of these ways:
+
+```bash
+# One-off CLI flag
+uv run python eval/offline_llm_audit.py --disable-thinking
+
+# Or persistent .env setting
+AUDIT_ENABLE_THINKING=False
+```
+
+By default this sends OpenAI-compatible extra body
+`{"enable_thinking": false}`. If your gateway is vLLM-style, set:
+
+```bash
+AUDIT_ENABLE_THINKING=False
+AUDIT_THINKING_PARAM_STYLE=vllm
+```
+
+You can also pass arbitrary provider-specific fields:
+
+```bash
+uv run python eval/offline_llm_audit.py --extra-body-json '{"enable_thinking": false}'
+```
+
 ### CLI Options
 
 | Flag | Default | Description |
@@ -67,11 +97,15 @@ The script resolves model / key / URL in this order (first wins):
 | `--model MODEL` | env / `gpt-4.1` | LLM model name |
 | `--api-key KEY` | env | API key |
 | `--base-url URL` | env | API base URL |
+| `--disable-thinking` | off / env | Add Qwen-style `extra_body={"enable_thinking": false}` |
+| `--extra-body-json JSON` | env | Merge provider-specific JSON into `chat.completions.create` |
 | `--rules-dir PATH` | `config/rules/` | Directory containing rule JSON files |
 | `--account-id N` | all | Restrict to one account ID |
 | `--limit N` | 0 (unlimited) | Max records per run |
-| `--dry-run` | off | Run audits but do NOT write to DB |
-| `--force-reaudit` | off | Re-audit rows that already have scores |
+| `--dry-run` | off | Run audits but do NOT write to DB; creates output files |
+| `--no-write-db`, `--output-only` | off | Alias for evaluate-only mode |
+| `--output-dir PATH` | none / timestamped for no-write mode | Write `results.json`, `results.csv`, `summary.json`, `summary.csv` |
+| `--force-reaudit` | off | Re-audit rows that already have scores; overwrites DB fields if DB writing is enabled |
 
 ### What Gets Written Back
 
@@ -85,6 +119,9 @@ For each audited `RuleEvaluationResult` row:
 | `llm_audit_json` | full JSON response from the audit LLM |
 | `s_audit` | same as `llm_audit_score` |
 | `final_score` | `(s_rule_sat + s_audit) / 2` if both present, else `s_audit` |
+
+When `--dry-run` / `--no-write-db` is used, these values are computed but not
+persisted. They are exported under the output directory instead.
 
 ### Typical Workflow
 
@@ -139,6 +176,9 @@ uv run python eval/offline_llm_audit_rule_informed.py --db-path ./alpha_arena.sq
 
 # Also write new scores back to DB (overwrites existing llm_audit_* fields)
 uv run python eval/offline_llm_audit_rule_informed.py --db-path ./alpha_arena.sqlite --write-db
+
+# Qwen thinking model: disable thinking for faster offline audit
+uv run python eval/offline_llm_audit_rule_informed.py --db-path ./alpha_arena.sqlite --write-db --disable-thinking
 
 # Skip chart generation
 uv run python eval/offline_llm_audit_rule_informed.py --db-path ./alpha_arena.sqlite --no-charts

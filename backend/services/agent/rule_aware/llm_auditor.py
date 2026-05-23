@@ -131,15 +131,30 @@ class LLMAuditor:
             # Format market state
             portfolio = market_state.get("portfolio", {})
             prices = market_state.get("prices", {})
+            price_timestamps = market_state.get("price_timestamps", {})
+            positions = portfolio.get("positions", {})
+            positions_count = portfolio.get("positions_count")
+            if positions_count is None and positions:
+                positions_count_text = str(len(positions))
+            elif positions_count is None:
+                positions_count_text = "N/A"
+            else:
+                positions_count_text = str(positions_count)
             
             market_state_text = f"""**Portfolio State:**
 - Cash: ${portfolio.get('cash', 0):,.2f}
 - Total Equity: ${portfolio.get('total_equity', 0):,.2f}
-- Positions: {len(portfolio.get('positions', {}))}
+- Positions Value: ${portfolio.get('positions_value', 0):,.2f}
+- Positions Count: {positions_count_text}
+- Positions Source: {portfolio.get('positions_source', 'positions field')}
+- Snapshot Timestamp: {portfolio.get('snapshot_ts', 'N/A')}
 - Account ID: {portfolio.get('account_id', 'N/A')}
 
 **Market Prices:**
 {json.dumps(prices, indent=2)}
+
+**Price Timestamps:**
+{json.dumps(price_timestamps, indent=2)}
 """
             
             # Build user prompt

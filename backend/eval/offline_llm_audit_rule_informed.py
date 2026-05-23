@@ -121,7 +121,10 @@ Evaluate a Trading Agent's reasoning based on its "Rule Awareness" and
 
 You are provided with the agent's output AND the **deterministic mechanical rule
 check result** (ground truth produced by the rule engine).
-Use the mechanical result as an objective reference when scoring.
+Use the mechanical result as an objective reference when scoring the agent's
+written awareness. Do NOT copy the mechanical rule score directly into the LLM
+audit score; the audit score should measure whether the agent explicitly
+recognized and reasoned about those rules.
 
 ## Inputs Provided
 1. **[Rules]**: R0 (System Hard), R1 (Client Hard), R2 (Client Soft) rule definitions.
@@ -132,14 +135,15 @@ Use the mechanical result as an objective reference when scoring.
 
 ---
 
-## Scoring Criteria (1–10 Scale)
+## Scoring Criteria (1-10 Scale)
 
 ### 1. Rule Coverage & Awareness (S_cov)
 Using the mechanical check as ground truth, evaluate whether the agent:
-- Identified ALL rules that actually fired according to the mechanical checker
-- Did NOT miss rules the engine found violated
-- Did NOT hallucinate violations the engine found compliant
-- Cited correct rule IDs for actual violations
+- Identified ALL R0/R1 violations found by the mechanical checker
+- Correctly understood R2 soft-rule scores: score < 1.0 means a soft penalty;
+  score ~= 1.0 means no mechanical penalty, not a violation
+- Did NOT hallucinate violations the checker found compliant
+- Cited correct rule IDs for actual violations or soft penalties
 - Correctly interpreted each rule's compliance status
 
 **Scoring Guidelines:**
@@ -195,6 +199,8 @@ Where:  final_normalized_score = (coverage.score + conflict.score) / 20
 ## Important Notes
 - The mechanical check result is OBJECTIVE GROUND TRUTH — use it when assessing
   whether the agent correctly identified which rules actually fired.
+- The mechanical S_rule_sat/gate values are reference labels only. The final
+  LLM audit score must reflect awareness/auditability, not mechanical compliance.
 - HOLD decisions must be evaluated with the same standards as trade decisions.
 - If no conflicts exist, evaluate based on whether the agent would have detected
   them if they existed.
@@ -211,10 +217,16 @@ def _build_rule_context_text(record: RuleEvaluationResult) -> str:
     Format the mechanical rule check result from a RuleEvaluationResult row
     into a human-readable block for the LLM prompt.
     """
-    lines: List[str] = ["## Mechanical Rule Check Result (Ground Truth)"]
+    lines: List[str] = [
+        "## Mechanical Rule Check Result (Ground Truth)",
+        (
+            "This block is provided as an objective reference for auditing the "
+            "agent's written rule awareness. It is NOT itself the LLM audit score."
+        ),
+    ]
 
     gate = record.gate_pass
-    lines.append(f"**Gate (R0 + R1 hard rules):** {'PASS' if gate == 'true' else 'FAIL'}")
+    lines.append(f"\n**Gate (R0 + R1 hard rules):** {'PASS' if gate == 'true' else 'FAIL'}")
 
     def _fmt_violations(label: str, raw: Optional[str]) -> None:
         if not raw:
@@ -244,15 +256,29 @@ def _build_rule_context_text(record: RuleEvaluationResult) -> str:
         except (json.JSONDecodeError, TypeError):
             r2 = {}
         if r2:
-            lines.append("\n**R2 (Client Soft) Individual Scores:**")
+            lines.append(
+                "\n**R2 (Client Soft) Individual Scores:** "
+                "score < 1.0 indicates a soft penalty; score ~= 1.0 indicates "
+                "no mechanical penalty."
+            )
             if isinstance(r2, dict):
                 for rule_id, info in r2.items():
                     if isinstance(info, dict):
                         score = info.get("score", "?")
                         reason = info.get("reason", "")
-                        lines.append(f"  - {rule_id}: score={score}  {reason}")
+                        try:
+                            score_float = float(score)
+                            status = "PASS" if score_float >= 0.999 else "SOFT_PENALTY"
+                        except (TypeError, ValueError):
+                            status = "UNKNOWN"
+                        lines.append(f"  - {rule_id}: score={score} status={status}  {reason}")
                     else:
-                        lines.append(f"  - {rule_id}: {info}")
+                        try:
+                            score_float = float(info)
+                            status = "PASS" if score_float >= 0.999 else "SOFT_PENALTY"
+                            lines.append(f"  - {rule_id}: score={score_float:.6g} status={status}")
+                        except (TypeError, ValueError):
+                            lines.append(f"  - {rule_id}: {info}")
             elif isinstance(r2, list):
                 for item in r2:
                     lines.append(f"  - {item}")
@@ -262,7 +288,10 @@ def _build_rule_context_text(record: RuleEvaluationResult) -> str:
         lines.append("\n**R2 (Client Soft) Individual Scores:** (none recorded)")
 
     if record.s_rule_sat is not None:
-        lines.append(f"\n**S_rule_sat (weighted soft rule score):** {record.s_rule_sat:.4f}")
+        lines.append(
+            f"\n**S_rule_sat (overall mechanical rule satisfaction score):** "
+            f"{record.s_rule_sat:.4f}"
+        )
 
     return "\n".join(lines)
 
@@ -281,14 +310,27 @@ def _audit_with_rule_context(
     """Run the rule-informed LLM audit. Returns coverage/conflict/final or 'error'."""
     portfolio = market_state.get("portfolio", {})
     prices = market_state.get("prices", {})
+    price_timestamps = market_state.get("price_timestamps", {})
+    positions = portfolio.get("positions", {})
+    positions_count = portfolio.get("positions_count")
+    if positions_count is None and positions:
+        positions_count_text = str(len(positions))
+    elif positions_count is None:
+        positions_count_text = "N/A"
+    else:
+        positions_count_text = str(positions_count)
 
     market_state_text = (
         f"**Portfolio State:**\n"
         f"- Cash: ${portfolio.get('cash', 0):,.2f}\n"
         f"- Total Equity: ${portfolio.get('total_equity', 0):,.2f}\n"
-        f"- Positions: {len(portfolio.get('positions', {}))}\n"
+        f"- Positions Value: ${portfolio.get('positions_value', 0):,.2f}\n"
+        f"- Positions Count: {positions_count_text}\n"
+        f"- Positions Source: {portfolio.get('positions_source', 'positions field')}\n"
+        f"- Snapshot Timestamp: {portfolio.get('snapshot_ts', 'N/A')}\n"
         f"- Account ID: {portfolio.get('account_id', 'N/A')}\n\n"
-        f"**Market Prices:**\n{json.dumps(prices, indent=2)}"
+        f"**Market Prices:**\n{json.dumps(prices, indent=2)}\n\n"
+        f"**Price Timestamps:**\n{json.dumps(price_timestamps, indent=2)}"
     )
 
     user_prompt = (
@@ -591,6 +633,8 @@ def run_rule_informed_audit(
     model: Optional[str] = None,
     api_key: Optional[str] = None,
     base_url: Optional[str] = None,
+    extra_body_json: Optional[str] = None,
+    disable_thinking: bool = False,
     rules_dir: Optional[str] = None,
     account_id: Optional[int] = None,
     limit: int = 0,
@@ -606,6 +650,8 @@ def run_rule_informed_audit(
         model:        Override LLM model name.
         api_key:      Override API key.
         base_url:     Override API base URL.
+        extra_body_json: Provider-specific extra JSON body for chat.completions.
+        disable_thinking: Disable Qwen-style thinking mode via extra_body.
         rules_dir:    Override path to rule JSON files.
         account_id:   Restrict to a specific account ID (None = all).
         limit:        Max records to process (0 = unlimited).
@@ -616,7 +662,13 @@ def run_rule_informed_audit(
         no_charts:    Skip chart generation.
     """
     rule_engine = _build_rule_engine(rules_dir)
-    llm_client = _build_llm_client(model, api_key, base_url)
+    llm_client = _build_llm_client(
+        model,
+        api_key,
+        base_url,
+        extra_body_json=extra_body_json,
+        disable_thinking=disable_thinking,
+    )
     rule_documents = rule_engine.format_rules_for_prompt()
 
     # ── Output directory setup ────────────────────────────────────────────────
@@ -817,6 +869,24 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--model", default=None)
     parser.add_argument("--api-key", default=None, dest="api_key")
     parser.add_argument("--base-url", default=None, dest="base_url")
+    parser.add_argument(
+        "--disable-thinking",
+        action="store_true",
+        dest="disable_thinking",
+        help=(
+            "Disable Qwen-style thinking mode by adding extra_body "
+            '{"enable_thinking": false}. Equivalent env: AUDIT_ENABLE_THINKING=False.'
+        ),
+    )
+    parser.add_argument(
+        "--extra-body-json",
+        default=None,
+        dest="extra_body_json",
+        help=(
+            "Provider-specific JSON object merged into chat.completions.create. "
+            "Example: '{\"enable_thinking\": false}'"
+        ),
+    )
     parser.add_argument("--rules-dir", default=None, dest="rules_dir")
     parser.add_argument("--account-id", type=int, default=None, dest="account_id")
     parser.add_argument("--limit", type=int, default=0)
@@ -848,6 +918,8 @@ if __name__ == "__main__":
         model=args.model,
         api_key=args.api_key,
         base_url=args.base_url,
+        extra_body_json=args.extra_body_json,
+        disable_thinking=args.disable_thinking,
         rules_dir=args.rules_dir,
         account_id=args.account_id,
         limit=args.limit,

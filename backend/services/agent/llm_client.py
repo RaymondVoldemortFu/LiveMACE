@@ -58,13 +58,20 @@ class LLMClient:
 
         return normalized or None
 
-    def __init__(self, model: str, api_key: str, base_url: str = None):
+    def __init__(
+        self,
+        model: str,
+        api_key: str,
+        base_url: str = None,
+        extra_body: Optional[dict[str, Any]] = None,
+    ):
         """
         model: 比如 "gpt-4.1" / "gemini-2.0-flash"（经兼容网关）
         api_key: 账户自己的 key
         base_url: OpenAI 兼容 gateway，例如 "https://your-endpoint/v1"
         """
         self.model = model
+        self.extra_body = copy.deepcopy(extra_body) if extra_body else None
         normalized_base_url = self.normalize_base_url(base_url)
         # OpenAI SDK 解析响应时会丢掉 ChatCompletionMessageFunctionToolCall / Function 上未在 schema 声明的字段，
         # 部分 Gemini 网关把 thought_signature 放在原始 JSON 里；用 httpx 钩子抓取 wire 层 tool_calls 供回传合并。
@@ -211,6 +218,8 @@ class LLMClient:
         request_kwargs["timeout"] = self.default_timeout_seconds if timeout is None else timeout
         if response_format is not None:
             request_kwargs["response_format"] = response_format
+        if self.extra_body:
+            request_kwargs["extra_body"] = copy.deepcopy(self.extra_body)
 
         # 部分 Gemini 兼容网关在并行 functionCall 上只对首条下发可校验的 thought_signature；
         # 关闭并行工具输出，迫使模型逐条发起调用，避免后续 part 缺签导致 400。
