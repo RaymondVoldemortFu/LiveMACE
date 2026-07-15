@@ -27,6 +27,8 @@ class ToolRegistry:
 - [ ] 校验 tool 名称 namespace、JSON Schema draft、timeout 范围和 side effect/capability 一致性。
 - [ ] 重复名称一律失败；仅保留旧 provider 返回 `namespace:name` 的 suffix normalization adapter，并在 M06 删除。
 - [ ] Invoker 固定执行 pipeline：权限、input schema、timeout、invoke、output schema、redaction、event。
+- [ ] `ToolInvoker.call()` 与 `Tool.invoke()` 都是同步接口；一个工具返回后 Agent 才执行下一步骤。
+- [ ] 返回 coroutine/awaitable 的第三方 Tool 视为 `ToolRuntimeError`，系统不自动 await，也不提供 async Tool adapter。
 - [ ] `READ_ONLY` 且 `cacheable=True` 才可使用 tool cache；cache key 包含 round id、tool version、规范化参数。
 - [ ] Tool 返回业务失败用 `ToolResult`；schema/timeout/框架故障转换为稳定错误码。
 - [ ] trading.write 只授予 `core.execute_trade` adapter，外部 Tool 不得声明该 capability，除非系统管理员显式白名单。
@@ -37,10 +39,10 @@ class ToolRegistry:
 
 - 第三方 Tool 只 import public SPI 即可注册、被 Agent 调用并产生 trace。
 - 输入/输出 schema、timeout、capability、cache hit/miss 全有单测。
+- 同步调用顺序和 awaitable 拒绝行为有契约测试。
 - Tool registry 不保存 DB session/account 的 closure。
 - `core.execute_trade` 未授权时不可见且不可调用。
 
 ## 前置与并行
 
 前置 M01。M03/M07/M09/M11 可并行；M06 与 M04 依赖本任务。
-

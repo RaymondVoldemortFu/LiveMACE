@@ -24,6 +24,7 @@
 ## TODO
 
 - [ ] 逐个记录现有工具 name、description、parameters 和返回 fixture，禁止同时改文案。
+- [ ] 所有内置工具保持同步调用；不得在迁移中引入 async Tool 或改变 Agent 等待工具结果的顺序。
 - [ ] 工具实现通过 `ToolContext` 获取 account/round/trace；所需 service 通过构造参数注入。
 - [ ] 删除 lambda/closure 中捕获 SQLAlchemy session 的方式。
 - [ ] `core.execute_trade` 仅调用 `TradeCommandGateway`，不直接 import 两套 executor。
@@ -38,8 +39,8 @@
 - `test_tool_use_dynamic_schema`、round-trip、cache、edge case、execute_trade 测试通过。
 - 内置工具模块不 import FastAPI；除 trading adapter 外不 import交易执行模块。
 - 每个 provider 可单独构造和测试。
+- 工具完成前调用线程阻塞，工具返回后 Agent 才进入下一次 LLM 调用。
 
 ## 前置与并行
 
 前置 M05、M09、M11。六个 provider 可并行迁移，`env_wrapper.py` 清理由集成人员最后完成。
-

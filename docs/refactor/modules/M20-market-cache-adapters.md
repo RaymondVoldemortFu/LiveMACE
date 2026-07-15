@@ -14,13 +14,15 @@
 
 ```python
 class TradingMarketDataService:
-    async def require_price(self, symbol: str, market: Market) -> PriceResult
+    def require_price(self, symbol: str, market: Market) -> PriceResult
 
 class DisplayMarketDataService:
-    async def get_price(self, symbol: str, market: Market, allow_stale: bool = True) -> PriceResult
+    def get_price(self, symbol: str, market: Market, allow_stale: bool = True) -> PriceResult
 
 class ToolCachePort(Protocol):
-    async def get(...); async def set(...); async def acquire_lock(...)
+    def get(self, ...) -> object: ...
+    def set(self, ...) -> None: ...
+    def acquire_lock(self, ...): ...
 ```
 
 `PriceResult` 必含 value、as_of、source、freshness、error；交易 service 只接受正数且 fresh/当前允许状态。
@@ -45,4 +47,3 @@ class ToolCachePort(Protocol):
 ## 前置与并行
 
 前置 M09；provider adapter、Kline repository、Redis cache、PriceCache 可并行。
-

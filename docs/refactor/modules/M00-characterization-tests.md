@@ -22,6 +22,8 @@
 - [ ] 冻结 baseline buy-hold/grid 的输入输出，不连接真实行情。
 - [ ] 冻结 WS `bootstrap`、`switch_account`、`get_snapshot`、`get_asset_curve`、`place_order` 当前消息字段。
 - [ ] 冻结 account flag 的 string/bool 输出转换现状。
+- [ ] 冻结账户级 `ThreadPoolExecutor` 并发：不同账户可并行、同一账户 Agent 内工具按步骤同步完成、每个 worker 使用独立 session。
+- [ ] 增加接口违规 fixture：Agent 或 Tool 返回 coroutine/awaitable 时必须明确失败，系统不得自动创建 event loop 或 await。
 
 ## 验收
 

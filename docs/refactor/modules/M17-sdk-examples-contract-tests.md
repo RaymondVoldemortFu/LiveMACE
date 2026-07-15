@@ -35,6 +35,8 @@ def build_fake_context(...) -> DecisionContext
 - [ ] 编写“十分钟创建 Agent”“新增只读 Tool”“只覆盖 Prompt”教程。
 - [ ] 提供 fake LLM、market、memory、sandbox、trade gateway；fake trade 默认不修改真实 DB。
 - [ ] 契约测试验证返回类型、context id、schema、timeout、namespace、secret redaction。
+- [ ] Agent、Tool、Provider 示例全部使用同步 SPI；增加返回 coroutine/awaitable 必须失败的契约测试。
+- [ ] 文档说明外部 Agent 可以在自己的同步 `run()` 内自行管理 asyncio/线程池，但系统不提供异步兼容、资源管理或正确性保证。
 - [ ] CLI `alpha-arena extension validate/test/list`；`list` 可离线列目录内容，不启动 scheduler。
 - [ ] 记录 public SPI import 清单、SemVer/api_version 兼容规则和升级示例。
 - [ ] 增加 wheel 安装后从临时目录装载 examples 的 smoke test。
@@ -50,4 +52,3 @@ def build_fake_context(...) -> DecisionContext
 ## 前置与并行
 
 前置 M04、M06、M08、M13。样例可三人并行，testing API 先冻结。
-

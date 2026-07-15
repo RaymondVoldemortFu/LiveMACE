@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Any, Awaitable, Callable, Mapping, Protocol, Sequence
+from typing import Any, Callable, Mapping, Protocol, Sequence
 
 JsonValue = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
 
@@ -113,7 +113,7 @@ class AgentRunResult:
     metadata: Mapping[str, JsonValue] = field(default_factory=dict)
 
 class Agent(Protocol):
-    async def run(self, context: DecisionContext) -> AgentRunResult: ...
+    def run(self, context: DecisionContext) -> AgentRunResult: ...
 
 class AgentFactory(Protocol):
     def create(self, context: "AgentBuildContext", config: Mapping[str, JsonValue]) -> Agent: ...
@@ -128,7 +128,10 @@ class AgentBuildContext:
 
 约束：
 
-- `Agent.run()` 必须是 async；同步内置实现由系统 adapter 放入 worker thread，第三方不依赖该细节。
+- `Agent.run()` 必须是同步接口，并在调用结束前返回完整 `AgentRunResult`。
+- 系统使用 `ThreadPoolExecutor` 按账户并行运行 Agent；一个账户任务对应一个 worker，不在系统层创建 asyncio task。
+- 单个 Agent 内的 LLM、工具和交易调用对系统表现为同步、顺序执行。外部 Agent 如需 asyncio、子线程或自己的线程池，必须完全封装在自己的同步 `run()` 内。
+- 系统不接受 `Agent.run()` 返回 coroutine/awaitable，不提供 event-loop、异步 Tool 或异步 Provider 兼容层；返回 awaitable 视为 `AgentRuntimeError`。
 - v1 没有“建议交易 JSON”。交易只能通过 `ToolInvoker.call("core.execute_trade", ...)` 执行，或明确 HOLD。
 - `AgentRunResult.executed_trades` 是执行引用，不是待执行命令；上层不得再次执行。
 - Agent 不得 import 或调用 `order_matching`、`order_executor_leverage`、repository。
@@ -174,16 +177,16 @@ class ToolResult:
 class Tool(Protocol):
     @property
     def spec(self) -> ToolSpec: ...
-    async def invoke(self, context: ToolContext, arguments: Mapping[str, JsonValue]) -> ToolResult: ...
+    def invoke(self, context: ToolContext, arguments: Mapping[str, JsonValue]) -> ToolResult: ...
 
 class ToolProvider(Protocol):
     def list_tools(self) -> Sequence[Tool]: ...
 
 class ToolInvoker(Protocol):
-    async def call(self, name: str, arguments: Mapping[str, JsonValue]) -> ToolResult: ...
+    def call(self, name: str, arguments: Mapping[str, JsonValue]) -> ToolResult: ...
 ```
 
-执行顺序固定为：名称解析 -> capability 检查 -> JSON Schema 输入校验 -> timeout -> tool invoke -> 输出 schema 校验 -> redaction -> trace/event。Tool 的业务拒绝返回 `ToolResult(ok=False)`；只有框架故障抛 `ToolRuntimeError`。
+执行顺序固定为：名称解析 -> capability 检查 -> JSON Schema 输入校验 -> deadline/timeout 检查 -> 同步 tool invoke -> 输出 schema 校验 -> redaction -> trace/event。`ToolInvoker.call()` 在工具完成前阻塞，Agent 得到 `ToolResult` 后才进入下一步。Tool 的业务拒绝返回 `ToolResult(ok=False)`；只有框架故障抛 `ToolRuntimeError`。异步 `invoke()` 或 awaitable 返回值不属于 v1 接口。
 
 保留 namespace `core.*`：`core.execute_trade`、`core.market_snapshot`、`core.kline_history`、`core.account_state`、`core.decision_history`、`core.memory_add`、`core.memory_search`、`core.sandbox_*`、`core.search`。第三方必须使用自己的 namespace。
 
@@ -220,27 +223,27 @@ Prompt override 以完整 `prompt_id` 替换；不支持按字符串位置 patch
 
 ```python
 class LLMClientPort(Protocol):
-    async def complete(self, request: "LLMRequest") -> "LLMResponse": ...
+    def complete(self, request: "LLMRequest") -> "LLMResponse": ...
 
 class MemoryStorePort(Protocol):
-    async def search(self, account_id: int, query: str, limit: int) -> Sequence["MemoryRecord"]: ...
-    async def add(self, account_id: int, content: str, metadata: Mapping[str, JsonValue]) -> str: ...
-    async def delete_all(self, account_id: int) -> int: ...
-    async def healthcheck(self) -> "HealthStatus": ...
+    def search(self, account_id: int, query: str, limit: int) -> Sequence["MemoryRecord"]: ...
+    def add(self, account_id: int, content: str, metadata: Mapping[str, JsonValue]) -> str: ...
+    def delete_all(self, account_id: int) -> int: ...
+    def healthcheck(self) -> "HealthStatus": ...
 
 class MarketDataPort(Protocol):
-    async def get_price(self, symbol: str, market: Market) -> "PriceResult": ...
-    async def get_klines(self, query: "KlineQuery") -> "KlineResult": ...
-    async def get_market_status(self, symbol: str, market: Market) -> "MarketStatusResult": ...
+    def get_price(self, symbol: str, market: Market) -> "PriceResult": ...
+    def get_klines(self, query: "KlineQuery") -> "KlineResult": ...
+    def get_market_status(self, symbol: str, market: Market) -> "MarketStatusResult": ...
 
 class SandboxPort(Protocol):
-    async def lease(self, account_id: int) -> "SandboxLease": ...
+    def lease(self, account_id: int) -> "SandboxLease": ...
 
 class EventSink(Protocol):
-    async def emit(self, event: "RuntimeEvent") -> None: ...
+    def emit(self, event: "RuntimeEvent") -> None: ...
 ```
 
-Provider 错误统一包含 `code`、`message`、`retryable`、`provider_id`；provider adapter 内完成第三方异常归一化。
+Provider port 与 Agent/Tool 一样采用同步接口。Provider 错误统一包含 `code`、`message`、`retryable`、`provider_id`；provider adapter 内完成第三方异常归一化。第三方扩展可在自身实现内部使用异步 I/O，但必须同步返回 port 规定的结果，系统不负责驱动其 event loop。
 
 ## 7. Trade Command Gateway
 
@@ -269,10 +272,35 @@ class TradeCommandResult:
     normalized_command: TradeCommand
 
 class TradeCommandGateway(Protocol):
-    async def execute(self, command: TradeCommand) -> TradeCommandResult: ...
+    def execute(self, command: TradeCommand) -> TradeCommandResult: ...
 ```
 
 HTTP、WS 和 `core.execute_trade` 都必须调用同一个 gateway。`idempotency_key` 在 Agent 工具中固定为 `{decision_round_id}:{tool_call_id}`。Gateway 是唯一允许协调订单、成交、持仓和现金写入的应用接口。
+
+## 7.1 系统并发模型
+
+系统并发边界固定如下：
+
+```text
+DecisionRoundService.run()                         # 同步入口
+  -> ThreadPoolExecutor(max_workers=AGENT_MAX_CONCURRENCY)
+     -> account worker A -> AgentRuntime.run()     # 同步
+     -> account worker B -> AgentRuntime.run()     # 同步
+     -> account worker C -> AgentRuntime.run()     # 同步
+
+单个 account worker 内：
+  LLM.complete()
+    -> ToolInvoker.call()
+       -> Tool.invoke()
+       -> [交易工具] TradeCommandGateway.execute()
+    -> 下一次 LLM.complete()
+```
+
+- 不同账户 Agent 通过系统线程池并行。
+- 每个 worker 使用独立的数据库 session/UoW，并在 `finally` 中关闭。
+- 单个 Agent 的步骤和内置工具调用默认顺序、同步执行。
+- 系统不复用一个 session 到多个线程，也不在不同账户间共享可变 Agent 实例。
+- 外部 Agent 内部并发完全由扩展自行实现和测试，不属于系统兼容承诺。
 
 ## 8. 扩展 Manifest
 
@@ -363,4 +391,3 @@ API 错误格式保持：
 - v1 内接口新增参数必须为 keyword-only 且有默认值。
 - 系统启动日志列出装载的 extension/component id、version 和来源，不记录密钥。
 - 账户保存 component version，用于 trace 可复现；系统不得在运行中静默切换版本。
-

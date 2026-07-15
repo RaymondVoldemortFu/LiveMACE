@@ -4,6 +4,7 @@
 
 - [公共扩展接口规范](000-public-interface-spec.md)
 - [模块级任务索引](README.md)
+- [模块分组与并行开发计划](module-groups.md)
 
 ## 1. 我们为什么要做这次重构
 
@@ -132,7 +133,7 @@ my-prompts/
 
 ```python
 class Agent(Protocol):
-    async def run(
+    def run(
         self,
         context: DecisionContext,
     ) -> AgentRunResult:
@@ -159,6 +160,8 @@ Agent 不会得到：
 - 订单撮合服务。
 
 Agent 如果需要数据或执行动作，只能调用已经授权的工具。
+
+系统会通过线程池同时运行不同账户的 Agent，但对单个 Agent 来说，`run()` 是同步接口。Agent 的一次 LLM 调用、工具调用和交易调用完成后，才继续下一步。
 
 返回值只描述这次运行的结果：
 
@@ -216,7 +219,7 @@ class Tool(Protocol):
     def spec(self) -> ToolSpec:
         ...
 
-    async def invoke(
+    def invoke(
         self,
         context: ToolContext,
         arguments: Mapping[str, JsonValue],
@@ -262,6 +265,8 @@ ToolSpec(
   -> 敏感信息脱敏
   -> 写入 Trace
 ```
+
+`ToolInvoker.call()` 会同步等待工具返回。系统不提供 async Tool adapter，也不会自动 await 第三方工具返回的 coroutine。
 
 第三方工具必须使用自己的命名空间，例如：
 
@@ -323,7 +328,7 @@ Prompt 覆盖以完整 Prompt ID 或 profile 为单位，不做字符串位置 p
 
 ```python
 class TradeCommandGateway(Protocol):
-    async def execute(
+    def execute(
         self,
         command: TradeCommand,
     ) -> TradeCommandResult:
@@ -355,6 +360,45 @@ Agent 工具调用的幂等键使用：
 ```
 
 模型或网络重复发起同一个调用时，不能产生第二笔订单或成交。
+
+## 8.1 系统如何并发运行多个 Agent
+
+并发发生在账户之间，不发生在系统管理的单个 Agent 步骤之间：
+
+```text
+自动交易调度
+  -> ThreadPoolExecutor
+     -> 账户 A worker -> 同步 Agent.run()
+     -> 账户 B worker -> 同步 Agent.run()
+     -> 账户 C worker -> 同步 Agent.run()
+
+账户 A worker 内：
+  LLM 调用
+    -> 同步工具调用
+       -> 如需交易，同步 TradeCommandGateway
+    -> 下一次 LLM 调用
+    -> 返回 AgentRunResult
+```
+
+具体规定：
+
+- 保留当前按账户提交到 `ThreadPoolExecutor` 的模式；
+- `AGENT_MAX_CONCURRENCY` 继续控制同时运行的账户数量；
+- 每个 worker 使用独立数据库 Session/UoW，并在 `finally` 中关闭；
+- Agent、Tool、Provider 和 Trade Gateway 对系统都暴露同步接口；
+- 系统不使用 asyncio task 调度 Agent，也不管理 Agent 内部 event loop。
+
+如果外部开发者希望在自己的 Agent 内并发调用多个模型或子任务，可以自行在线程池 worker 内实现：
+
+```python
+class ExternalAgent:
+    def run(self, context: DecisionContext) -> AgentRunResult:
+        # 可以在这里自行使用 asyncio 或自己的线程池
+        # 但最终必须同步返回 AgentRunResult
+        return self._run_with_internal_concurrency(context)
+```
+
+这属于扩展内部实现，系统不提供适配和兼容保证。`run()`、`Tool.invoke()` 或 Provider 方法如果直接返回 coroutine/awaitable，系统会将其视为接口错误，而不是自动执行。
 
 ## 9. 账户如何选择 Agent、工具和 Prompt
 
@@ -398,7 +442,7 @@ Agent 工具调用的幂等键使用：
 - memory、tool routing、rule-aware 等账户能力继续生效；
 - Hyperliquid、Alpaca、Pinecone、Chroma、Docker 和 OpenAI-compatible provider 不替换；
 - 交易品种、手续费、杠杆、持仓、撮合和市场状态规则不改变；
-- 自动交易周期、并发限制和非重叠执行不改变；
+- 自动交易周期、账户线程池并发限制和非重叠执行不改变；
 - 当前页面、账户切换、资产曲线、Trace、评测和合规功能不改变。
 
 ### 10.2 通过迁移保持兼容的配置
@@ -656,4 +700,3 @@ M23 前端 API/WS 数据边界
 - 修改评测指标定义。
 
 本轮的判断标准很直接：系统能力保持不变，但新增或替换 Agent、工具和 Prompt 时，不再需要修改核心源码。
-

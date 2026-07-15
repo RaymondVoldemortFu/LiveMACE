@@ -15,15 +15,16 @@
 实现公共规范 `TradeCommandGateway.execute()`。另设内部订单接口：
 
 ```python
-async def create_order(command: CreateOrderCommand) -> OrderCommandResult
-async def cancel_order(command: CancelOrderCommand) -> OrderCommandResult
-async def process_pending(command: ProcessPendingOrders) -> ProcessingResult
+def create_order(command: CreateOrderCommand) -> OrderCommandResult
+def cancel_order(command: CancelOrderCommand) -> OrderCommandResult
+def process_pending(command: ProcessPendingOrders) -> ProcessingResult
 ```
 
 ## TODO
 
 - [ ] 将 symbol/market、market status、price、operation、direction、sizing、leverage 校验归一为 policy，但不改变规则值。
 - [ ] Gateway 以 UoW 开启单个写事务；失败 rollback，返回结构化 reject。
+- [ ] Gateway 暴露同步接口并在返回前完成事务；Agent 工具必须等待结果，不存在后台延迟提交。
 - [ ] `idempotency_key` 在同一账户重复调用返回首个结果，不再次修改账本；设计持久化或事务内唯一约束方案。
 - [ ] 普通 MARKET/LIMIT 继续使用 `order_matching`，杠杆 Crypto 继续使用现有 executor；gateway 只编排。
 - [ ] `execute_trade_tool()` 缩为参数 adapter，最终在 M06 由 `core.execute_trade` 替换。
@@ -40,4 +41,3 @@ async def process_pending(command: ProcessPendingOrders) -> ProcessingResult
 ## 前置与并行
 
 前置 M00、M01；可与 Agent/Tool/Prompt runtime 并行。M06、M10、M21 依赖。
-

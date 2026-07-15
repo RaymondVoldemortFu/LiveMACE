@@ -22,13 +22,13 @@ class UnitOfWork(Protocol):
     traces: TraceRepository
     snapshots: SnapshotRepository
     evaluations: EvaluationRepository
-    async def __aenter__(self) -> "UnitOfWork": ...
-    async def __aexit__(self, exc_type, exc, tb) -> None: ...
-    async def commit(self) -> None: ...
-    async def rollback(self) -> None: ...
+    def __enter__(self) -> "UnitOfWork": ...
+    def __exit__(self, exc_type, exc, tb) -> None: ...
+    def commit(self) -> None: ...
+    def rollback(self) -> None: ...
 ```
 
-当前 SQLAlchemy 是同步的，adapter 可用同步 UoW + application thread boundary；不得假装 async session。若采用同步接口，必须在 M01 规范修订中统一，不能混合。
+当前 SQLAlchemy 和 Agent worker 都采用同步模型，因此 UoW 只提供同步 context manager。不得增加 async session 假象或在 repository 中切换线程。
 
 ## TODO
 
@@ -36,6 +36,7 @@ class UnitOfWork(Protocol):
 - [ ] 补齐 Trade/Decision/Trace/Snapshot/Evaluation repository。
 - [ ] SQLAlchemy UoW 拥有且关闭 session；repository 不自行 commit。
 - [ ] request、scheduler、decision worker、trade gateway 的 session scope 分别测试。
+- [ ] 每个账户 worker 独立创建和关闭 UoW；同一 UoW 不得跨线程复用。
 - [ ] 对账户配置并发更新、pending order 处理提供 row lock/乐观锁接口。
 - [ ] 保留 SQLite NullPool 与 MySQL pool 配置；连接创建不移入 repository。
 - [ ] import boundary test：repositories 不 import FastAPI、Agent、market provider、WebSocket。
@@ -50,4 +51,3 @@ class UnitOfWork(Protocol):
 ## 前置与并行
 
 前置 M01。各 repository domain 可并行；M12 涉及账户配置表，需协调后串行合并 model 变更。
-

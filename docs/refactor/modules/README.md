@@ -2,13 +2,15 @@
 
 本目录是 Open Alpha Arena 结构重构的实施任务清单。它不修改或替代 `docs/refactor/0000-0010`，而是把现有 RFC 和 `docs/current_system_architecture_analysis.md` 落成可以由不同开发者独立认领的代码任务。
 
-团队评审时可先阅读 [重构方案说明](refactor-explanation-for-team.md)，再按需查看公共接口规范和各模块任务。
+团队评审时可先阅读 [重构方案说明](refactor-explanation-for-team.md)，开发排期和任务认领参考 [模块分组与并行开发计划](module-groups.md)，再按需查看公共接口规范和各模块任务。
 
 ## 固定约束
 
 - 只调整代码结构、接口、配置入口和依赖方向，不改变交易、行情、评测、前端展示等现有功能。
 - 删除 Legacy JSON 决策路径：删除 `call_ai_for_decision()`、`AgentConfig.USE_AGENT` 分支及对应 legacy dispatcher；不提供兼容层。
 - 现有 ReAct、MultiAgent、AdvancedMultiAgent、RuleAware、buy-hold、grid 行为必须保持。
+- 保留当前系统使用 `ThreadPoolExecutor` 按账户并行运行 Agent 的逻辑；Agent、Tool、Provider 和交易接口对系统保持同步。
+- 外部 Agent 如需内部异步或额外线程，必须自行封装在同步 `run()` 中；系统不提供异步 SPI 或兼容层。
 - 后端继续是账户、订单、成交、持仓与资金的唯一事实源。
 - 扩展不得直接获得 SQLAlchemy `Session`，不得直接修改 ORM 交易实体。
 - 开源用户应能只通过 manifest、配置文件、Prompt 文件和公开 Python 接口完成 Agent、Tool、Prompt 的替换或扩展。
@@ -26,6 +28,8 @@
 6. 必须报告运行过的测试；外部 provider 测试必须标记为 integration。
 
 ## 依赖批次与并行安排
+
+下图表达 Module 依赖；团队实际分组、开发波次和高冲突文件 Owner 以 [模块分组与并行开发计划](module-groups.md) 为准。
 
 ```mermaid
 flowchart TD

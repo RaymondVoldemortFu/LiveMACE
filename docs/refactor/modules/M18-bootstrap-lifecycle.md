@@ -18,6 +18,8 @@ async def bootstrap_runtime(context: BootstrapContext) -> RuntimeHandle
 async def shutdown_runtime(handle: RuntimeHandle) -> None
 ```
 
+这里的 async 只用于 FastAPI lifespan/服务启停，不是 Agent SPI，也不参与账户 Agent 调度。后台自动交易仍调用同步 `DecisionRoundService`，由其内部 `ThreadPoolExecutor` 并行账户 worker。
+
 `StartupMode`: `FULL`、`NO_BACKGROUND`、`SCHEMA_ONLY`。生产默认 FULL；测试显式传 mode，不通过隐藏环境判断。
 
 ## TODO
@@ -40,4 +42,3 @@ async def shutdown_runtime(handle: RuntimeHandle) -> None
 ## 前置与并行
 
 前置 M00。可早期独立实施；与 M13 集成 extension catalog 的调用点时只依赖其 facade。
-

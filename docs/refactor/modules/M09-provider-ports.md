@@ -2,7 +2,7 @@
 
 ## 交付目标
 
-建立 Agent/Tool 依赖的基础设施接口，让第三方扩展只依赖 port，不直接依赖 OpenAI SDK、Pinecone、Alpaca、Hyperliquid 或 Docker SDK。本任务定义接口和现有实现 adapter 骨架，不改变 provider 行为。
+建立 Agent/Tool 依赖的同步基础设施接口，让第三方扩展只依赖 port，不直接依赖 OpenAI SDK、Pinecone、Alpaca、Hyperliquid 或 Docker SDK。本任务定义接口和现有实现 adapter 骨架，不改变 provider 行为。
 
 ## 文件边界
 
@@ -17,6 +17,8 @@
 ## TODO
 
 - [ ] 定义 LLM request/response/tool-call DTO，隔离 OpenAI SDK object。
+- [ ] 所有 Provider port 对系统暴露同步方法；现有同步实现不套 async adapter。
+- [ ] Provider 返回 coroutine/awaitable 视为接口违规。第三方内部使用异步时必须自行运行并同步返回，系统不管理 event loop。
 - [ ] `LLMClient` adapter 保留 retry、Gemini/Grok tool-call normalization 和错误状态码映射。
 - [ ] 为 Local/Chroma/Pinecone memory 提供同一 adapter；account namespace 行为保持。
 - [ ] 为 Hyperliquid/Alpaca 定义 market adapter；不在 port 中暴露 provider-specific feed 参数。
@@ -29,9 +31,9 @@
 
 - Agent/Tool 公共包的 import graph 不包含 openai/pinecone/alpaca/docker。
 - 每个现有 provider adapter 通过契约测试；真实网络测试标 integration。
+- Provider 契约测试验证同步返回和 awaitable 拒绝。
 - 现有 provider 的 timeout、retry、fallback、数据格式不变。
 
 ## 前置与并行
 
 前置 M01。四类 port/adapter 可并行；M06、M20 使用这些接口。
-
