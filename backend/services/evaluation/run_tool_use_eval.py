@@ -9,7 +9,7 @@ from typing import Any, Dict, List
 from database.connection import get_db
 from services.evaluation.data_loader import EvaluationDataLoader
 from services.evaluation.tool_use_evaluator import ToolUseMetricsEvaluator, descriptive_stats
-from services.evaluation.llm_tool_judge import LLMToolJudgeEvaluator
+from services.evaluation.llm_tool_judge import LLMToolJudgeEvaluator, compute_routing_quality_from_steps
 from services.agent.llm_client import LLMClient
 from services.agent.env_wrapper import register_default_tools
 from services.agent.public_apis_registry import register_public_api_tools
@@ -267,6 +267,7 @@ def _print_startup_config(
     judge_base_url: str,
     judge_api_key: str,
     eval_accounts: List[Any],
+    objective_only: bool,
 ) -> None:
     configured_workers = (os.getenv("EVAL_MAX_WORKERS", "").strip() or "auto")
     default_workers = 5
@@ -282,6 +283,7 @@ def _print_startup_config(
     print(f"EVAL_LLM_TIMEOUT_SEC: {(os.getenv('EVAL_LLM_TIMEOUT_SEC') or '90').strip()}")
     print(f"EVAL_LLM_TIMEOUT_RETRIES: {(os.getenv('EVAL_LLM_TIMEOUT_RETRIES') or '2').strip()}")
     print(f"EVAL_MAX_WORKERS: {configured_workers}")
+    print(f"EVAL_OBJECTIVE_ONLY: {'yes' if objective_only else 'no'}")
     print("worker_policy: global workers = min(16, configured_or_default, total_trace_jobs), and at least 1")
     print(f"worker_upper_bound_before_trace_count: {upper_bound}")
     print(f"accounts_to_evaluate: {len(eval_accounts)}")
@@ -295,11 +297,15 @@ def _get_thread_local_evaluators(
     judge_api_key: str,
     judge_base_url: str,
     judge_prompt: str,
+    objective_only: bool,
 ):
     if not hasattr(_THREAD_LOCAL, "objective_eval"):
         _THREAD_LOCAL.objective_eval = ToolUseMetricsEvaluator()
         _THREAD_LOCAL.judge_key = None
         _THREAD_LOCAL.llm_judge = None
+
+    if objective_only:
+        return _THREAD_LOCAL.objective_eval, None
 
     judge_key = (
         judge_model or "",
@@ -325,6 +331,7 @@ def _evaluate_trace_job(
     judge_api_key: str,
     judge_base_url: str,
     judge_prompt: str,
+    objective_only: bool,
 ) -> Dict[str, Any]:
     trace_dict = {"trace_id": trace_id, "steps": steps}
 
@@ -333,6 +340,7 @@ def _evaluate_trace_job(
         judge_api_key=judge_api_key,
         judge_base_url=judge_base_url,
         judge_prompt=judge_prompt,
+        objective_only=objective_only,
     )
 
     def _local_schema_resolver(tool_name: str):
@@ -346,7 +354,12 @@ def _evaluate_trace_job(
         },
         {},
     )
-    judge_metrics = llm_judge.evaluate({"trace": trace_dict, "account_info": account_info}, {})
+    if objective_only:
+        judge_metrics = {
+            "routing_quality": compute_routing_quality_from_steps(steps),
+        }
+    else:
+        judge_metrics = llm_judge.evaluate({"trace": trace_dict, "account_info": account_info}, {})
 
     return {
         "trace_id": trace_id,
@@ -369,6 +382,12 @@ def run():
     judge_model = os.getenv("EVAL_LLM_MODEL", "gpt-4o-mini")
     judge_api_key = os.getenv("EVAL_LLM_API_KEY", os.getenv("API_KEY"))
     judge_base_url = os.getenv("EVAL_LLM_BASE_URL", os.getenv("BASE_URL"))
+    objective_only = (os.getenv("EVAL_OBJECTIVE_ONLY") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
     judge_prompt_path = os.path.join(
         os.path.dirname(__file__), "sys_prompts_eval", "tool_use_judge.md"
     )
@@ -380,6 +399,7 @@ def run():
         judge_base_url=judge_base_url,
         judge_api_key=judge_api_key,
         eval_accounts=eval_accounts,
+        objective_only=objective_only,
     )
 
     results = []
@@ -449,6 +469,7 @@ def run():
                 judge_api_key,
                 judge_base_url,
                 judge_prompt,
+                objective_only,
             ): job
             for job in all_jobs
         }
@@ -470,18 +491,19 @@ def run():
             judge_metrics = item.get("judge_metrics", {})
 
             key = (job["agent_type"], job["model"])
-            grouped_scores[key]["Tool Relevance Score"].append(
-                judge_metrics.get("judge_parsed", {}).get("Tool Relevance Score", 0)
-            )
-            grouped_scores[key]["Tool Timing / Budgeting Score"].append(
-                judge_metrics.get("judge_parsed", {}).get("Tool Timing / Budgeting Score", 0)
-            )
-            grouped_scores[key]["Information Coverage Score"].append(
-                judge_metrics.get("judge_parsed", {}).get("Information Coverage Score", 0)
-            )
-            grouped_scores[key]["Synthesis / Faithfulness Score"].append(
-                judge_metrics.get("judge_parsed", {}).get("Synthesis / Faithfulness Score", 0)
-            )
+            if not objective_only:
+                grouped_scores[key]["Tool Relevance Score"].append(
+                    judge_metrics.get("judge_parsed", {}).get("Tool Relevance Score", 0)
+                )
+                grouped_scores[key]["Tool Timing / Budgeting Score"].append(
+                    judge_metrics.get("judge_parsed", {}).get("Tool Timing / Budgeting Score", 0)
+                )
+                grouped_scores[key]["Information Coverage Score"].append(
+                    judge_metrics.get("judge_parsed", {}).get("Information Coverage Score", 0)
+                )
+                grouped_scores[key]["Synthesis / Faithfulness Score"].append(
+                    judge_metrics.get("judge_parsed", {}).get("Synthesis / Faithfulness Score", 0)
+                )
             grouped_scores[key]["Tool Hallucination Rate"].append(
                 objective_metrics.get("summary", {}).get("hallucination_rate", 0)
             )
@@ -494,10 +516,11 @@ def run():
             grouped_scores[key]["Routing Quality Score"].append(
                 (judge_metrics.get("routing_quality") or {}).get("score", 0)
             )
-            token_usage = judge_metrics.get("token_usage", {})
-            token_agg[key]["prompt_tokens"].append(token_usage.get("prompt_tokens", 0))
-            token_agg[key]["completion_tokens"].append(token_usage.get("completion_tokens", 0))
-            token_agg[key]["total_tokens"].append(token_usage.get("total_tokens", 0))
+            if not objective_only:
+                token_usage = judge_metrics.get("token_usage", {})
+                token_agg[key]["prompt_tokens"].append(token_usage.get("prompt_tokens", 0))
+                token_agg[key]["completion_tokens"].append(token_usage.get("completion_tokens", 0))
+                token_agg[key]["total_tokens"].append(token_usage.get("total_tokens", 0))
 
             results.append(item)
             global_processed += 1
@@ -520,16 +543,18 @@ def run():
         }
         for metric_name, values in metrics.items():
             summary_entry[metric_name] = descriptive_stats(values)
-        token_stats = token_agg.get((agent_type, model), {})
-        summary_entry["token_usage"] = {
-            "prompt_tokens": descriptive_stats(token_stats.get("prompt_tokens", [])),
-            "completion_tokens": descriptive_stats(token_stats.get("completion_tokens", [])),
-            "total_tokens": descriptive_stats(token_stats.get("total_tokens", [])),
-        }
+        if not objective_only:
+            token_stats = token_agg.get((agent_type, model), {})
+            summary_entry["token_usage"] = {
+                "prompt_tokens": descriptive_stats(token_stats.get("prompt_tokens", [])),
+                "completion_tokens": descriptive_stats(token_stats.get("completion_tokens", [])),
+                "total_tokens": descriptive_stats(token_stats.get("total_tokens", [])),
+            }
         summary.append(summary_entry)
 
     payload = {
         "generated_at": eval_time,
+        "objective_only": objective_only,
         "results": results,
         "summary": summary,
     }
