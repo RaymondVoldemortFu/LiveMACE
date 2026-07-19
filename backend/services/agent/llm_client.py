@@ -64,6 +64,7 @@ class LLMClient:
         api_key: str,
         base_url: str = None,
         extra_body: Optional[dict[str, Any]] = None,
+        reasoning_effort: Optional[str] = None,
     ):
         """
         model: 比如 "gpt-4.1" / "gemini-2.0-flash"（经兼容网关）
@@ -72,6 +73,7 @@ class LLMClient:
         """
         self.model = model
         self.extra_body = copy.deepcopy(extra_body) if extra_body else None
+        self.reasoning_effort = reasoning_effort
         normalized_base_url = self.normalize_base_url(base_url)
         # OpenAI SDK 解析响应时会丢掉 ChatCompletionMessageFunctionToolCall / Function 上未在 schema 声明的字段，
         # 部分 Gemini 网关把 thought_signature 放在原始 JSON 里；用 httpx 钩子抓取 wire 层 tool_calls 供回传合并。
@@ -218,6 +220,8 @@ class LLMClient:
         request_kwargs["timeout"] = self.default_timeout_seconds if timeout is None else timeout
         if response_format is not None:
             request_kwargs["response_format"] = response_format
+        if self.reasoning_effort:
+            request_kwargs["reasoning_effort"] = self.reasoning_effort
         if self.extra_body:
             request_kwargs["extra_body"] = copy.deepcopy(self.extra_body)
 

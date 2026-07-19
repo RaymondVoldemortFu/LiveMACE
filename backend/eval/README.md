@@ -215,8 +215,9 @@ Generate Rule-Aware Agent statistics directly from SQLite without starting backe
 
 Includes:
 - Account-level summary (all-time and recent 7 days)
+- Final performance metrics from `account_snapshots`: final equity, PnL, return %, max drawdown
 - LLM audit aggregates
-- Trend charts for `s_rule_sat`, `s_audit`, and `final_score`
+- Trend charts for `s_rule_sat`, `s_audit`, `final_score`, and final return %
 
 Quick start:
 

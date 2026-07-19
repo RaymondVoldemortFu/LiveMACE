@@ -121,6 +121,7 @@ def _build_llm_client(
     base_url: Optional[str],
     extra_body_json: Optional[str] = None,
     disable_thinking: bool = False,
+    reasoning_effort: Optional[str] = None,
 ) -> LLMClient:
     """
     Build an LLMClient, falling back to AUDIT_* env vars then API_KEY / BASE_URL.
@@ -154,21 +155,29 @@ def _build_llm_client(
         )
 
     extra_body = _build_audit_extra_body(
+        model=resolved_model,
         extra_body_json=extra_body_json,
+        disable_thinking=disable_thinking,
+    )
+    resolved_reasoning_effort = _resolve_audit_reasoning_effort(
+        model=resolved_model,
+        reasoning_effort=reasoning_effort,
         disable_thinking=disable_thinking,
     )
 
     logger.info(
-        "LLM client: model=%s, base_url=%s%s",
+        "LLM client: model=%s, base_url=%s%s%s",
         resolved_model,
         resolved_url or "(OpenAI official)",
         f", extra_body_keys={sorted(extra_body.keys())}" if extra_body else "",
+        f", reasoning_effort={resolved_reasoning_effort}" if resolved_reasoning_effort else "",
     )
     return LLMClient(
         model=resolved_model,
         api_key=resolved_key,
         base_url=resolved_url,
         extra_body=extra_body,
+        reasoning_effort=resolved_reasoning_effort,
     )
 
 
@@ -184,17 +193,97 @@ def _parse_optional_bool(value: Optional[str]) -> Optional[bool]:
     return None
 
 
+_OPENAI_REASONING_EFFORT_VALUES = {
+    "auto",
+    "none",
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+}
+
+
+def _normalize_reasoning_effort(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    normalized = value.strip().lower().replace("-", "_")
+    if not normalized:
+        return None
+    if normalized not in _OPENAI_REASONING_EFFORT_VALUES:
+        allowed = ", ".join(sorted(_OPENAI_REASONING_EFFORT_VALUES))
+        raise ValueError(f"Invalid reasoning effort '{value}'. Expected one of: {allowed}")
+    return normalized
+
+
+def _is_openai_reasoning_model(model: Optional[str]) -> bool:
+    model_lower = (model or "").strip().lower()
+    return model_lower.startswith(("gpt-5", "o1", "o3", "o4"))
+
+
+def _resolve_thinking_param_style() -> str:
+    return (
+        os.getenv("AUDIT_THINKING_PARAM_STYLE")
+        or os.getenv("EVAL_LLM_THINKING_PARAM_STYLE")
+        or ""
+    ).strip().lower().replace("-", "_")
+
+
+def _should_disable_thinking(disable_thinking: bool) -> bool:
+    env_disable = _parse_optional_bool(os.getenv("AUDIT_DISABLE_THINKING"))
+    env_enable = _parse_optional_bool(
+        os.getenv("AUDIT_ENABLE_THINKING") or os.getenv("EVAL_LLM_ENABLE_THINKING")
+    )
+    return disable_thinking or env_disable is True or env_enable is False
+
+
+def _resolve_audit_reasoning_effort(
+    *,
+    model: Optional[str],
+    reasoning_effort: Optional[str] = None,
+    disable_thinking: bool = False,
+) -> Optional[str]:
+    """
+    Resolve OpenAI-native reasoning_effort for Chat Completions.
+
+    For GPT-5/o-series models, --disable-thinking means reasoning_effort=none.
+    Non-OpenAI thinking toggles remain in extra_body via _build_audit_extra_body.
+    """
+    explicit = _normalize_reasoning_effort(
+        reasoning_effort
+        or os.getenv("AUDIT_REASONING_EFFORT")
+        or os.getenv("EVAL_LLM_REASONING_EFFORT")
+    )
+    if explicit:
+        return explicit
+
+    style = _resolve_thinking_param_style()
+    if _should_disable_thinking(disable_thinking) and (
+        style in {"openai", "reasoning", "reasoning_effort"}
+        or (not style and _is_openai_reasoning_model(model))
+    ):
+        return "none"
+
+    return None
+
+
 def _build_audit_extra_body(
     *,
+    model: Optional[str] = None,
     extra_body_json: Optional[str] = None,
     disable_thinking: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """
     Build provider-specific OpenAI-compatible request body extensions.
 
-    For Qwen3/Qwen3.5 thinking models, DashScope-style compatible endpoints use
-    extra_body={"enable_thinking": false}. vLLM-style endpoints may instead
-    require extra_body={"chat_template_kwargs": {"enable_thinking": false}}.
+    Provider-specific thinking toggles are not standardized across OpenAI-compatible
+    gateways. This helper supports the local cases we use:
+    - Qwen3/Qwen3.5 / DashScope-style:
+      extra_body={"enable_thinking": false}
+    - vLLM-style Qwen gateways:
+      extra_body={"chat_template_kwargs": {"enable_thinking": false}}
+    - DeepSeek V4 OpenAI-compatible API:
+      extra_body={"thinking": {"type": "disabled"}}
     """
     raw_extra_body = (
         extra_body_json
@@ -211,23 +300,25 @@ def _build_audit_extra_body(
             raise ValueError("--extra-body-json / AUDIT_EXTRA_BODY_JSON must be a JSON object")
         extra_body.update(parsed)
 
-    env_disable = _parse_optional_bool(os.getenv("AUDIT_DISABLE_THINKING"))
-    env_enable = _parse_optional_bool(
-        os.getenv("AUDIT_ENABLE_THINKING") or os.getenv("EVAL_LLM_ENABLE_THINKING")
-    )
-    should_disable_thinking = (
-        disable_thinking
-        or env_disable is True
-        or env_enable is False
-    )
+    should_disable_thinking = _should_disable_thinking(disable_thinking)
 
     if should_disable_thinking:
-        style = (
-            os.getenv("AUDIT_THINKING_PARAM_STYLE")
-            or os.getenv("EVAL_LLM_THINKING_PARAM_STYLE")
-            or "top_level"
-        ).strip().lower().replace("-", "_")
-        if style in {"vllm", "chat_template", "chat_template_kwargs"}:
+        style = _resolve_thinking_param_style()
+        model_lower = (model or "").strip().lower()
+        if not style:
+            if _is_openai_reasoning_model(model):
+                style = "openai"
+            else:
+                style = "deepseek" if "deepseek" in model_lower else "top_level"
+
+        if style in {"openai", "reasoning", "reasoning_effort"}:
+            pass
+        elif style in {"deepseek", "deepseek_v4"}:
+            thinking = extra_body.setdefault("thinking", {})
+            if not isinstance(thinking, dict):
+                raise ValueError("extra_body.thinking must be a JSON object")
+            thinking["type"] = "disabled"
+        elif style in {"vllm", "chat_template", "chat_template_kwargs"}:
             chat_template_kwargs = extra_body.setdefault("chat_template_kwargs", {})
             if not isinstance(chat_template_kwargs, dict):
                 raise ValueError("extra_body.chat_template_kwargs must be a JSON object")
@@ -238,6 +329,10 @@ def _build_audit_extra_body(
             if not isinstance(chat_template_kwargs, dict):
                 raise ValueError("extra_body.chat_template_kwargs must be a JSON object")
             chat_template_kwargs["enable_thinking"] = False
+            thinking = extra_body.setdefault("thinking", {})
+            if not isinstance(thinking, dict):
+                raise ValueError("extra_body.thinking must be a JSON object")
+            thinking["type"] = "disabled"
         else:
             # Default: DashScope/Qwen OpenAI-compatible style.
             extra_body["enable_thinking"] = False
@@ -563,6 +658,44 @@ def _write_output_files(
         writer.writerows(results)
 
 
+def _load_existing_results(output_dir: Path) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Load a previous results.json checkpoint from output_dir."""
+    results_path = output_dir / "results.json"
+    if not results_path.exists():
+        return [], {}
+
+    with results_path.open("r", encoding="utf-8") as f:
+        payload = json.load(f)
+
+    if not isinstance(payload, dict):
+        raise ValueError(f"Invalid checkpoint format in {results_path}: root must be an object")
+
+    results = payload.get("results", [])
+    meta = payload.get("meta", {})
+    if not isinstance(results, list):
+        raise ValueError(f"Invalid checkpoint format in {results_path}: 'results' must be a list")
+    if not isinstance(meta, dict):
+        meta = {}
+    return results, meta
+
+
+def _extract_completed_record_ids(results: List[Dict[str, Any]]) -> set[int]:
+    completed: set[int] = set()
+    for entry in results:
+        try:
+            completed.add(int(entry.get("record_id")))
+        except (TypeError, ValueError):
+            continue
+    return completed
+
+
+def _parse_int_like(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Main processing loop
 # ─────────────────────────────────────────────────────────────────────────────
@@ -574,12 +707,15 @@ def run_offline_audit(
     base_url: Optional[str] = None,
     extra_body_json: Optional[str] = None,
     disable_thinking: bool = False,
+    reasoning_effort: Optional[str] = None,
     rules_dir: Optional[str] = None,
     account_id: Optional[int] = None,
     limit: int = 0,
     dry_run: bool = False,
     force_reaudit: bool = False,
     output_dir: Optional[str] = None,
+    resume: bool = False,
+    checkpoint_every: int = 1,
 ) -> None:
     """
     Main entry point (also callable from other scripts).
@@ -589,7 +725,10 @@ def run_offline_audit(
         api_key:        Override API key.
         base_url:       Override API base URL.
         extra_body_json:Provider-specific extra JSON body for chat.completions.
-        disable_thinking:Disable Qwen-style thinking mode via extra_body.
+        disable_thinking:Disable thinking. GPT-5/o-series use reasoning_effort=none;
+                         Qwen/DeepSeek use provider-specific extra_body.
+        reasoning_effort:
+                         OpenAI-native reasoning_effort override, e.g. "none".
         rules_dir:      Override path to rule JSON files.
         account_id:     Restrict to a specific account (None = all accounts).
         limit:          Max records to process per run (0 = unlimited).
@@ -598,6 +737,12 @@ def run_offline_audit(
         output_dir:     Optional directory for JSON/CSV outputs. If dry_run=True
                         and output_dir is omitted, a timestamped directory is
                         created under eval_output/offline_llm_audit_<ts>/.
+        resume:         Resume from output_dir/results.json and skip record_ids
+                        already completed successfully.
+        checkpoint_every:
+                        Persist JSON/CSV checkpoints every N newly completed
+                        records when output_dir is available. Set 0 to disable
+                        intermediate checkpoint writes.
     """
     rule_engine = _build_rule_engine(rules_dir)
     llm_client = _build_llm_client(
@@ -606,6 +751,7 @@ def run_offline_audit(
         base_url,
         extra_body_json=extra_body_json,
         disable_thinking=disable_thinking,
+        reasoning_effort=reasoning_effort,
     )
     auditor = LLMAuditor(llm_client)
     rule_documents = rule_engine.format_rules_for_prompt()
@@ -619,6 +765,8 @@ def run_offline_audit(
     elif dry_run:
         ts_str = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         out_path = _THIS_DIR / "eval_output" / f"offline_llm_audit_{ts_str}"
+    if resume and out_path is None:
+        raise ValueError("--resume requires --output-dir.")
 
     if out_path is not None:
         logger.info("Output directory: %s", out_path)
@@ -629,6 +777,21 @@ def run_offline_audit(
     results_out: List[Dict[str, Any]] = []
     try:
         account_map: Dict[int, Account] = {a.id: a for a in db.query(Account).all()}
+        completed_record_ids: set[int] = set()
+        success = 0
+        failed = 0
+        since_last_checkpoint = 0
+
+        if resume and out_path is not None:
+            results_out, existing_meta = _load_existing_results(out_path)
+            completed_record_ids = _extract_completed_record_ids(results_out)
+            success = len(results_out)
+            failed = _parse_int_like(existing_meta.get("total_failed"), default=0)
+            logger.info(
+                "Resume mode: loaded %d completed result(s) from %s.",
+                success,
+                out_path / "results.json",
+            )
 
         # ── Query records that need auditing ──────────────────────────────────
         q = db.query(RuleEvaluationResult)
@@ -637,23 +800,35 @@ def run_offline_audit(
         if not force_reaudit:
             q = q.filter(RuleEvaluationResult.llm_audit_score.is_(None))
         q = q.order_by(RuleEvaluationResult.ts.asc())
-        if limit > 0:
-            q = q.limit(limit)
-
         records = q.all()
+        skipped_completed = 0
+        if completed_record_ids:
+            before_filter = len(records)
+            records = [record for record in records if record.id not in completed_record_ids]
+            skipped_completed = before_filter - len(records)
+        if limit > 0:
+            records = records[:limit]
         total = len(records)
         logger.info(
-            "Found %d record(s) to audit%s.",
+            "Found %d record(s) to audit%s%s.",
             total,
             " (dry-run, no DB writes)" if dry_run else "",
+            f"; skipped {skipped_completed} already completed via --resume" if skipped_completed else "",
         )
 
         if total == 0:
             logger.info("Nothing to do.")
+            if out_path is not None and results_out:
+                summary = _compute_summary(results_out)
+                _write_output_files(
+                    out_path,
+                    results_out,
+                    summary,
+                    success=success,
+                    failed=failed,
+                    write_db=write_db,
+                )
             return
-
-        success = 0
-        failed = 0
 
         for i, record in enumerate(records, 1):
             trace_id = record.trace_id
@@ -704,10 +879,13 @@ def run_offline_audit(
                 continue
 
             # ── Persist results ───────────────────────────────────────────────
-            results_out.append(_build_result_entry(record, llm_audit, account_map))
+            result_entry = _build_result_entry(record, llm_audit, account_map)
 
             if write_db:
                 _write_audit_back(db, record, llm_audit)
+
+            results_out.append(result_entry)
+            completed_record_ids.add(record.id)
 
             score = llm_audit.get("final_normalized_score", 0)
             cov = (llm_audit.get("coverage") or {}).get("score", "?")
@@ -718,6 +896,23 @@ def run_offline_audit(
                 "  [not written to DB]" if not write_db else "",
             )
             success += 1
+            since_last_checkpoint += 1
+
+            if (
+                out_path is not None
+                and checkpoint_every > 0
+                and since_last_checkpoint >= checkpoint_every
+            ):
+                summary = _compute_summary(results_out)
+                _write_output_files(
+                    out_path,
+                    results_out,
+                    summary,
+                    success=success,
+                    failed=failed,
+                    write_db=write_db,
+                )
+                since_last_checkpoint = 0
 
         if out_path is not None:
             summary = _compute_summary(results_out)
@@ -734,6 +929,20 @@ def run_offline_audit(
             "Offline audit complete: %d succeeded, %d failed / skipped (total %d).",
             success, failed, total,
         )
+
+    except KeyboardInterrupt:
+        if out_path is not None and results_out:
+            logger.warning("Interrupted. Writing checkpoint to %s before exit.", out_path)
+            summary = _compute_summary(results_out)
+            _write_output_files(
+                out_path,
+                results_out,
+                summary,
+                success=success,
+                failed=failed,
+                write_db=write_db,
+            )
+        raise
 
     finally:
         db.close()
@@ -791,8 +1000,19 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         dest="disable_thinking",
         help=(
-            "Disable Qwen-style thinking mode by adding extra_body "
-            '{"enable_thinking": false}. Equivalent env: AUDIT_ENABLE_THINKING=False.'
+            "Disable thinking for faster audits. GPT-5/o-series use "
+            'reasoning_effort="none"; Qwen/DeepSeek use provider-specific '
+            "extra_body. Equivalent env: AUDIT_ENABLE_THINKING=False."
+        ),
+    )
+    parser.add_argument(
+        "--reasoning-effort",
+        default=None,
+        dest="reasoning_effort",
+        choices=sorted(_OPENAI_REASONING_EFFORT_VALUES),
+        help=(
+            "OpenAI-native reasoning_effort for Chat Completions. "
+            'Use "none" to disable GPT-5.5 reasoning/thinking.'
         ),
     )
     parser.add_argument(
@@ -857,6 +1077,25 @@ def _parse_args() -> argparse.Namespace:
             "is enabled, existing llm_audit_* fields are overwritten."
         ),
     )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        dest="resume",
+        help=(
+            "Resume from an existing output directory by loading results.json "
+            "and skipping already completed record_ids."
+        ),
+    )
+    parser.add_argument(
+        "--checkpoint-every",
+        type=int,
+        default=1,
+        dest="checkpoint_every",
+        help=(
+            "Persist checkpoint files every N newly completed records when an "
+            "output directory is available. Set 0 to disable intermediate writes."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -869,10 +1108,13 @@ if __name__ == "__main__":
         base_url=args.base_url,
         extra_body_json=args.extra_body_json,
         disable_thinking=args.disable_thinking,
+        reasoning_effort=args.reasoning_effort,
         rules_dir=args.rules_dir,
         account_id=args.account_id,
         limit=args.limit,
         dry_run=dry_run,
         force_reaudit=args.force_reaudit,
         output_dir=args.output_dir,
+        resume=args.resume,
+        checkpoint_every=args.checkpoint_every,
     )

@@ -34,6 +34,7 @@ import json
 import logging
 import os
 import sys
+import time
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -90,8 +91,12 @@ from services.agent.llm_client import LLMClient
 from eval.offline_llm_audit import (
     _build_rule_engine,
     _build_llm_client,
+    _OPENAI_REASONING_EFFORT_VALUES,
     _reconstruct_agent_output,
     _build_market_state,
+    _load_existing_results,
+    _extract_completed_record_ids,
+    _parse_int_like,
 )
 
 try:
@@ -107,6 +112,14 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger("offline_llm_audit_rule_informed")
+
+
+def _audit_json_retry_attempts() -> int:
+    """Retry transient non-JSON audit responses such as upstream 'ok' replies."""
+    try:
+        return max(1, int(os.getenv("AUDIT_JSON_RETRY_ATTEMPTS", "3")))
+    except ValueError:
+        return 3
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -306,6 +319,7 @@ def _audit_with_rule_context(
     market_state: Dict[str, Any],
     rule_context: str,
     agent_output: str,
+    _attempt: int = 1,
 ) -> Dict[str, Any]:
     """Run the rule-informed LLM audit. Returns coverage/conflict/final or 'error'."""
     portfolio = market_state.get("portfolio", {})
@@ -352,8 +366,11 @@ def _audit_with_rule_context(
     ]
 
     try:
-        response = llm_client.call(messages)
-        response_text = response.content.strip()
+        response = llm_client.call(
+            messages,
+            response_format={"type": "json_object"},
+        )
+        response_text = llm_client.extract_text_content(response)
 
         if "```json" in response_text:
             response_text = response_text.split("```json")[1].split("```")[0].strip()
@@ -382,8 +399,51 @@ def _audit_with_rule_context(
         return result
 
     except json.JSONDecodeError as exc:
-        logger.error("JSON parse error: %s", exc)
+        max_attempts = _audit_json_retry_attempts()
+        raw_prefix = response_text[:500] if "response_text" in locals() else None
+        if _attempt < max_attempts:
+            logger.warning(
+                "JSON parse error on attempt %d/%d: %s; raw prefix: %r",
+                _attempt,
+                max_attempts,
+                exc,
+                raw_prefix,
+            )
+            time.sleep(min(2.0, 0.5 * _attempt))
+            return _audit_with_rule_context(
+                llm_client,
+                rules,
+                market_state,
+                rule_context,
+                agent_output,
+                _attempt=_attempt + 1,
+            )
+        logger.error("JSON parse error after %d attempt(s): %s", max_attempts, exc)
+        logger.error("Raw audit response prefix: %r", raw_prefix)
         return {"error": f"JSON parse failed: {exc}"}
+    except ValueError as exc:
+        max_attempts = _audit_json_retry_attempts()
+        raw_prefix = response_text[:500] if "response_text" in locals() else None
+        if _attempt < max_attempts:
+            logger.warning(
+                "Invalid audit JSON on attempt %d/%d: %s; raw prefix: %r",
+                _attempt,
+                max_attempts,
+                exc,
+                raw_prefix,
+            )
+            time.sleep(min(2.0, 0.5 * _attempt))
+            return _audit_with_rule_context(
+                llm_client,
+                rules,
+                market_state,
+                rule_context,
+                agent_output,
+                _attempt=_attempt + 1,
+            )
+        logger.error("Invalid audit JSON after %d attempt(s): %s", max_attempts, exc)
+        logger.error("Raw audit response prefix: %r", raw_prefix)
+        return {"error": str(exc)}
     except Exception as exc:
         logger.error("Audit call failed: %s", exc, exc_info=True)
         return {"error": str(exc)}
@@ -479,6 +539,55 @@ def _save_csv(
         writer.writeheader()
         writer.writerows(results)
     logger.info("Results CSV: %s", results_path)
+
+
+def _write_output_bundle(
+    results: List[Dict[str, Any]],
+    summary: List[Dict[str, Any]],
+    output_dir: Path,
+    *,
+    success: int,
+    failed: int,
+    write_db: bool,
+    account_map: Dict[int, Account],
+    no_charts: bool,
+    print_summary: bool = False,
+    write_charts: bool = False,
+) -> None:
+    """Write JSON/CSV outputs and, optionally, charts/console summary."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    results_path = output_dir / "results.json"
+    with results_path.open("w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "meta": {
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                    "audit_variant": "rule_informed",
+                    "total_processed": success,
+                    "total_failed": failed,
+                    "write_db": write_db,
+                    "database_url": DATABASE_URL,
+                },
+                "results": results,
+            },
+            f,
+            ensure_ascii=False,
+            indent=2,
+        )
+    logger.info("Results JSON: %s", results_path)
+
+    summary_path = output_dir / "summary.json"
+    with summary_path.open("w", encoding="utf-8") as f:
+        json.dump(summary, f, ensure_ascii=False, indent=2)
+    logger.info("Summary JSON: %s", summary_path)
+
+    _save_csv(results, summary, output_dir)
+
+    if print_summary:
+        _print_summary(summary)
+    if write_charts and not no_charts:
+        _plot_results(results, account_map, output_dir)
 
 
 def _print_summary(summary: List[Dict[str, Any]]) -> None:
@@ -635,6 +744,7 @@ def run_rule_informed_audit(
     base_url: Optional[str] = None,
     extra_body_json: Optional[str] = None,
     disable_thinking: bool = False,
+    reasoning_effort: Optional[str] = None,
     rules_dir: Optional[str] = None,
     account_id: Optional[int] = None,
     limit: int = 0,
@@ -642,6 +752,8 @@ def run_rule_informed_audit(
     write_db: bool = False,
     force_reaudit: bool = False,
     no_charts: bool = False,
+    resume: bool = False,
+    checkpoint_every: int = 1,
 ) -> None:
     """
     Main entry point.
@@ -651,7 +763,11 @@ def run_rule_informed_audit(
         api_key:      Override API key.
         base_url:     Override API base URL.
         extra_body_json: Provider-specific extra JSON body for chat.completions.
-        disable_thinking: Disable Qwen-style thinking mode via extra_body.
+        disable_thinking:
+                      Disable thinking. GPT-5/o-series use reasoning_effort=none;
+                      Qwen/DeepSeek use provider-specific extra_body.
+        reasoning_effort:
+                      OpenAI-native reasoning_effort override, e.g. "none".
         rules_dir:    Override path to rule JSON files.
         account_id:   Restrict to a specific account ID (None = all).
         limit:        Max records to process (0 = unlimited).
@@ -660,6 +776,11 @@ def run_rule_informed_audit(
         write_db:     If True, overwrite llm_audit_* fields in the database.
         force_reaudit:If True, process records that already have llm_audit_score.
         no_charts:    Skip chart generation.
+        resume:       Resume from output_dir/results.json and skip record_ids
+                      already completed successfully.
+        checkpoint_every:
+                      Persist JSON/CSV checkpoints every N newly completed
+                      records. Set 0 to disable intermediate writes.
     """
     rule_engine = _build_rule_engine(rules_dir)
     llm_client = _build_llm_client(
@@ -668,6 +789,7 @@ def run_rule_informed_audit(
         base_url,
         extra_body_json=extra_body_json,
         disable_thinking=disable_thinking,
+        reasoning_effort=reasoning_effort,
     )
     rule_documents = rule_engine.format_rules_for_prompt()
 
@@ -692,6 +814,24 @@ def run_rule_informed_audit(
         account_map: Dict[int, Account] = {
             a.id: a for a in db.query(Account).all()
         }
+        completed_record_ids: set[int] = set()
+        success = 0
+        failed = 0
+        since_last_checkpoint = 0
+
+        if resume:
+            results_out, existing_meta = _load_existing_results(out_path)
+            completed_record_ids = _extract_completed_record_ids(results_out)
+            success = len(results_out)
+            previous_failed = _parse_int_like(existing_meta.get("total_failed"), default=0)
+            failed = 0
+            logger.info(
+                "Resume mode: loaded %d completed result(s) from %s. "
+                "Previous failed count (%d) will be retried and not carried forward.",
+                success,
+                out_path / "results.json",
+                previous_failed,
+            )
 
         # ── Query records ─────────────────────────────────────────────────────
         q = db.query(RuleEvaluationResult)
@@ -700,18 +840,38 @@ def run_rule_informed_audit(
         if not force_reaudit:
             q = q.filter(RuleEvaluationResult.llm_audit_score.is_(None))
         q = q.order_by(RuleEvaluationResult.ts.asc())
-        if limit > 0:
-            q = q.limit(limit)
 
         records = q.all()
+        skipped_completed = 0
+        if completed_record_ids:
+            before_filter = len(records)
+            records = [record for record in records if record.id not in completed_record_ids]
+            skipped_completed = before_filter - len(records)
+        if limit > 0:
+            records = records[:limit]
         total = len(records)
-        logger.info("Found %d record(s) to audit.", total)
+        logger.info(
+            "Found %d record(s) to audit%s.",
+            total,
+            f"; skipped {skipped_completed} already completed via --resume" if skipped_completed else "",
+        )
         if total == 0:
             logger.info("Nothing to do.")
+            if results_out:
+                summary = _compute_summary(results_out, account_map)
+                _write_output_bundle(
+                    results_out,
+                    summary,
+                    out_path,
+                    success=success,
+                    failed=failed,
+                    write_db=write_db,
+                    account_map=account_map,
+                    no_charts=no_charts,
+                    print_summary=True,
+                    write_charts=not no_charts,
+                )
             return
-
-        success = 0
-        failed = 0
 
         for i, record in enumerate(records, 1):
             logger.info(
@@ -774,6 +934,7 @@ def run_rule_informed_audit(
                 "audit_detail": audit_result,
             }
             results_out.append(entry)
+            completed_record_ids.add(record.id)
 
             # ── Optionally write back to DB ───────────────────────────────────
             if write_db:
@@ -790,50 +951,64 @@ def run_rule_informed_audit(
                 db.commit()
 
             success += 1
+            since_last_checkpoint += 1
 
-        # ── Write results JSON ────────────────────────────────────────────────
-        results_path = out_path / "results.json"
-        with results_path.open("w", encoding="utf-8") as f:
-            json.dump(
-                {
-                    "meta": {
-                        "generated_at": datetime.now(timezone.utc).isoformat(),
-                        "total_processed": success,
-                        "total_failed": failed,
-                        "write_db": write_db,
-                    },
-                    "results": results_out,
-                },
-                f,
-                ensure_ascii=False,
-                indent=2,
-            )
-        logger.info("Results JSON: %s", results_path)
+            if checkpoint_every > 0 and since_last_checkpoint >= checkpoint_every:
+                summary = _compute_summary(results_out, account_map)
+                _write_output_bundle(
+                    results_out,
+                    summary,
+                    out_path,
+                    success=success,
+                    failed=failed,
+                    write_db=write_db,
+                    account_map=account_map,
+                    no_charts=no_charts,
+                    print_summary=False,
+                    write_charts=False,
+                )
+                since_last_checkpoint = 0
 
         if not results_out:
             logger.info("No results to summarize or chart.")
             return
 
-        # ── Summary ───────────────────────────────────────────────────────────
         summary = _compute_summary(results_out, account_map)
-        _print_summary(summary)
-
-        summary_path = out_path / "summary.json"
-        with summary_path.open("w", encoding="utf-8") as f:
-            json.dump(summary, f, ensure_ascii=False, indent=2)
-        logger.info("Summary JSON: %s", summary_path)
-
-        # ── CSV exports ───────────────────────────────────────────────────────
-        _save_csv(results_out, summary, out_path)
-
-        # ── Charts ────────────────────────────────────────────────────────────
-        if not no_charts:
-            _plot_results(results_out, account_map, out_path)
+        _write_output_bundle(
+            results_out,
+            summary,
+            out_path,
+            success=success,
+            failed=failed,
+            write_db=write_db,
+            account_map=account_map,
+            no_charts=no_charts,
+            print_summary=True,
+            write_charts=not no_charts,
+        )
 
         logger.info(
             "Done: %d succeeded, %d failed. Output: %s",
             success, failed, out_path,
         )
+
+    except KeyboardInterrupt:
+        if results_out:
+            logger.warning("Interrupted. Writing checkpoint to %s before exit.", out_path)
+            summary = _compute_summary(results_out, account_map)
+            _write_output_bundle(
+                results_out,
+                summary,
+                out_path,
+                success=success,
+                failed=failed,
+                write_db=write_db,
+                account_map=account_map,
+                no_charts=no_charts,
+                print_summary=False,
+                write_charts=False,
+            )
+        raise
 
     finally:
         db.close()
@@ -874,8 +1049,19 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         dest="disable_thinking",
         help=(
-            "Disable Qwen-style thinking mode by adding extra_body "
-            '{"enable_thinking": false}. Equivalent env: AUDIT_ENABLE_THINKING=False.'
+            "Disable thinking for faster audits. GPT-5/o-series use "
+            'reasoning_effort="none"; Qwen/DeepSeek use provider-specific '
+            "extra_body. Equivalent env: AUDIT_ENABLE_THINKING=False."
+        ),
+    )
+    parser.add_argument(
+        "--reasoning-effort",
+        default=None,
+        dest="reasoning_effort",
+        choices=sorted(_OPENAI_REASONING_EFFORT_VALUES),
+        help=(
+            "OpenAI-native reasoning_effort for Chat Completions. "
+            'Use "none" to disable GPT-5.5 reasoning/thinking.'
         ),
     )
     parser.add_argument(
@@ -909,6 +1095,20 @@ def _parse_args() -> argparse.Namespace:
         "--no-charts", action="store_true", dest="no_charts",
         help="Skip PNG chart generation.",
     )
+    parser.add_argument(
+        "--resume", action="store_true", dest="resume",
+        help=(
+            "Resume from an existing output directory by loading results.json "
+            "and skipping already completed record_ids."
+        ),
+    )
+    parser.add_argument(
+        "--checkpoint-every", type=int, default=1, dest="checkpoint_every",
+        help=(
+            "Persist JSON/CSV checkpoints every N newly completed records. "
+            "Set 0 to disable intermediate writes."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -920,6 +1120,7 @@ if __name__ == "__main__":
         base_url=args.base_url,
         extra_body_json=args.extra_body_json,
         disable_thinking=args.disable_thinking,
+        reasoning_effort=args.reasoning_effort,
         rules_dir=args.rules_dir,
         account_id=args.account_id,
         limit=args.limit,
@@ -927,4 +1128,6 @@ if __name__ == "__main__":
         write_db=args.write_db,
         force_reaudit=args.force_reaudit,
         no_charts=args.no_charts,
+        resume=args.resume,
+        checkpoint_every=args.checkpoint_every,
     )

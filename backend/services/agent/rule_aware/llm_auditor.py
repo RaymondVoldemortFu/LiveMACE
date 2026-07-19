@@ -181,8 +181,11 @@ Return ONLY valid JSON with no markdown formatting."""
                 {"role": "user", "content": user_prompt}
             ]
             
-            response = self.llm_client.call(messages)
-            response_text = response.content.strip()
+            response = self.llm_client.call(
+                messages,
+                response_format={"type": "json_object"},
+            )
+            response_text = self.llm_client.extract_text_content(response)
             
             # Log raw response
             logger.debug(f"LLM Auditor raw response: {response_text}")
