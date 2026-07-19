@@ -6,7 +6,7 @@
 
 ## 文件边界
 
-- 新增：`backend/alpha_arena/prompts/{__init__,protocol,registry,loader,renderer,validation,errors}.py`。
+- 新增：`backend/benchmark/prompts/{__init__,protocol,registry,loader,renderer,validation,errors}.py`。
 - 新增 Prompt index schema 与测试 fixtures。
 - 禁止修改：`backend/services/agent/prompts/*.py`、Agent 实现。
 

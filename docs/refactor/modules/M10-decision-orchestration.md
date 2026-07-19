@@ -7,7 +7,7 @@
 ## 文件边界
 
 - 主改：`backend/services/trading_commands.py`、`backend/services/ai_decision_service.py`、`backend/config/agent_config.py`、`backend/services/auto_trader.py`。
-- 新增：`backend/alpha_arena/application/decisions/{service,selection,context_builder}.py`。
+- 新增：`backend/benchmark/application/decisions/{service,selection,context_builder}.py`。
 - 禁止改交易计算、Prompt 文案和 provider 行为。
 
 ## 删除清单

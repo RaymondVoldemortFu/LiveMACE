@@ -6,7 +6,7 @@
 
 ## 文件边界
 
-- 新增：`backend/alpha_arena/persistence/{uow,repositories,views}.py`。
+- 新增：`backend/benchmark/persistence/{uow,repositories,views}.py`。
 - 修改：`backend/repositories/*.py`、`database/connection.py`。
 - 各 service/route 的迁移由其所属任务完成；本任务提供接口和 SQLAlchemy adapter。
 

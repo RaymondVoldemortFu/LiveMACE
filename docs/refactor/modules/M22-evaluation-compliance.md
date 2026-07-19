@@ -7,7 +7,7 @@
 ## 文件边界
 
 - 修改：`backend/services/evaluation/*`、`backend/services/agent/rule_aware` 中 auditor/validator、`api/evaluation_routes.py`、`api/compliance_routes.py`、`api/rule_routes.py`。
-- 新增：`backend/alpha_arena/application/evaluation/`、`compliance/`。
+- 新增：`backend/benchmark/application/evaluation/`、`compliance/`。
 - 不改 metric prompt 文案、评分公式、规则 JSON 内容。
 
 ## 接口

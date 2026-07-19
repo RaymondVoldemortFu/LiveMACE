@@ -6,8 +6,8 @@
 
 ## 文件边界
 
-- 新增：`backend/alpha_arena/providers/{__init__,llm,memory,market,sandbox,health,errors}.py`。
-- 新增：`backend/alpha_arena/infrastructure/adapters/`。
+- 新增：`backend/benchmark/providers/{__init__,llm,memory,market,sandbox,health,errors}.py`。
+- 新增：`backend/benchmark/infrastructure/adapters/`。
 - 现有 provider 文件只允许加 adapter，不重写请求策略。
 
 ## 暴露接口
@@ -25,7 +25,7 @@
 - [ ] 为 `ContainerService` 提供 lease/context adapter，确保释放幂等。
 - [ ] 所有外部异常转 `ProviderError(code, retryable, provider_id)`，禁止泄露 key。
 - [ ] healthcheck 不做写操作；规定 timeout，返回 ok/degraded/unavailable。
-- [ ] fake ports 放在 `alpha_arena.testing`，供第三方契约测试复用。
+- [ ] fake ports 放在 `benchmark.testing`，供第三方契约测试复用。
 
 ## 验收
 

@@ -1,10 +1,7 @@
-"""Public extension API for Open Alpha Arena.
+"""Public extension API for the benchmark framework.
 
 Importing this package must not initialize the application, database, scheduler,
 or any external provider.
 """
 
-from . import contracts
-
-__all__ = ["contracts"]
-
+__all__ = ["agents", "contracts"]

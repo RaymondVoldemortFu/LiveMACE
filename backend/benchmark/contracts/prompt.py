@@ -1,4 +1,4 @@
-"""Public Prompt metadata and rendered content contracts."""
+"""Public benchmark Prompt metadata and rendered content contracts."""
 
 from __future__ import annotations
 
@@ -49,4 +49,3 @@ class RenderedPrompt:
 
 
 __all__ = ["PromptSpec", "RenderedPrompt"]
-

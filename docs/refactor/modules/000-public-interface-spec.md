@@ -1,6 +1,6 @@
 # 公共扩展接口规范 v1
 
-本文冻结模块任务共同实现的公开接口。接口位置以最终包 `alpha_arena` 表示；落地时 Python 源码目录为 `backend/alpha_arena/`。公开接口版本为 `1`，内部模块不得要求扩展导入 `backend/services/*`、SQLAlchemy model 或 FastAPI 对象。
+本文冻结模块任务共同实现的公开接口。接口位置以最终包 `benchmark` 表示；落地时 Python 源码目录为 `backend/benchmark/`。公开接口版本为 `1`，内部模块不得要求扩展导入 `backend/services/*`、SQLAlchemy model 或 FastAPI 对象。
 
 ## 1. 稳定性等级
 
@@ -13,13 +13,13 @@
 公开命名空间仅包括：
 
 ```python
-alpha_arena.contracts
-alpha_arena.agents
-alpha_arena.tools
-alpha_arena.prompts
-alpha_arena.providers
-alpha_arena.extensions
-alpha_arena.testing
+benchmark.contracts
+benchmark.agents
+benchmark.tools
+benchmark.prompts
+benchmark.providers
+benchmark.extensions
+benchmark.testing
 ```
 
 ## 2. 通用类型

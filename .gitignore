@@ -315,6 +315,9 @@ backend/tests/characterization/__pycache__/
 !backend/tests/fakes/
 !backend/tests/fakes/**
 backend/tests/fakes/__pycache__/
+!backend/tests/agents/
+!backend/tests/agents/**
+backend/tests/agents/__pycache__/
 .vscode/
 backend/.DS_Store
 
@@ -335,4 +338,3 @@ backend/script/results/*
 *.sql
 *.docx
 *_report.md
-

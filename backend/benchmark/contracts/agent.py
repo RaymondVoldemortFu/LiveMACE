@@ -1,4 +1,4 @@
-"""Public Agent result contracts."""
+"""Public benchmark Agent result contracts."""
 
 from __future__ import annotations
 

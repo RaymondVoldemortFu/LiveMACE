@@ -29,6 +29,7 @@ dependencies = [
     "brightdata-sdk>=2.3.0",
     "redis",
     "matplotlib>=3.10.8",
+    "jsonschema>=4.0",
 ]
 
 [[tool.uv.index]]
@@ -48,7 +49,7 @@ dev = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["alpha_arena"]
+packages = ["benchmark"]
 
 [tool.pytest.ini_options]
 markers = [

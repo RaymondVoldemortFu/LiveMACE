@@ -7,7 +7,7 @@
 ## 文件边界
 
 - 主改：`services/market_data.py`、`market_kline_service.py`、`hyperliquid_market_data.py`、`alpaca_market_data.py`、`tool_cache.py`、`price_cache.py`、`repositories/kline_repo.py`。
-- 新增：`backend/alpha_arena/infrastructure/market/`、`cache/` adapters。
+- 新增：`backend/benchmark/infrastructure/market/`、`cache/` adapters。
 - 不修改交易规则、前端和调度周期。
 
 ## 内部接口

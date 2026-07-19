@@ -1,4 +1,4 @@
-"""Public Tool description, invocation context, and result contracts."""
+"""Public benchmark Tool description, context, and result contracts."""
 
 from __future__ import annotations
 
@@ -84,4 +84,3 @@ class ToolResult:
 
 
 __all__ = ["SideEffect", "ToolSpec", "ToolContext", "ToolResult"]
-

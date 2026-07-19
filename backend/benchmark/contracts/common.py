@@ -1,4 +1,4 @@
-"""Dependency-free common DTOs used by public extension contracts."""
+"""Dependency-free common DTOs used by benchmark extension contracts."""
 
 from __future__ import annotations
 

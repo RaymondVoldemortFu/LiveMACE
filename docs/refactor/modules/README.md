@@ -87,8 +87,8 @@ flowchart TD
 | ID | 交付模块 | 主要现有文件 | 前置任务 |
 | --- | --- | --- | --- |
 | [M00](M00-characterization-tests.md) | 结构重构行为基线测试 | `backend/test`, `backend/tests` | 无 |
-| [M01](M01-core-contracts.md) | 公共上下文、结果、错误和版本类型 | 新增 `backend/alpha_arena/contracts` | M00 |
-| [M02](M02-extension-manifest.md) | 扩展包 manifest 与配置校验 | 新增 `backend/alpha_arena/extensions` | M01 |
+| [M01](M01-core-contracts.md) | 公共上下文、结果、错误和版本类型 | 新增 `backend/benchmark/contracts` | M00 |
+| [M02](M02-extension-manifest.md) | 扩展包 manifest 与配置校验 | 新增 `backend/benchmark/extensions` | M01 |
 | [M03](M03-agent-registry.md) | Agent SPI、工厂与 registry | `services/agent/base.py`, `factory.py` | M01 |
 | [M04](M04-builtin-agent-migration.md) | 四种内置 Agent adapter | `react.py`, `multi_agent*.py`, `rule_aware` | M03、M05、M07 |
 | [M05](M05-tool-runtime.md) | Tool SPI、registry、执行器与权限 | `tools.py`, `tool_selector.py` | M01 |

@@ -7,7 +7,7 @@
 ## 文件边界
 
 - 主改：`backend/services/agent/env_wrapper.py`、`memory_tools.py`、`history_tool.py`、`public_apis_registry.py`、`sub_agents/search_agent.py`。
-- 新增：`backend/alpha_arena/builtin/tools/{market,account,history,search,sandbox,memory,trading,public_api}.py`。
+- 新增：`backend/benchmark/builtin/tools/{market,account,history,search,sandbox,memory,trading,public_api}.py`。
 - 不修改：交易底层函数、行情 provider、Prompt 文案。
 
 ## ToolProvider 拆分

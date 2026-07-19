@@ -6,7 +6,7 @@
 
 ## 文件边界
 
-- 新增：`backend/alpha_arena/tools/{__init__,protocol,registry,invoker,validation,capabilities,errors}.py`。
+- 新增：`backend/benchmark/tools/{__init__,protocol,registry,invoker,validation,capabilities,errors}.py`。
 - 修改：`backend/services/agent/tools.py` 仅提供过渡 adapter。
 - 禁止修改：`env_wrapper.py`、`trade_execution_tool.py`、memory/public API 工具。
 

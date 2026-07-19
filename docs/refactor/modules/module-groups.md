@@ -28,7 +28,7 @@
 
 | 组 | 名称 | Modules | 主要代码范围 | 组内主线 |
 | --- | --- | --- | --- | --- |
-| G1 | 行为基线与公共契约 | M00、M01 | tests、`alpha_arena/contracts` | M00 -> M01 |
+| G1 | 行为基线与公共契约 | M00、M01 | tests、`benchmark/contracts` | M00 -> M01 |
 | G2 | Agent Runtime 与内置 Agent | M03、M04 | `agents`、`services/agent/{base,factory,react,multi_agent*}` | M03 -> M04 |
 | G3 | Tool Runtime 与内置工具 | M05、M06 | `tools`、`env_wrapper`、memory/search/public API tools | M05 -> M06 |
 | G4 | 扩展声明、Prompt 与 Catalog | M02、M07、M08、M13 | `extensions`、`prompts`、内置 Prompt 资源 | M02/M07 -> M08；M13 最后 |
@@ -51,7 +51,7 @@
 ```text
 backend/test/
 backend/tests/
-backend/alpha_arena/contracts/
+backend/benchmark/contracts/
 backend/pyproject.toml
 ```
 
@@ -65,7 +65,7 @@ M01 在 M00 fixture 基本稳定后实现。公共 DTO 和异常需要单一 own
 
 - 无外部服务可运行 characterization tests。
 - 固定账户线程池并发、单 Agent 同步工具顺序和 worker session 隔离。
-- `alpha_arena.contracts` 可独立 import，无启动副作用。
+- `benchmark.contracts` 可独立 import，无启动副作用。
 
 ### 下游
 
@@ -81,8 +81,8 @@ M01 合并后，G2、G3、G4、G5、G6、G7 可以开始主体开发。
 ### 修改范围
 
 ```text
-backend/alpha_arena/agents/
-backend/alpha_arena/builtin/agents/
+backend/benchmark/agents/
+backend/benchmark/builtin/agents/
 backend/services/agent/base.py
 backend/services/agent/factory.py
 backend/services/agent/core.py
@@ -120,8 +120,8 @@ backend/services/agent/rule_aware/
 ### 修改范围
 
 ```text
-backend/alpha_arena/tools/
-backend/alpha_arena/builtin/tools/
+backend/benchmark/tools/
+backend/benchmark/builtin/tools/
 backend/services/agent/tools.py
 backend/services/agent/env_wrapper.py
 backend/services/agent/memory_tools.py
@@ -160,10 +160,10 @@ backend/services/agent/sub_agents/search_agent.py
 ### 修改范围
 
 ```text
-backend/alpha_arena/extensions/
-backend/alpha_arena/prompts/
-backend/alpha_arena/builtin/prompts/
-backend/alpha_arena/builtin/extension/
+backend/benchmark/extensions/
+backend/benchmark/prompts/
+backend/benchmark/builtin/prompts/
+backend/benchmark/builtin/extension/
 backend/services/agent/prompts/
 backend/services/agent/rule_aware/prompts.py
 ```
@@ -195,10 +195,10 @@ backend/services/agent/rule_aware/prompts.py
 ### 修改范围
 
 ```text
-backend/alpha_arena/providers/
-backend/alpha_arena/infrastructure/adapters/
-backend/alpha_arena/infrastructure/market/
-backend/alpha_arena/infrastructure/cache/
+backend/benchmark/providers/
+backend/benchmark/infrastructure/adapters/
+backend/benchmark/infrastructure/market/
+backend/benchmark/infrastructure/cache/
 backend/services/agent/llm_client.py
 backend/services/agent/memory*.py
 backend/services/container_service.py
@@ -234,8 +234,8 @@ M20 在 Market port 稳定后，可将 provider adapter、Kline repository、Red
 ### 修改范围
 
 ```text
-backend/alpha_arena/application/trading/
-backend/alpha_arena/application/decisions/
+backend/benchmark/application/trading/
+backend/benchmark/application/decisions/
 backend/services/order_matching.py
 backend/services/order_executor_leverage.py
 backend/services/agent/trade_execution_tool.py
@@ -279,8 +279,8 @@ place_ai_driven_crypto_order
 ### 修改范围
 
 ```text
-backend/alpha_arena/persistence/
-backend/alpha_arena/bootstrap/
+backend/benchmark/persistence/
+backend/benchmark/bootstrap/
 backend/database/
 backend/repositories/
 backend/database/models.py
@@ -316,7 +316,7 @@ backend/schemas/account.py
 backend/api/
 backend/schemas/
 backend/services/extension_config_service.py
-backend/alpha_arena/application/* 的 API adapters
+backend/benchmark/application/* 的 API adapters
 ```
 
 ### 分工和顺序
@@ -376,9 +376,9 @@ frontend/app/main.tsx
 ### 修改范围
 
 ```text
-backend/alpha_arena/application/evaluation/
-backend/alpha_arena/application/compliance/
-backend/alpha_arena/testing/
+backend/benchmark/application/evaluation/
+backend/benchmark/application/compliance/
+backend/benchmark/testing/
 backend/services/evaluation/
 backend/services/agent/rule_aware/*auditor*/*validator*
 backend/api/agent_routes.py

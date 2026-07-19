@@ -7,7 +7,7 @@ import sys
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
-CONTRACT_ROOT = BACKEND_ROOT / "alpha_arena" / "contracts"
+CONTRACT_ROOT = BACKEND_ROOT / "benchmark" / "contracts"
 
 
 def test_contract_modules_do_not_import_runtime_layers():
@@ -30,7 +30,7 @@ def test_contract_modules_do_not_import_runtime_layers():
 def test_contract_import_has_no_application_side_effects():
     script = """
 import json, sys
-import alpha_arena.contracts
+import benchmark.contracts
 forbidden = sorted(name for name in sys.modules if name.split('.', 1)[0] in {'api','database','services','repositories','fastapi','sqlalchemy','redis','docker'})
 print(json.dumps(forbidden))
 """
@@ -44,8 +44,12 @@ print(json.dumps(forbidden))
     assert completed.stdout.strip() == "[]"
 
 
-def test_hatch_wheel_packages_public_alpha_arena_namespace():
-    pyproject = (BACKEND_ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    assert 'packages = ["alpha_arena"]' in pyproject
-    assert 'packages = ["main.py"]' not in pyproject
+def test_retired_alpha_arena_package_name_is_not_importable():
+    script = "import importlib.util; assert importlib.util.find_spec('alpha_arena') is None"
+    subprocess.run([sys.executable, "-c", script], cwd=BACKEND_ROOT, check=True)
 
+
+def test_hatch_wheel_packages_public_benchmark_namespace():
+    pyproject = (BACKEND_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert 'packages = ["benchmark"]' in pyproject
+    assert 'packages = ["main.py"]' not in pyproject

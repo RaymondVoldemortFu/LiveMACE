@@ -1,4 +1,4 @@
-"""Public trade command and execution result contracts."""
+"""Public benchmark trade command and execution result contracts."""
 
 from __future__ import annotations
 

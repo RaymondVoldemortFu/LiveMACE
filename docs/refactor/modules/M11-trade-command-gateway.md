@@ -6,7 +6,7 @@
 
 ## 文件边界
 
-- 新增：`backend/alpha_arena/application/trading/{gateway,commands,policy,errors}.py`。
+- 新增：`backend/benchmark/application/trading/{gateway,commands,policy,errors}.py`。
 - 适配：`services/order_matching.py`、`order_executor_leverage.py`、`agent/trade_execution_tool.py`。
 - 路由/WS 迁移由 M21 完成；本任务只提供 adapter 和 service tests。
 

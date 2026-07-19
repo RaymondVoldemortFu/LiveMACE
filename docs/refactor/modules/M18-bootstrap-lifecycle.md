@@ -7,7 +7,7 @@
 ## 文件边界
 
 - 主改：`backend/main.py`、`services/startup.py`、`services/scheduler.py`。
-- 新增：`backend/alpha_arena/bootstrap/{app,schema,seed,credentials,runtime,tasks}.py`。
+- 新增：`backend/benchmark/bootstrap/{app,schema,seed,credentials,runtime,tasks}.py`。
 - 不修改业务 job 函数和调度周期。
 
 ## 接口

@@ -7,7 +7,7 @@ import json
 
 import pytest
 
-from alpha_arena.contracts import (
+from benchmark.contracts import (
     AccountView,
     AgentRunResult,
     AgentRuntimeError,

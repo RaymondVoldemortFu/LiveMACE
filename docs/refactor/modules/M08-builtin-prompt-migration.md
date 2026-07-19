@@ -7,7 +7,7 @@
 ## 文件边界
 
 - 读取/迁移：`backend/services/agent/prompts/*.py`、`backend/services/agent/rule_aware/prompts.py`、`llm_auditor.py` 中 Prompt。
-- 新增：`backend/alpha_arena/builtin/prompts/`、`index.yaml`、Prompt golden fixtures。
+- 新增：`backend/benchmark/builtin/prompts/`、`index.yaml`、Prompt golden fixtures。
 - 修改 Agent 文件只允许将常量引用替换为 `PromptResolver.render()`。
 
 ## Prompt profile

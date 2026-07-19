@@ -6,7 +6,7 @@
 
 ## 文件边界
 
-- 新增：`examples/extensions/`、`backend/alpha_arena/testing/`、`docs/extensions/`。
+- 新增：`examples/extensions/`、`backend/benchmark/testing/`、`docs/extensions/`。
 - 修改：README 增加入口链接；`pyproject.toml` 增加可选 test 依赖/CLI entry。
 - 不修改核心运行逻辑。
 

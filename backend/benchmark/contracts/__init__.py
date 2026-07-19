@@ -1,4 +1,4 @@
-"""Stable, dependency-free public DTOs and errors for extension authors."""
+"""Stable benchmark DTOs and errors for extension authors."""
 
 from .common import (
     AccountView,
@@ -60,4 +60,3 @@ __all__ = [
     "ProviderError",
     "TradeGatewayError",
 ]
-

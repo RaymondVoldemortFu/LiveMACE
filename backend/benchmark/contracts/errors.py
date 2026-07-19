@@ -1,4 +1,4 @@
-"""Stable framework-level exceptions exposed to extension authors."""
+"""Stable benchmark framework exceptions exposed to extension authors."""
 
 from __future__ import annotations
 
