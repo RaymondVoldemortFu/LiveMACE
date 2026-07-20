@@ -1,4 +1,4 @@
-﻿"""Reusable fake provider ports for contract tests."""
+"""Reusable fake provider ports for contract tests."""
 
 from .providers import FakeMarketDataPort
 
