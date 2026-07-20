@@ -174,3 +174,59 @@ def test_m20_symbol_registry_normalizes_and_validates_supported_markets():
     assert resolved.market is Market.CRYPTO
     with pytest.raises(ValueError, match="Unsupported US stock"):
         resolve_symbol_market("BTC", "US")
+
+
+def test_m11_execute_trade_tool_generates_idempotency_key_from_normalized_inputs(monkeypatch):
+    from benchmark.contracts import TradeCommandResult
+
+    monkeypatch.setenv("ALPACA_KEY", "dummy")
+    monkeypatch.setenv("ALPACA_SECRET", "dummy")
+
+    import benchmark.application.trading as trading_app
+    from services.agent import trade_execution_tool
+
+    captured_keys = []
+
+    class FakeGateway:
+        def execute(self, command):
+            captured_keys.append(command.idempotency_key)
+            return TradeCommandResult(
+                True,
+                True,
+                None,
+                None,
+                1,
+                2,
+                command,
+            )
+
+    monkeypatch.setattr(trading_app, "get_default_trade_gateway", lambda db: FakeGateway())
+
+    trade_execution_tool.execute_trade_tool(
+        db=object(),
+        account_id=1,
+        operation=" OPEN ",
+        symbol=" btc ",
+        market="crypto",
+        direction=" LONG ",
+        target_portion_of_balance=0.1,
+        leverage="2",
+    )
+    trade_execution_tool.execute_trade_tool(
+        db=object(),
+        account_id=1,
+        operation="open",
+        symbol="BTC",
+        market="CRYPTO",
+        direction="long",
+        target_portion_of_balance=0.1,
+        leverage=2,
+    )
+
+    assert captured_keys == [
+        "tool:1:open:BTC:CRYPTO:long:portion:0.1:2",
+        "tool:1:open:BTC:CRYPTO:long:portion:0.1:2",
+    ]
+
+
+

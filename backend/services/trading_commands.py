@@ -280,6 +280,16 @@ def _process_account_decision_payload(db: Session, payload: Dict, prices: Dict[s
     order_id = decision.get("order_id")
     execution_price = decision.get("execution_price")
     execution_quantity = decision.get("execution_quantity")
+
+    normalized_order_id = None
+    if order_id is not None:
+        try:
+            parsed_order_id = int(order_id)
+        except (TypeError, ValueError):
+            parsed_order_id = None
+        if parsed_order_id is not None and parsed_order_id > 0:
+            normalized_order_id = parsed_order_id
+
     try:
         save_ai_decision(
             db,
@@ -287,9 +297,9 @@ def _process_account_decision_payload(db: Session, payload: Dict, prices: Dict[s
             decision,
             portfolio,
             executed=executed,
-            order_id=int(order_id) if order_id else None,
-            execution_price=float(execution_price) if execution_price else None,
-            execution_quantity=float(execution_quantity) if execution_quantity else None,
+            order_id=normalized_order_id,
+            execution_price=float(execution_price) if execution_price is not None else None,
+            execution_quantity=float(execution_quantity) if execution_quantity is not None else None,
         )
     except Exception as account_err:
         logger.error(f"AI decision logging failed for account {account.name}: {account_err}", exc_info=True)

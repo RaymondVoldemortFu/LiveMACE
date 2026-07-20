@@ -21,7 +21,7 @@ SUPPORTED_US_SYMBOLS = {
 
 
 def _parse_float_loose(value: Any) -> Optional[float]:
-    """从数字或杂糅 XML/文本中提取第一个合法 float；无法解析返回 None。"""
+    """Extract the first valid float from numeric or loose text input."""
     if value is None:
         return None
     if isinstance(value, bool):
@@ -102,17 +102,26 @@ def execute_trade_tool(
         if market_text == "HYPERLIQUID":
             market_text = "CRYPTO"
         market_norm = Market(market_text)
+        normalized_operation = (operation or "").strip().lower()
+        normalized_symbol = (symbol or "").strip().upper()
+        normalized_direction = (direction or "long").strip().lower()
+        normalized_leverage = _parse_int_loose(leverage, default=1)
+        normalized_idempotency_key = (
+            idempotency_key
+            or f"tool:{account_id}:{normalized_operation}:{normalized_symbol}:{market_norm.value}:"
+            f"{normalized_direction}:{normalized_size_mode}:{sizing_value}:{normalized_leverage}"
+        )
         command = TradeCommand(
             account_id=account_id,
-            operation=(operation or "").strip().lower(),
+            operation=normalized_operation,
             market=market_norm,
-            symbol=(symbol or "").strip().upper(),
-            direction=(direction or "long").strip().lower(),
+            symbol=normalized_symbol,
+            direction=normalized_direction,
             sizing_mode=normalized_size_mode,
             sizing_value=sizing_value,
-            leverage=_parse_int_loose(leverage, default=1),
+            leverage=normalized_leverage,
             reason=reason or "",
-            idempotency_key=idempotency_key or f"tool:{account_id}:{operation}:{symbol}:{market}:{direction}:{normalized_size_mode}:{sizing_value}:{leverage}",
+            idempotency_key=normalized_idempotency_key,
         )
         gateway_result = get_default_trade_gateway(db).execute(command)
         if gateway_result.accepted:
