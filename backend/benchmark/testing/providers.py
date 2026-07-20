@@ -1,4 +1,4 @@
-﻿"""Fake provider implementations for tests and third-party contract suites."""
+"""Fake provider implementations for tests and third-party contract suites."""
 
 from __future__ import annotations
 
