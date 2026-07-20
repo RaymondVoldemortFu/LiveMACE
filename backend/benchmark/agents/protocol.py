@@ -7,22 +7,23 @@ from datetime import datetime
 from types import MappingProxyType
 from typing import Any, Mapping, Protocol, runtime_checkable
 import copy
-import re
 
-from benchmark.contracts import AgentRunResult, DecisionContext, JsonValue
-
-
-_SEMVER_RE = re.compile(
-    r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
-    r"(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?"
-    r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
+from benchmark.contracts import (
+    AgentRunResult,
+    DecisionContext,
+    JsonValue,
+    ValidationIssue,
+    ValidationReport,
+    require_identifier,
+    require_semver,
 )
-_AGENT_ID_RE = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)+$")
 
 
 def _freeze(value: Any) -> Any:
     if isinstance(value, Mapping):
-        return MappingProxyType({str(key): _freeze(item) for key, item in value.items()})
+        return MappingProxyType(
+            {str(key): _freeze(item) for key, item in value.items()}
+        )
     if isinstance(value, (list, tuple)):
         return tuple(_freeze(item) for item in value)
     if isinstance(value, (set, frozenset)):
@@ -38,25 +39,6 @@ def _thaw(value: Any) -> Any:
     if isinstance(value, (set, frozenset)):
         return [_thaw(item) for item in sorted(value, key=repr)]
     return copy.deepcopy(value)
-
-
-def _validate_agent_id(value: str) -> None:
-    if not isinstance(value, str) or not value.isascii() or not _AGENT_ID_RE.fullmatch(value):
-        raise ValueError("agent id must be a lowercase ASCII namespaced identifier")
-
-
-def _validate_semver(value: str) -> None:
-    if not isinstance(value, str):
-        raise ValueError("agent version must be SemVer")
-    match = _SEMVER_RE.fullmatch(value)
-    if match is None:
-        raise ValueError("agent version must be SemVer")
-    prerelease = match.group(4)
-    if prerelease and any(
-        item.isdigit() and len(item) > 1 and item.startswith("0")
-        for item in prerelease.split(".")
-    ):
-        raise ValueError("agent version must be SemVer")
 
 
 @runtime_checkable
@@ -103,9 +85,11 @@ class AgentDescriptor:
     description: str = ""
 
     def __post_init__(self) -> None:
-        _validate_agent_id(self.id)
-        _validate_semver(self.version)
-        if not isinstance(self.display_name, str) or not isinstance(self.description, str):
+        require_identifier(self.id, "agent id")
+        require_semver(self.version, "agent version")
+        if not isinstance(self.display_name, str) or not isinstance(
+            self.description, str
+        ):
             raise TypeError("display_name and description must be strings")
         if not isinstance(self.config_schema, Mapping):
             raise TypeError("config_schema must be a mapping")
@@ -119,32 +103,12 @@ class AgentSelection:
     config: Mapping[str, JsonValue] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        _validate_agent_id(self.agent_id)
+        require_identifier(self.agent_id, "agent id")
         if self.version is not None:
-            _validate_semver(self.version)
+            require_semver(self.version, "agent version")
         if not isinstance(self.config, Mapping):
             raise TypeError("config must be a mapping")
         object.__setattr__(self, "config", _freeze(self.config))
-
-
-@dataclass(frozen=True)
-class ValidationIssue:
-    path: str
-    message: str
-    validator: str = ""
-
-
-@dataclass(frozen=True)
-class ValidationReport:
-    valid: bool
-    errors: tuple[ValidationIssue, ...] = ()
-    warnings: tuple[ValidationIssue, ...] = ()
-    normalized_config: Mapping[str, JsonValue] = field(default_factory=dict)
-
-    def __post_init__(self) -> None:
-        if self.valid != (not self.errors):
-            raise ValueError("valid must match whether errors is empty")
-        object.__setattr__(self, "normalized_config", _freeze(self.normalized_config))
 
 
 @dataclass(frozen=True)
@@ -164,7 +128,12 @@ class AgentRuntimeEvent:
     metadata: Mapping[str, JsonValue] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if self.type not in {"agent.started", "agent.completed", "agent.failed", "agent.cancelled"}:
+        if self.type not in {
+            "agent.started",
+            "agent.completed",
+            "agent.failed",
+            "agent.cancelled",
+        }:
             raise ValueError("unsupported Agent runtime event type")
         if self.occurred_at.tzinfo is None or self.occurred_at.utcoffset() is None:
             raise ValueError("occurred_at must be timezone-aware")

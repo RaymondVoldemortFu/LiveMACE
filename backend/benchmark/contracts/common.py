@@ -8,8 +8,8 @@ from decimal import Decimal
 from enum import Enum
 from types import MappingProxyType
 from typing import Any, Dict, List, Mapping, TypeAlias, Union
-import re
 
+from .identifiers import require_identifier, require_semver
 
 JsonValue: TypeAlias = Union[
     None,
@@ -20,8 +20,6 @@ JsonValue: TypeAlias = Union[
     List["JsonValue"],
     Dict[str, "JsonValue"],
 ]
-
-_IDENTIFIER_RE = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)+$")
 
 
 class Market(str, Enum):
@@ -35,7 +33,11 @@ def _require_non_empty(value: str, field_name: str) -> None:
 
 
 def _require_aware(value: datetime, field_name: str) -> None:
-    if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
+    if (
+        not isinstance(value, datetime)
+        or value.tzinfo is None
+        or value.utcoffset() is None
+    ):
         raise ValueError(f"{field_name} must be a timezone-aware datetime")
 
 
@@ -47,7 +49,9 @@ def _freeze_mapping(value: Mapping[str, Any], field_name: str) -> Mapping[str, A
 
 def _freeze_value(value: Any) -> Any:
     if isinstance(value, Mapping):
-        return MappingProxyType({key: _freeze_value(item) for key, item in value.items()})
+        return MappingProxyType(
+            {key: _freeze_value(item) for key, item in value.items()}
+        )
     if isinstance(value, (list, tuple)):
         return tuple(_freeze_value(item) for item in value)
     if isinstance(value, (set, frozenset)):
@@ -78,10 +82,8 @@ class ExtensionRef:
     api_version: int = 1
 
     def __post_init__(self) -> None:
-        _require_non_empty(self.id, "id")
-        _require_non_empty(self.version, "version")
-        if not self.id.isascii() or not _IDENTIFIER_RE.fullmatch(self.id):
-            raise ValueError("id must be a lowercase ASCII namespaced identifier")
+        require_identifier(self.id)
+        require_semver(self.version)
         if not isinstance(self.api_version, int) or self.api_version < 1:
             raise ValueError("api_version must be a positive integer")
 
@@ -185,7 +187,9 @@ def to_jsonable(value: Any) -> JsonValue:
     if isinstance(value, Enum):
         return to_jsonable(value.value)
     if is_dataclass(value) and not isinstance(value, type):
-        return {item.name: to_jsonable(getattr(value, item.name)) for item in fields(value)}
+        return {
+            item.name: to_jsonable(getattr(value, item.name)) for item in fields(value)
+        }
     if isinstance(value, Mapping):
         return {str(key): to_jsonable(value[key]) for key in sorted(value, key=str)}
     if isinstance(value, (tuple, list)):

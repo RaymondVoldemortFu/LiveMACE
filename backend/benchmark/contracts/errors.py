@@ -7,8 +7,8 @@ from typing import Mapping
 from .common import JsonValue, _freeze_mapping, to_jsonable
 
 
-class AlphaArenaError(Exception):
-    default_code = "ALPHA_ARENA_ERROR"
+class BenchmarkError(Exception):
+    default_code = "BENCHMARK_ERROR"
 
     def __init__(
         self,
@@ -32,48 +32,48 @@ class AlphaArenaError(Exception):
         }
 
 
-class ExtensionManifestError(AlphaArenaError):
+class ExtensionManifestError(BenchmarkError):
     default_code = "EXTENSION_MANIFEST_INVALID"
 
 
-class ExtensionLoadError(AlphaArenaError):
+class ExtensionLoadError(BenchmarkError):
     default_code = "EXTENSION_LOAD_FAILED"
 
 
-class ComponentNotFoundError(AlphaArenaError):
+class ComponentNotFoundError(BenchmarkError):
     default_code = "COMPONENT_NOT_FOUND"
 
 
-class ComponentConflictError(AlphaArenaError):
+class ComponentConflictError(BenchmarkError):
     default_code = "COMPONENT_CONFLICT"
 
 
-class ComponentConfigError(AlphaArenaError):
+class ComponentConfigError(BenchmarkError):
     default_code = "COMPONENT_CONFIG_INVALID"
 
 
-class AgentRuntimeError(AlphaArenaError):
+class AgentRuntimeError(BenchmarkError):
     default_code = "AGENT_RUNTIME_ERROR"
 
 
-class ToolRuntimeError(AlphaArenaError):
+class ToolRuntimeError(BenchmarkError):
     default_code = "TOOL_RUNTIME_ERROR"
 
 
-class PromptRenderError(AlphaArenaError):
+class PromptRenderError(BenchmarkError):
     default_code = "PROMPT_RENDER_ERROR"
 
 
-class ProviderError(AlphaArenaError):
+class ProviderError(BenchmarkError):
     default_code = "PROVIDER_ERROR"
 
 
-class TradeGatewayError(AlphaArenaError):
+class TradeGatewayError(BenchmarkError):
     default_code = "TRADE_GATEWAY_ERROR"
 
 
 __all__ = [
-    "AlphaArenaError",
+    "BenchmarkError",
     "ExtensionManifestError",
     "ExtensionLoadError",
     "ComponentNotFoundError",

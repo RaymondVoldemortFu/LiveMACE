@@ -12,11 +12,28 @@ from .common import (
 )
 from .agent import AgentRunResult, ExecutedTradeRef, TerminationReason
 from .tool import SideEffect, ToolContext, ToolResult, ToolSpec
-from .prompt import PromptSpec, RenderedPrompt
+from .prompt import PromptProfileDescriptor, PromptSelection, PromptSpec, RenderedPrompt
+from .validation import ValidationIssue, ValidationReport, issue_sort_key
+from .identifiers import (
+    require_identifier,
+    require_semver,
+    require_variable_name,
+    semver_key,
+)
+from .capabilities import (
+    ACCOUNT_READ,
+    KNOWN_CAPABILITIES,
+    MARKET_READ,
+    MEMORY_READ,
+    MEMORY_WRITE,
+    NETWORK_READ,
+    SANDBOX_WRITE,
+    TRADING_WRITE,
+)
 from .trade import TradeCommand, TradeCommandResult
 from .errors import (
     AgentRuntimeError,
-    AlphaArenaError,
+    BenchmarkError,
     ComponentConfigError,
     ComponentConflictError,
     ComponentNotFoundError,
@@ -45,10 +62,27 @@ __all__ = [
     "ToolContext",
     "ToolResult",
     "PromptSpec",
+    "PromptSelection",
+    "PromptProfileDescriptor",
     "RenderedPrompt",
+    "ValidationIssue",
+    "ValidationReport",
+    "issue_sort_key",
+    "require_identifier",
+    "require_semver",
+    "require_variable_name",
+    "semver_key",
+    "MARKET_READ",
+    "ACCOUNT_READ",
+    "MEMORY_READ",
+    "MEMORY_WRITE",
+    "NETWORK_READ",
+    "SANDBOX_WRITE",
+    "TRADING_WRITE",
+    "KNOWN_CAPABILITIES",
     "TradeCommand",
     "TradeCommandResult",
-    "AlphaArenaError",
+    "BenchmarkError",
     "ExtensionManifestError",
     "ExtensionLoadError",
     "ComponentNotFoundError",
