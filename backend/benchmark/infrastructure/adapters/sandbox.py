@@ -1,4 +1,4 @@
-﻿"""Sandbox adapter around ContainerService."""
+"""Sandbox adapter around ContainerService."""
 
 from __future__ import annotations
 
