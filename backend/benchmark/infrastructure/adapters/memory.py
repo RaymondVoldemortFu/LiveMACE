@@ -1,4 +1,4 @@
-﻿"""Memory store adapters."""
+"""Memory store adapters."""
 
 from __future__ import annotations
 
