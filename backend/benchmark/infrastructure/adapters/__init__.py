@@ -1,4 +1,4 @@
-﻿"""Infrastructure adapters for built-in providers."""
+"""Infrastructure adapters for built-in providers."""
 
 from .market import AlpacaMarketDataAdapter, HyperliquidMarketDataAdapter
 from .memory import LegacyMemoryStoreAdapter
