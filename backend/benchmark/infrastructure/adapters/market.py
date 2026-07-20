@@ -1,4 +1,4 @@
-﻿"""Built-in market provider adapters implementing MarketDataPort."""
+"""Built-in market provider adapters implementing MarketDataPort."""
 
 from __future__ import annotations
 
