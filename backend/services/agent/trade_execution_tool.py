@@ -63,7 +63,82 @@ def _parse_int_loose(value: Any, *, default: int = 1) -> int:
         return default
 
 
+
 def execute_trade_tool(
+    db: Session,
+    account_id: int,
+    operation: str,
+    symbol: Optional[str] = None,
+    market: str = "CRYPTO",
+    direction: str = "long",
+    size_mode: str = "portion",
+    target_portion_of_balance: Optional[float] = None,
+    usd_amount: Optional[float] = None,
+    close_ratio: Optional[float] = None,
+    leverage: int = 1,
+    reason: str = "",
+    idempotency_key: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Execute one trading action through the TradeCommandGateway."""
+    from decimal import Decimal
+
+    from benchmark.application.trading import get_default_trade_gateway
+    from benchmark.contracts import Market, TradeCommand
+
+    normalized_size_mode = (size_mode or "portion").strip().lower()
+    sizing_value = None
+    if normalized_size_mode == "usd" and usd_amount is not None:
+        sizing_value = Decimal(str(usd_amount))
+    elif close_ratio is not None:
+        normalized_size_mode = "close_ratio"
+        sizing_value = Decimal(str(close_ratio))
+    elif target_portion_of_balance is not None:
+        sizing_value = Decimal(str(target_portion_of_balance))
+
+    try:
+        market_text = (market or "CRYPTO").strip().upper()
+        if market_text in {"STOCK", "STOCKS"}:
+            market_text = "US"
+        if market_text == "HYPERLIQUID":
+            market_text = "CRYPTO"
+        market_norm = Market(market_text)
+        command = TradeCommand(
+            account_id=account_id,
+            operation=(operation or "").strip().lower(),
+            market=market_norm,
+            symbol=(symbol or "").strip().upper(),
+            direction=(direction or "long").strip().lower(),
+            sizing_mode=normalized_size_mode,
+            sizing_value=sizing_value,
+            leverage=_parse_int_loose(leverage, default=1),
+            reason=reason or "",
+            idempotency_key=idempotency_key or f"tool:{account_id}:{operation}:{symbol}:{market}:{direction}:{normalized_size_mode}:{sizing_value}:{leverage}",
+        )
+        gateway_result = get_default_trade_gateway(db).execute(command)
+        if gateway_result.accepted:
+            return {
+                "executed": gateway_result.executed,
+                "operation": gateway_result.normalized_command.operation,
+                "symbol": gateway_result.normalized_command.symbol,
+                "market": gateway_result.normalized_command.market.value,
+                "direction": gateway_result.normalized_command.direction,
+                "order_id": gateway_result.order_id,
+                "trade_id": gateway_result.trade_id,
+            }
+        return {
+            "executed": False,
+            "error": gateway_result.reject_message,
+            "reject_code": gateway_result.reject_code,
+            "operation": gateway_result.normalized_command.operation,
+            "symbol": gateway_result.normalized_command.symbol,
+            "market": gateway_result.normalized_command.market.value,
+        }
+    except Exception as exc:
+        logger.error("execute_trade_tool gateway adapter failed: %s", exc, exc_info=True)
+        return {"executed": False, "error": str(exc), "reject_code": "TRADE_GATEWAY_ERROR"}
+
+
+def _execute_trade_tool_legacy(
     db: Session,
     account_id: int,
     operation: str,
@@ -603,3 +678,4 @@ def _save_trade_log(
     except Exception as e:
         db.rollback()
         logger.warning(f"Failed to save execute_trade decision log: {e}")
+

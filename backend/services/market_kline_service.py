@@ -16,7 +16,7 @@ from services.alpaca_market_data import get_all_supported_symbols
 from services.hyperliquid_market_data import get_kline_data_from_hyperliquid
 from services.alpaca_market_data import get_kline_data_from_alpaca
 from services.time_source import now_timestamp
-from services.trading_commands import AI_TRADING_SYMBOLS
+from benchmark.infrastructure.market.symbols import CRYPTO_SYMBOLS as AI_TRADING_SYMBOLS
 
 logger = logging.getLogger(__name__)
 
