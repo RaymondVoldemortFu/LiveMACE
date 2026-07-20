@@ -1,6 +1,4 @@
-from benchmark.builtin.prompts import read_builtin_template
 
-SUB_AGENT_SYSTEM_PROMPT = """
 You are a professional search and information extraction sub-agent. Your task is to retrieve, analyze, and synthesize information by performing web searches and extracting webpage content, and then return a comprehensive, accurate, source-backed summary.
 
 ========================
@@ -74,6 +72,4 @@ When you are ready to deliver the final answer, you MUST output the following JS
 </FINAL_RESPONSE>
 
 Only output the JSON object in the required format when the final response is complete.
-"""
 
-SUB_AGENT_SYSTEM_PROMPT = read_builtin_template("search/system.txt")

@@ -157,6 +157,14 @@ class PromptRegistry:
         with self._lock:
             return self._resolve_prompt_unlocked(prompt_id, version)
 
+    def get_prompt_spec(
+        self,
+        prompt_id: str,
+        *,
+        version: str | None = None,
+    ) -> PromptSpec:
+        return self.resolve(prompt_id, version).spec
+
     def resolve_profile(
         self,
         profile_id: str,
@@ -186,6 +194,14 @@ class PromptRegistry:
             return max(
                 preferred, key=lambda entry: semver_key(entry.descriptor.version)
             )
+
+    def get_profile(
+        self,
+        profile_id: str,
+        *,
+        version: str | None = None,
+    ) -> PromptProfileDescriptor:
+        return self.resolve_profile(profile_id, version).descriptor
 
     def render(
         self,
@@ -218,6 +234,35 @@ class PromptRegistry:
                 code="PROMPT_RENDER_TOO_LARGE",
             )
         return rendered
+
+    def render_slot(
+        self,
+        profile_id: str,
+        slot: str,
+        variables: Mapping[str, JsonValue],
+        *,
+        profile_version: str | None = None,
+    ) -> RenderedPrompt:
+        require_identifier(profile_id, "prompt profile id")
+        if not isinstance(slot, str) or not slot:
+            raise TypeError("slot must be a non-empty string")
+        profile = self.get_profile(profile_id, version=profile_version)
+        selection = profile.slots.get(slot)
+        if selection is None:
+            raise ComponentNotFoundError(
+                f"Prompt profile slot not found: {profile_id}.{slot}",
+                code="PROMPT_PROFILE_SLOT_NOT_FOUND",
+                details={
+                    "profile_id": profile.id,
+                    "profile_version": profile.version,
+                    "slot": slot,
+                },
+            )
+        return self.render(
+            selection.prompt_id,
+            variables,
+            version=selection.version,
+        )
 
     def list(self) -> tuple[PromptSpec, ...]:
         with self._lock:

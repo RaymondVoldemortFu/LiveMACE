@@ -7,6 +7,7 @@ import pytest
 from benchmark.contracts import (
     ComponentConfigError,
     ComponentConflictError,
+    ComponentNotFoundError,
     ExtensionRef,
     PromptProfileDescriptor,
     PromptSelection,
@@ -91,6 +92,9 @@ def test_freeze_validates_profile_bindings_before_becoming_immutable():
         Provider("core.react.system", "1.0.0", "ready"),
         PromptSourcePriority.BUILTIN,
     )
+    assert registry.get_profile("core.react.default").version == "1.0.0"
+    assert registry.get_prompt_spec("core.react.system").version == "1.0.0"
+    assert registry.render_slot("core.react.default", "system", {}).content == "ready"
     registry.freeze()
     assert registry.frozen is True
 
@@ -98,6 +102,28 @@ def test_freeze_validates_profile_bindings_before_becoming_immutable():
         registry.register_provider(
             ref("late"), Provider("core.other.system", "1.0.0", "x"), 0
         )
+
+
+def test_profile_slot_reports_missing_slot():
+    registry = PromptRegistry()
+    registry.register_provider(
+        ref("prompts"), Provider("core.react.system", "1.0.0", "stable"), 0
+    )
+    registry.register_profiles(
+        ref("profiles"),
+        (
+            PromptProfileDescriptor(
+                "core.react.default",
+                "1.0.0",
+                {"system": PromptSelection("core.react.system", "1.0.0")},
+            ),
+        ),
+        0,
+    )
+
+    with pytest.raises(ComponentNotFoundError) as caught:
+        registry.render_slot("core.react.default", "reminder", {})
+    assert caught.value.code == "PROMPT_PROFILE_SLOT_NOT_FOUND"
 
 
 def test_frozen_registry_supports_concurrent_reads():

@@ -1,11 +1,4 @@
-"""
-Rule-Aware Agent Prompts
-Specialized prompts for rule-compliant trading
-"""
 
-from benchmark.builtin.prompts import read_builtin_template
-
-RULE_AWARE_SYSTEM_PROMPT = r"""
 # Role: Expert Financial AI Trading Agent with Rule Compliance
 
 ## 1. Context & Objective
@@ -178,24 +171,4 @@ Now, following the workflow above:
 4. End by outputting ONLY `<TRADE_DONE>`
 
 Remember: **Profit is your primary mission**. Hard rules (R0, R1) are boundaries you cannot cross; soft rules (R2) are optimization targets. Seek alpha aggressively within your compliance boundaries.
-"""
 
-RULE_AWARE_REMINDER_PROMPT = """
-REMINDER: You have {remaining_steps} steps remaining.
-
-You MUST output your final decision soon. Ensure you have:
-1. Gathered sufficient market and account data
-2. Checked ALL applicable rules (R0, R1, R2)
-3. Resolved any rule conflicts
-4. Prepared your compliance audit
-
-When you output your final decision:
-- Use the EXACT format specified in the system prompt
-- Include [Compliance Audit] section with all checked rules
-- Include [Conflict Resolution] if applicable
-- Execute trades using execute_trade (you may call it multiple times)
-- End with ONLY: <TRADE_DONE>
-"""
-
-RULE_AWARE_SYSTEM_PROMPT = read_builtin_template("rule-aware/system.txt")
-RULE_AWARE_REMINDER_PROMPT = read_builtin_template("rule-aware/reminder.txt")

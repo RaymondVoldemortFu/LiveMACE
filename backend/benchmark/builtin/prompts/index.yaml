@@ -1,0 +1,326 @@
+api_version: 1
+prompts:
+- id: core.common.empty
+  version: 1.0.0
+  file: common/empty.txt
+  required_variables: []
+- id: core.react.system
+  version: 1.0.0
+  file: react/system.txt
+  required_variables:
+  - simulation_notice_block
+  - tool_routing_block
+  - workflow_core_block
+  - workflow_memory_block
+  - available_tools_block
+  - memory_system_block
+  - memory_checklist_block
+  - runtime_protocol_block
+  - final_output_block
+- id: core.react.runtime-system
+  version: 1.0.0
+  file: react/runtime-system.txt
+  required_variables:
+  - system_prompt
+  - current_time
+- id: core.react.simulation-notice
+  version: 1.0.0
+  file: react/simulation-notice.txt
+  required_variables: []
+- id: core.react.routing-enabled
+  version: 1.0.0
+  file: react/routing-enabled.txt
+  required_variables: []
+- id: core.react.routing-disabled
+  version: 1.0.0
+  file: react/routing-disabled.txt
+  required_variables: []
+- id: core.react.workflow-standard
+  version: 1.0.0
+  file: react/workflow-standard.txt
+  required_variables: []
+- id: core.react.workflow-routed
+  version: 1.0.0
+  file: react/workflow-routed.txt
+  required_variables: []
+- id: core.react.workflow-memory
+  version: 1.0.0
+  file: react/workflow-memory.txt
+  required_variables: []
+- id: core.react.workflow-no-memory
+  version: 1.0.0
+  file: react/workflow-no-memory.txt
+  required_variables: []
+- id: core.react.available-tools
+  version: 1.0.0
+  file: react/available-tools.txt
+  required_variables: []
+- id: core.react.memory-system
+  version: 1.0.0
+  file: react/memory-system.txt
+  required_variables: []
+- id: core.react.memory-checklist
+  version: 1.0.0
+  file: react/memory-checklist.txt
+  required_variables: []
+- id: core.react.runtime-protocol
+  version: 1.0.0
+  file: react/runtime-protocol.txt
+  required_variables: []
+- id: core.react.final-output
+  version: 1.0.0
+  file: react/final-output.txt
+  required_variables: []
+- id: core.react.step-reminder
+  version: 1.0.0
+  file: react/step-reminder.txt
+  required_variables:
+  - remaining_steps
+  - termination_token
+- id: core.multi-agent.manager
+  version: 1.0.0
+  file: multi-agent/manager.txt
+  required_variables:
+  - context
+  - portfolio
+  - prices
+- id: core.multi-agent.trading
+  version: 1.0.0
+  file: multi-agent/trading.txt
+  required_variables:
+  - instruction
+  - portfolio
+  - prices
+- id: core.multi-agent.news
+  version: 1.0.0
+  file: multi-agent/news.txt
+  required_variables:
+  - instruction
+- id: core.multi-agent.coder
+  version: 1.0.0
+  file: multi-agent/coder.txt
+  required_variables:
+  - instruction
+- id: core.advanced-multi-agent.manager
+  version: 1.0.0
+  file: advanced/manager.txt
+  required_variables:
+  - objective
+  - portfolio
+  - prices
+  - evidence_book
+  - context
+  - conflicts
+  - collaboration_state
+- id: core.advanced-multi-agent.trading
+  version: 1.0.0
+  file: advanced/trading.txt
+  required_variables:
+  - instruction
+  - portfolio
+  - prices
+- id: core.advanced-multi-agent.news
+  version: 1.0.0
+  file: advanced/news.txt
+  required_variables:
+  - instruction
+- id: core.advanced-multi-agent.coder
+  version: 1.0.0
+  file: advanced/coder.txt
+  required_variables:
+  - instruction
+- id: core.advanced-multi-agent.analyst
+  version: 1.0.0
+  file: advanced/analyst.txt
+  required_variables:
+  - instruction
+  - portfolio
+  - prices
+- id: core.advanced-multi-agent.critic
+  version: 1.0.0
+  file: advanced/critic.txt
+  required_variables:
+  - instruction
+  - portfolio
+  - prices
+- id: core.advanced-multi-agent.execution
+  version: 1.0.0
+  file: advanced/execution.txt
+  required_variables: []
+- id: core.rule-aware.system
+  version: 1.0.0
+  file: rule-aware/system.txt
+  required_variables:
+  - rule_documents
+  - current_time
+  - portfolio
+  - prices
+- id: core.rule-aware.reminder
+  version: 1.0.0
+  file: rule-aware/reminder.txt
+  required_variables:
+  - remaining_steps
+- id: core.search-sub-agent.system
+  version: 1.0.0
+  file: search/system.txt
+  required_variables:
+  - max_steps
+- id: core.compliance-audit.system
+  version: 1.0.0
+  file: compliance-audit/system.txt
+  required_variables: []
+profiles:
+- id: core.react.default
+  version: 1.0.0
+  slots:
+    system:
+      prompt_id: core.react.system
+    runtime_system:
+      prompt_id: core.react.runtime-system
+    simulation_notice:
+      prompt_id: core.react.simulation-notice
+    runtime_protocol:
+      prompt_id: core.react.runtime-protocol
+    final_output:
+      prompt_id: core.react.final-output
+    step_reminder:
+      prompt_id: core.react.step-reminder
+    routing:
+      prompt_id: core.react.routing-disabled
+    workflow_core:
+      prompt_id: core.react.workflow-standard
+    workflow_memory:
+      prompt_id: core.react.workflow-no-memory
+    available_tools:
+      prompt_id: core.react.available-tools
+    memory_system:
+      prompt_id: core.common.empty
+    memory_checklist:
+      prompt_id: core.common.empty
+- id: core.react.memory
+  version: 1.0.0
+  slots:
+    system:
+      prompt_id: core.react.system
+    runtime_system:
+      prompt_id: core.react.runtime-system
+    simulation_notice:
+      prompt_id: core.react.simulation-notice
+    runtime_protocol:
+      prompt_id: core.react.runtime-protocol
+    final_output:
+      prompt_id: core.react.final-output
+    step_reminder:
+      prompt_id: core.react.step-reminder
+    routing:
+      prompt_id: core.react.routing-disabled
+    workflow_core:
+      prompt_id: core.react.workflow-standard
+    workflow_memory:
+      prompt_id: core.react.workflow-memory
+    available_tools:
+      prompt_id: core.react.available-tools
+    memory_system:
+      prompt_id: core.react.memory-system
+    memory_checklist:
+      prompt_id: core.react.memory-checklist
+- id: core.react.tool-routing
+  version: 1.0.0
+  slots:
+    system:
+      prompt_id: core.react.system
+    runtime_system:
+      prompt_id: core.react.runtime-system
+    simulation_notice:
+      prompt_id: core.react.simulation-notice
+    runtime_protocol:
+      prompt_id: core.react.runtime-protocol
+    final_output:
+      prompt_id: core.react.final-output
+    step_reminder:
+      prompt_id: core.react.step-reminder
+    routing:
+      prompt_id: core.react.routing-enabled
+    workflow_core:
+      prompt_id: core.react.workflow-routed
+    workflow_memory:
+      prompt_id: core.common.empty
+    available_tools:
+      prompt_id: core.common.empty
+    memory_system:
+      prompt_id: core.common.empty
+    memory_checklist:
+      prompt_id: core.common.empty
+- id: core.react.memory-tool-routing
+  version: 1.0.0
+  slots:
+    system:
+      prompt_id: core.react.system
+    runtime_system:
+      prompt_id: core.react.runtime-system
+    simulation_notice:
+      prompt_id: core.react.simulation-notice
+    runtime_protocol:
+      prompt_id: core.react.runtime-protocol
+    final_output:
+      prompt_id: core.react.final-output
+    step_reminder:
+      prompt_id: core.react.step-reminder
+    routing:
+      prompt_id: core.react.routing-enabled
+    workflow_core:
+      prompt_id: core.react.workflow-routed
+    workflow_memory:
+      prompt_id: core.common.empty
+    available_tools:
+      prompt_id: core.common.empty
+    memory_system:
+      prompt_id: core.react.memory-system
+    memory_checklist:
+      prompt_id: core.react.memory-checklist
+- id: core.multi-agent.default
+  version: 1.0.0
+  slots:
+    manager:
+      prompt_id: core.multi-agent.manager
+    trading:
+      prompt_id: core.multi-agent.trading
+    news:
+      prompt_id: core.multi-agent.news
+    coder:
+      prompt_id: core.multi-agent.coder
+- id: core.advanced-multi-agent.default
+  version: 1.0.0
+  slots:
+    manager:
+      prompt_id: core.advanced-multi-agent.manager
+    trading:
+      prompt_id: core.advanced-multi-agent.trading
+    news:
+      prompt_id: core.advanced-multi-agent.news
+    coder:
+      prompt_id: core.advanced-multi-agent.coder
+    analyst:
+      prompt_id: core.advanced-multi-agent.analyst
+    critic:
+      prompt_id: core.advanced-multi-agent.critic
+    execution:
+      prompt_id: core.advanced-multi-agent.execution
+- id: core.rule-aware.default
+  version: 1.0.0
+  slots:
+    system:
+      prompt_id: core.rule-aware.system
+    reminder:
+      prompt_id: core.rule-aware.reminder
+- id: core.search-sub-agent.default
+  version: 1.0.0
+  slots:
+    system:
+      prompt_id: core.search-sub-agent.system
+- id: core.compliance-audit.default
+  version: 1.0.0
+  slots:
+    system:
+      prompt_id: core.compliance-audit.system
+

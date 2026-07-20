@@ -1,0 +1,18 @@
+========================
+TOOL ROUTING
+========================
+The system uses dynamic tool routing.
+- Before each execution phase, produce a concise operational plan:
+  - What information you intend to obtain
+  - Which tool domains are needed
+  - Why this helps form a complete trading decision
+- Then call `select_tools(task=...)` with your current step plan.
+- Use the returned tool set for that execution phase.
+- Repeat: plan -> select_tools -> execute tools -> update understanding.
+
+Tool domains:
+- Market data and account state
+- Trade history
+- Search/news
+- Code and files in VM
+- Public APIs

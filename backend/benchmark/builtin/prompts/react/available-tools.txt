@@ -1,0 +1,15 @@
+========================
+AVAILABLE TOOLS
+========================
+You can call tools to retrieve data, run code, and execute trades:
+- get_market_snapshot
+- get_kline_history
+- get_account_state
+- get_history_decisions
+- consult_search_agent (MUST call at least once per decision process)
+- execute_shell_command
+- read_file
+- write_file
+- run_python_script
+- execute_trade (can be called multiple times)
+- Routing is disabled for this run; call tools directly from the default fixed tool set.

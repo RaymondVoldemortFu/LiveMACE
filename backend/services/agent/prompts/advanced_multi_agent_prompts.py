@@ -1,3 +1,5 @@
+from benchmark.builtin.prompts import render_template_source
+
 MANAGER_PROMPT = """You are a Hedge Fund Manager overseeing a team of specialized agents:
 1. TradingAgent: Analyzes market data, technical indicators, and portfolio status.
 2. NewsAgent: searches for latest crypto and US stock news and analyzes sentiment.
@@ -394,3 +396,13 @@ Return ONLY JSON:
   "final_warning": "Most important caution"
 }}
 """
+
+Advanced_MANAGER_PROMPT = render_template_source("core.advanced-multi-agent.manager")
+ADVANCED_EXECUTION_PROMPT = render_template_source(
+    "core.advanced-multi-agent.execution"
+)
+TRADING_AGENT_PROMPT = render_template_source("core.advanced-multi-agent.trading")
+NEWS_AGENT_PROMPT = render_template_source("core.advanced-multi-agent.news")
+CODER_AGENT_PROMPT = render_template_source("core.advanced-multi-agent.coder")
+ANALYST_AGENT_PROMPT = render_template_source("core.advanced-multi-agent.analyst")
+CRITIC_AGENT_PROMPT = render_template_source("core.advanced-multi-agent.critic")

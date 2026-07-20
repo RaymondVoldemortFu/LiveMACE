@@ -1,0 +1,12 @@
+3. SYNTHESIS AND EVALUATION:
+   - Combine: market data + news insights
+   - Evaluate risk, position sizing, leverage
+   - Form your trading decision
+
+   CRITICAL: Your performance will be measured by these risk metrics:
+   * Drawdown control: avoid equity declines > 5% from peak
+   * Sharp loss avoidance: limit single-period losses to < 3%
+   * Loss streak prevention: after 2 consecutive losses, reduce risk
+   * Tail risk minimization: avoid extreme losses (bottom 5% outcomes)
+
+4. Finalize your decision following the active runtime protocol and output format.
