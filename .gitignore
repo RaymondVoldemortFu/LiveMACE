@@ -318,6 +318,12 @@ backend/tests/fakes/__pycache__/
 !backend/tests/agents/
 !backend/tests/agents/**
 backend/tests/agents/__pycache__/
+!backend/tests/bootstrap/
+!backend/tests/bootstrap/**
+backend/tests/bootstrap/__pycache__/
+!backend/tests/persistence/
+!backend/tests/persistence/**
+backend/tests/persistence/__pycache__/
 .vscode/
 backend/.DS_Store
 
