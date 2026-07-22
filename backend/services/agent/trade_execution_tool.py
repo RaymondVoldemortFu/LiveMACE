@@ -124,24 +124,30 @@ def execute_trade_tool(
             idempotency_key=normalized_idempotency_key,
         )
         gateway_result = get_default_trade_gateway(db).execute(command)
+        result = dict(gateway_result.raw_result)
         if gateway_result.accepted:
-            return {
-                "executed": gateway_result.executed,
-                "operation": gateway_result.normalized_command.operation,
-                "symbol": gateway_result.normalized_command.symbol,
-                "market": gateway_result.normalized_command.market.value,
-                "direction": gateway_result.normalized_command.direction,
-                "order_id": gateway_result.order_id,
-                "trade_id": gateway_result.trade_id,
-            }
-        return {
-            "executed": False,
-            "error": gateway_result.reject_message,
-            "reject_code": gateway_result.reject_code,
-            "operation": gateway_result.normalized_command.operation,
-            "symbol": gateway_result.normalized_command.symbol,
-            "market": gateway_result.normalized_command.market.value,
-        }
+            result.setdefault("executed", gateway_result.executed)
+            result.setdefault("operation", gateway_result.normalized_command.operation)
+            if gateway_result.normalized_command.symbol:
+                result.setdefault("symbol", gateway_result.normalized_command.symbol)
+            if not gateway_result.raw_result:
+                result.setdefault("market", gateway_result.normalized_command.market.value)
+                if gateway_result.normalized_command.direction:
+                    result.setdefault("direction", gateway_result.normalized_command.direction)
+            if gateway_result.order_id is not None:
+                result.setdefault("order_id", gateway_result.order_id)
+            if gateway_result.trade_id is not None:
+                result.setdefault("trade_id", gateway_result.trade_id)
+            return result
+        result.setdefault("executed", False)
+        result.setdefault("error", gateway_result.reject_message)
+        result.setdefault("reject_code", gateway_result.reject_code)
+        result.setdefault("operation", gateway_result.normalized_command.operation)
+        if gateway_result.normalized_command.symbol:
+            result.setdefault("symbol", gateway_result.normalized_command.symbol)
+        if not gateway_result.raw_result:
+            result.setdefault("market", gateway_result.normalized_command.market.value)
+        return result
     except Exception as exc:
         logger.error("execute_trade_tool gateway adapter failed: %s", exc, exc_info=True)
         return {"executed": False, "error": str(exc), "reject_code": "TRADE_GATEWAY_ERROR"}

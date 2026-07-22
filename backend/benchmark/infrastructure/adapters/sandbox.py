@@ -6,6 +6,7 @@ from typing import Any, Mapping
 
 from benchmark.contracts import JsonValue
 from benchmark.providers import HealthStatus, SandboxLease, SandboxPort
+from benchmark.providers.errors import ProviderError
 
 
 class ContainerServiceSandboxAdapter(SandboxPort):
@@ -18,9 +19,15 @@ class ContainerServiceSandboxAdapter(SandboxPort):
         self._container_service = container_service
 
     def lease(self, account_id: int) -> SandboxLease:
-        container = self._container_service.get_or_create_container(account_id)
-        container_id = str(getattr(container, "id", None) or getattr(container, "short_id", None) or account_id)
-        return SandboxLease(account_id=account_id, container_id=container_id)
+        container_id = self._container_service.lease_container(account_id)
+        if not container_id:
+            raise ProviderError(
+                "failed to lease sandbox container",
+                code="SANDBOX_LEASE_FAILED",
+                retryable=True,
+                provider_id=self.id,
+            )
+        return SandboxLease(account_id=account_id, container_id=str(container_id))
 
     def release(self, lease: SandboxLease) -> None:
         release = getattr(self._container_service, "release_container", None)

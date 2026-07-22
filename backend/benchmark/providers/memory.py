@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Mapping, Protocol, Sequence
+from typing import Any, Mapping, Protocol, Sequence
+
+from sqlalchemy.orm import Session
 
 from benchmark.contracts import JsonValue
 from benchmark.contracts.common import _freeze_mapping, _require_aware, _require_non_empty
@@ -35,9 +37,28 @@ class MemoryStorePort(Protocol):
     capabilities: tuple[str, ...]
     config_schema: Mapping[str, JsonValue]
 
-    def search(self, account_id: int, query: str, limit: int) -> Sequence[MemoryRecord]: ...
-    def add(self, account_id: int, content: str, metadata: Mapping[str, JsonValue]) -> str: ...
-    def delete_all(self, account_id: int) -> int: ...
+    def search(
+        self,
+        account_id: int | str,
+        query: str,
+        limit: int,
+        *,
+        db: Session | None = None,
+        market: str = "CRYPTO",
+    ) -> Sequence[MemoryRecord]: ...
+
+    def add(
+        self,
+        account_id: int | str,
+        content: str,
+        metadata: Mapping[str, JsonValue],
+        *,
+        trace_id: str | None = None,
+        db: Session | None = None,
+        market: str = "CRYPTO",
+    ) -> str: ...
+
+    def delete_all(self, account_id: int | str) -> int: ...
     def healthcheck(self) -> HealthStatus: ...
 
 

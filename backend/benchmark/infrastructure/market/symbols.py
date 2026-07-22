@@ -9,7 +9,7 @@ from services.trading_symbols import AI_TRADING_SYMBOLS
 
 
 CRYPTO_SYMBOLS = tuple(str(symbol).upper() for symbol in AI_TRADING_SYMBOLS)
-# Keep this list aligned with the previous Alpaca SUPPORTED_STOCKS constant.
+# TODO: Keep this list aligned with the previous Alpaca SUPPORTED_STOCKS constant.
 # If symbols become provider-configurable later, inject them via a MarketSymbolRegistry/adapter instead of importing Alpaca here.
 US_SYMBOLS = ("AAPL", "NVDA", "GOOGL", "META", "AMZN", "TSLA", "PG", "JNJ", "UNH", "JPM", "V", "BA", "XOM", "NEE", "AMT", "PLD", "LIN")
 
@@ -74,3 +74,4 @@ __all__ = [
     "resolve_symbol_market",
     "validate_supported",
 ]
+

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from decimal import Decimal
-from threading import Lock
-from typing import Callable, Mapping, Any
+from threading import Condition, Lock
+from typing import Any, Callable, Mapping
 
 from sqlalchemy.orm import Session
 
@@ -18,21 +18,22 @@ from .policy import normalize_trade_command
 class TradeCommandGateway:
     db: Session
     executor: Callable[..., Mapping[str, Any]] | None = None
-    _results: dict[tuple[int, str], TradeCommandResult] = field(default_factory=dict)
-    _lock: Lock = field(default_factory=Lock)
+    _store: TradeCommandIdempotencyStore = field(default_factory=lambda: _DEFAULT_IDEMPOTENCY_STORE)
 
     def execute(self, command: TradeCommand) -> TradeCommandResult:
         normalized = normalize_trade_command(command)
         key = (normalized.account_id, normalized.idempotency_key)
-        with self._lock:
-            existing = self._results.get(key)
-            if existing is not None:
-                return existing
+        state = self._store.start(key)
+        if not state.should_execute:
+            return self._store.wait(key)
 
-        result = self._execute_once(normalized)
-        with self._lock:
-            self._results.setdefault(key, result)
-            return self._results[key]
+        try:
+            result = self._execute_once(normalized)
+        except BaseException:
+            self._store.fail(key)
+            raise
+        self._store.complete(key, result)
+        return result
 
     def _execute_once(self, command: TradeCommand) -> TradeCommandResult:
         try:
@@ -66,14 +67,15 @@ class TradeCommandGateway:
         if not isinstance(tool_result, Mapping):
             return TradeCommandResult(False, False, "INVALID_TOOL_RESULT", "trade executor returned invalid result", None, None, command)
 
+        raw_result = dict(tool_result)
         executed = bool(tool_result.get("executed"))
         order_id = _as_positive_int(tool_result.get("order_id"))
         trade_id = _as_positive_int(tool_result.get("trade_id"))
         if executed:
-            return TradeCommandResult(True, True, None, None, order_id, trade_id, command)
+            return TradeCommandResult(True, True, None, None, order_id, trade_id, command, raw_result)
 
         message = str(tool_result.get("error") or tool_result.get("message") or "trade command rejected")
-        return TradeCommandResult(False, False, _reject_code(message), message, order_id, trade_id, command)
+        return TradeCommandResult(False, False, _reject_code(message), message, order_id, trade_id, command, raw_result)
 
 
 def _as_float(value: Decimal | None) -> float | None:
@@ -103,8 +105,50 @@ def _reject_code(message: str) -> str:
     return "TRADE_REJECTED"
 
 
+@dataclass(frozen=True)
+class _IdempotencyStart:
+    should_execute: bool
+
+
+class TradeCommandIdempotencyStore:
+    def __init__(self) -> None:
+        self._results: dict[tuple[int, str], TradeCommandResult] = {}
+        self._in_flight: set[tuple[int, str]] = set()
+        self._condition = Condition(Lock())
+
+    def start(self, key: tuple[int, str]) -> _IdempotencyStart:
+        with self._condition:
+            if key in self._results or key in self._in_flight:
+                return _IdempotencyStart(False)
+            self._in_flight.add(key)
+            return _IdempotencyStart(True)
+
+    def wait(self, key: tuple[int, str]) -> TradeCommandResult:
+        with self._condition:
+            while key in self._in_flight:
+                self._condition.wait()
+            existing = self._results.get(key)
+            if existing is None:
+                raise RuntimeError("idempotent trade command did not produce a result")
+            return existing
+
+    def complete(self, key: tuple[int, str], result: TradeCommandResult) -> None:
+        with self._condition:
+            self._results.setdefault(key, result)
+            self._in_flight.discard(key)
+            self._condition.notify_all()
+
+    def fail(self, key: tuple[int, str]) -> None:
+        with self._condition:
+            self._in_flight.discard(key)
+            self._condition.notify_all()
+
+
+_DEFAULT_IDEMPOTENCY_STORE = TradeCommandIdempotencyStore()
+
+
 def get_default_trade_gateway(db: Session) -> TradeCommandGateway:
-    return TradeCommandGateway(db=db)
+    return TradeCommandGateway(db=db, _store=_DEFAULT_IDEMPOTENCY_STORE)
 
 
-__all__ = ["TradeCommandGateway", "get_default_trade_gateway"]
+__all__ = ["TradeCommandGateway", "TradeCommandIdempotencyStore", "get_default_trade_gateway"]

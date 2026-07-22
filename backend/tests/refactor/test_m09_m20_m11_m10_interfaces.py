@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
+from threading import Event
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Mapping
@@ -8,7 +10,7 @@ from typing import Mapping
 import pytest
 
 from benchmark.application.decisions import DecisionRoundService, RunDecisionRound
-from benchmark.application.trading import TradeCommandGateway
+from benchmark.application.trading import TradeCommandGateway, TradeCommandIdempotencyStore
 from benchmark.contracts import Market, TradeCommand
 from benchmark.infrastructure.cache import LegacyToolCacheAdapter
 from benchmark.infrastructure.market.services import DisplayMarketDataService, TradingMarketDataService
@@ -106,6 +108,55 @@ def test_m11_gateway_is_synchronous_and_idempotent():
     assert len(calls) == 1
     assert first.normalized_command.symbol == "BTC"
 
+
+
+def test_m11_gateway_deduplicates_concurrent_same_key():
+    started = Event()
+    release = Event()
+    calls = []
+
+    def fake_legacy(**kwargs):
+        calls.append(kwargs)
+        started.set()
+        release.wait(timeout=2)
+        return {"executed": True, "order_id": 123, "trade_id": 456}
+
+    store = TradeCommandIdempotencyStore()
+    gateway = TradeCommandGateway(db=object(), executor=fake_legacy, _store=store)
+    command = TradeCommand(1, "open", Market.CRYPTO, "BTC", "long", "portion", Decimal("0.2"), 1, "test", "same-key")
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first_future = pool.submit(gateway.execute, command)
+        assert started.wait(timeout=2)
+        second_future = pool.submit(gateway.execute, command)
+        release.set()
+        first = first_future.result(timeout=2)
+        second = second_future.result(timeout=2)
+
+    assert first is second
+    assert len(calls) == 1
+
+
+def test_m11_default_gateway_reuses_idempotency_store_between_instances(monkeypatch):
+    import benchmark.application.trading.gateway as gateway_module
+
+    calls = []
+
+    def fake_legacy(**kwargs):
+        calls.append(kwargs)
+        return {"executed": True, "order_id": 321}
+
+    first_gateway = gateway_module.get_default_trade_gateway(object())
+    second_gateway = gateway_module.get_default_trade_gateway(object())
+    first_gateway.executor = fake_legacy
+    second_gateway.executor = fake_legacy
+    command = TradeCommand(1, "open", Market.CRYPTO, "BTC", "long", "portion", Decimal("0.2"), 1, "test", "shared-key")
+
+    first = first_gateway.execute(command)
+    second = second_gateway.execute(command)
+
+    assert first is second
+    assert len(calls) == 1
 
 def test_m11_gateway_maps_rejects_to_stable_codes():
     def fake_legacy(**kwargs):
@@ -230,3 +281,162 @@ def test_m11_execute_trade_tool_generates_idempotency_key_from_normalized_inputs
 
 
 
+
+
+def test_m09_sandbox_adapter_uses_lease_container():
+    from benchmark.infrastructure.adapters.sandbox import ContainerServiceSandboxAdapter
+
+    class FakeContainerService:
+        def __init__(self):
+            self.leased = []
+            self.released = []
+
+        def lease_container(self, account_id):
+            self.leased.append(account_id)
+            return "container-1"
+
+        def release_container(self, account_id):
+            self.released.append(account_id)
+
+    service = FakeContainerService()
+    adapter = ContainerServiceSandboxAdapter(service)
+
+    lease = adapter.lease(7)
+    adapter.release(lease)
+
+    assert lease.container_id == "container-1"
+    assert service.leased == [7]
+    assert service.released == [7]
+
+
+def test_m09_sandbox_adapter_rejects_missing_container_id():
+    from benchmark.infrastructure.adapters.sandbox import ContainerServiceSandboxAdapter
+    from benchmark.providers.errors import ProviderError
+
+    class FakeContainerService:
+        def lease_container(self, account_id):
+            return None
+
+    with pytest.raises(ProviderError, match="failed to lease sandbox container"):
+        ContainerServiceSandboxAdapter(FakeContainerService()).lease(7)
+
+
+def test_m11_execute_trade_tool_preserves_legacy_result_fields(monkeypatch):
+    from benchmark.contracts import TradeCommandResult
+
+    monkeypatch.setenv("ALPACA_KEY", "dummy")
+    monkeypatch.setenv("ALPACA_SECRET", "dummy")
+
+    import benchmark.application.trading as trading_app
+    from services.agent import trade_execution_tool
+
+    class FakeGateway:
+        def execute(self, command):
+            return TradeCommandResult(
+                True,
+                True,
+                None,
+                None,
+                1,
+                2,
+                command,
+                {
+                    "executed": True,
+                    "operation": "close_all",
+                    "closed_orders": [],
+                    "message": "No positions to close.",
+                    "quantity": 0,
+                    "notional_usd": 0,
+                    "order_no": "ORD-1",
+                    "size_mode": "close_all",
+                },
+            )
+
+    monkeypatch.setattr(trading_app, "get_default_trade_gateway", lambda db: FakeGateway())
+
+    result = trade_execution_tool.execute_trade_tool(db=object(), account_id=1, operation="close_all")
+
+    assert result["closed_orders"] == []
+    assert result["message"] == "No positions to close."
+    assert result["quantity"] == 0
+    assert result["notional_usd"] == 0
+    assert result["order_no"] == "ORD-1"
+    assert result["size_mode"] == "close_all"
+
+
+def test_m09_legacy_memory_adapter_matches_existing_store_contract():
+    from datetime import datetime, timezone
+
+    from benchmark.infrastructure.adapters.memory import LegacyMemoryStoreAdapter
+
+    db = object()
+
+    class FakeLegacyMemory:
+        def __init__(self):
+            self.add_calls = []
+            self.search_calls = []
+            self.clear_calls = []
+
+        def add(self, content, account_id, metadata=None, trace_id=None, db=None, market="CRYPTO"):
+            self.add_calls.append(
+                {
+                    "content": content,
+                    "account_id": account_id,
+                    "metadata": metadata,
+                    "trace_id": trace_id,
+                    "db": db,
+                    "market": market,
+                }
+            )
+            return 42
+
+        def search(self, query, account_id, limit=2, db=None, market="CRYPTO"):
+            self.search_calls.append(
+                {
+                    "query": query,
+                    "account_id": account_id,
+                    "limit": limit,
+                    "db": db,
+                    "market": market,
+                }
+            )
+            return [
+                {
+                    "id": 5,
+                    "content": "US memory",
+                    "metadata": {"source": "test"},
+                    "similarity": "0.75",
+                    "created_at": datetime(2026, 7, 20, 12, 0, tzinfo=timezone.utc),
+                }
+            ]
+
+        def clear_account_memories(self, account_id):
+            self.clear_calls.append(account_id)
+            return 3
+
+    legacy = FakeLegacyMemory()
+    adapter = LegacyMemoryStoreAdapter(legacy)
+
+    memory_id = adapter.add(7, "remember AAPL", {"symbol": "AAPL"}, trace_id="trace-1", db=db, market="US")
+    records = adapter.search(7, "AAPL", 4, db=db, market="US")
+    deleted = adapter.delete_all(7)
+
+    assert memory_id == "42"
+    assert legacy.add_calls == [
+        {
+            "content": "remember AAPL",
+            "account_id": "7",
+            "metadata": {"symbol": "AAPL"},
+            "trace_id": "trace-1",
+            "db": db,
+            "market": "US",
+        }
+    ]
+    assert legacy.search_calls == [{"query": "AAPL", "account_id": "7", "limit": 4, "db": db, "market": "US"}]
+    assert legacy.clear_calls == ["7"]
+    assert deleted == 3
+    assert records[0].id == "5"
+    assert records[0].content == "US memory"
+    assert records[0].metadata["source"] == "test"
+    assert records[0].score == 0.75
+    assert records[0].created_at == datetime(2026, 7, 20, 12, 0, tzinfo=timezone.utc)
