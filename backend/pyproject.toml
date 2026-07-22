@@ -54,4 +54,5 @@ packages = ["benchmark"]
 [tool.pytest.ini_options]
 markers = [
     "integration: calls external HTTP APIs (requires .env credentials)",
+    "slow: heavy subprocess/import tests (~1 min)",
 ]

@@ -1,0 +1,156 @@
+"""App factory (M18): assembly only — middleware, routes, static, lifespan.
+
+``create_app`` never creates tables, never connects Redis, never starts
+threads; all of that happens in the lifespan via ``bootstrap_runtime``
+when the server actually starts. Importing this module (or a module that
+calls ``create_app``) therefore has no runtime side effects.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
+from typing import List, Optional
+
+from fastapi import FastAPI
+
+from benchmark.bootstrap.runtime import (
+    BootstrapContext,
+    StartupMode,
+    bootstrap_runtime,
+    shutdown_runtime,
+)
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class AppSettings:
+    title: str = "Crypto Paper Trading API"
+    cors_allow_origins: List[str] = field(default_factory=lambda: ["*"])
+    static_dir: Optional[str] = None  # default: backend/static
+
+    def resolved_static_dir(self) -> str:
+        if self.static_dir is not None:
+            return self.static_dir
+        backend_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        return os.path.join(backend_dir, "static")
+
+
+def create_app(
+    settings: Optional[AppSettings] = None,
+    mode: StartupMode = StartupMode.FULL,
+) -> FastAPI:
+    settings = settings if settings is not None else AppSettings()
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        if mode == StartupMode.SCHEMA_ONLY:
+            raise RuntimeError(
+                "SCHEMA_ONLY is for scripts/tests via bootstrap_runtime_sync; "
+                "an HTTP app must use FULL or NO_BACKGROUND"
+            )
+        handle = await bootstrap_runtime(BootstrapContext(mode=mode))
+        app.state.runtime_handle = handle
+        try:
+            yield
+        finally:
+            await shutdown_runtime(handle)
+
+    app = FastAPI(title=settings.title, lifespan=lifespan)
+    app.state.startup_mode = mode
+
+    _register_middleware(app, settings)
+    _register_health(app)
+    _register_static(app, settings)
+    _register_routes(app)
+    _register_spa(app, settings)
+    return app
+
+
+def _register_middleware(app: FastAPI, settings: AppSettings) -> None:
+    from fastapi.middleware.cors import CORSMiddleware
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_allow_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+
+def _register_health(app: FastAPI) -> None:
+    @app.get("/api/health")
+    async def health_check():
+        return {"status": "healthy", "message": "Trading API is running"}
+
+
+def _register_static(app: FastAPI, settings: AppSettings) -> None:
+    from fastapi.staticfiles import StaticFiles
+
+    static_dir = settings.resolved_static_dir()
+    if os.path.exists(static_dir):
+        app.mount("/static", StaticFiles(directory=static_dir), name="static")
+        assets_dir = os.path.join(static_dir, "assets")
+        if os.path.exists(assets_dir):
+            app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+
+def _register_routes(app: FastAPI) -> None:
+    from api.account_routes import router as account_router
+    from api.agent_routes import router as agent_router
+    from api.compliance_routes import router as compliance_router
+    from api.config_routes import router as config_router
+    from api.crypto_routes import router as crypto_router
+    from api.evaluation_routes import router as evaluation_router
+    from api.market_data_routes import router as market_data_router
+    from api.memory_routes import router as memory_router
+    from api.order_routes import router as order_router
+    from api.ranking_routes import router as ranking_router
+    from api.rule_routes import router as rule_router
+    from api.ws import websocket_endpoint
+
+    app.include_router(market_data_router)
+    app.include_router(order_router)
+    app.include_router(account_router)
+    app.include_router(config_router)
+    app.include_router(ranking_router)
+    app.include_router(crypto_router)
+    app.include_router(agent_router)
+    app.include_router(memory_router)
+    app.include_router(rule_router)
+    app.include_router(compliance_router)
+    app.include_router(evaluation_router)
+    app.websocket("/ws")(websocket_endpoint)
+
+
+def _register_spa(app: FastAPI, settings: AppSettings) -> None:
+    from fastapi.responses import FileResponse
+
+    static_dir = settings.resolved_static_dir()
+
+    @app.get("/")
+    async def serve_root():
+        index_path = os.path.join(static_dir, "index.html")
+        if os.path.exists(index_path):
+            return FileResponse(index_path)
+        return {"message": "Frontend not built yet"}
+
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str):
+        if (
+            full_path.startswith("api")
+            or full_path.startswith("static")
+            or full_path.startswith("docs")
+            or full_path.startswith("openapi.json")
+        ):
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=404, detail="Not found")
+        index_path = os.path.join(static_dir, "index.html")
+        if os.path.exists(index_path):
+            return FileResponse(index_path)
+        return {"message": "Frontend not built yet"}

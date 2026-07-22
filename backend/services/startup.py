@@ -1,4 +1,12 @@
-"""Application startup initialization service"""
+"""Application startup initialization service.
+
+M18 note: the server no longer calls ``initialize_services`` /
+``shutdown_services``; ``benchmark.bootstrap`` owns the runtime
+lifecycle via per-task descriptors (same entry points, same order, same
+intervals). These functions are kept for scripts and for the migration
+comparison window, and ``schedule_eval_checkpoint_job`` is the shared
+implementation used by both paths.
+"""
 
 import logging
 import threading
@@ -16,6 +24,69 @@ logger = logging.getLogger(__name__)
 # This keeps local development configuration in one place without overriding real env vars
 # (e.g. Docker/K8s injected values).
 dotenv.load_dotenv(dotenv_path=dotenv.find_dotenv(usecwd=True), override=False)
+
+
+def schedule_eval_checkpoint_job() -> None:
+    """Register the periodic evaluation checkpoint job (PnL/return per slice).
+
+    The job is idempotent per (account, interval, period_end), so it can
+    poll frequently. Configure via `.env` if needed:
+    - AI_TRADE_INTERVAL_SECONDS=14400 (agent decision interval)
+    - EVAL_CHECKPOINT_INTERVAL_SECONDS=900,3600,86400
+    - EVAL_CHECKPOINT_POLL_SECONDS=30
+    """
+    from services.evaluation.checkpoint_service import run_checkpoint_jobs
+
+    # Get AI trade interval (agent decision period)
+    ai_trade_interval = int(os.getenv("AI_TRADE_INTERVAL_SECONDS", "14400"))
+
+    # Get evaluation checkpoint intervals
+    raw_intervals = os.getenv("EVAL_CHECKPOINT_INTERVAL_SECONDS", "900,3600,86400")
+    raw_poll = os.getenv("EVAL_CHECKPOINT_POLL_SECONDS", "30")
+    try:
+        poll_seconds = int(str(raw_poll).strip())
+    except Exception:
+        poll_seconds = 30
+        logger.warning(
+            f"Invalid EVAL_CHECKPOINT_POLL_SECONDS={raw_poll!r}; falling back to {poll_seconds}s"
+        )
+
+    if poll_seconds < 1:
+        logger.warning(
+            f"EVAL_CHECKPOINT_POLL_SECONDS={poll_seconds} is too small; clamping to 1s"
+        )
+        poll_seconds = 1
+
+    intervals: list[int] = []
+    for part in (raw_intervals or "").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            val = int(part)
+            if val > 0:
+                intervals.append(val)
+        except ValueError:
+            logger.warning(f"Ignoring invalid EVAL_CHECKPOINT_INTERVAL_SECONDS item: {part}")
+
+    if not intervals:
+        intervals = [3600]
+
+    # Add AI trade interval to the list (union, auto-dedup)
+    intervals.append(ai_trade_interval)
+    intervals = sorted(set(intervals))
+
+    def _run_eval_checkpoint_job():
+        return run_checkpoint_jobs(intervals)
+
+    task_scheduler.add_interval_task(
+        task_func=_run_eval_checkpoint_job,
+        interval_seconds=poll_seconds,
+        task_id="eval_checkpoint_job",
+    )
+    logger.info(
+        f"Evaluation checkpoint job started: intervals={intervals}, poll={poll_seconds}s"
+    )
 
 
 def initialize_services():
@@ -81,70 +152,13 @@ def initialize_services():
             logger.error(f"Failed to start order scheduler: {e}")
 
         # Start periodic evaluation checkpoint job (PnL/return per time slice)
-        # The job is idempotent per (account, interval, period_end), so we can poll frequently.
         try:
-            from services.evaluation.checkpoint_service import run_checkpoint_jobs
-
-            # Configure these in your `.env` for local development if needed:
-            # - AI_TRADE_INTERVAL_SECONDS=14400 (agent decision interval)
-            # - EVAL_CHECKPOINT_INTERVAL_SECONDS=900,3600,86400
-            # - EVAL_CHECKPOINT_POLL_SECONDS=30
-
-            # Get AI trade interval (agent decision period)
-            ai_trade_interval = int(os.getenv("AI_TRADE_INTERVAL_SECONDS", "14400"))
-
-            # Get evaluation checkpoint intervals
-            raw_intervals = os.getenv("EVAL_CHECKPOINT_INTERVAL_SECONDS", "900,3600,86400")
-            raw_poll = os.getenv("EVAL_CHECKPOINT_POLL_SECONDS", "30")
-            try:
-                poll_seconds = int(str(raw_poll).strip())
-            except Exception:
-                poll_seconds = 30
-                logger.warning(
-                    f"Invalid EVAL_CHECKPOINT_POLL_SECONDS={raw_poll!r}; falling back to {poll_seconds}s"
-                )
-
-            if poll_seconds < 1:
-                logger.warning(
-                    f"EVAL_CHECKPOINT_POLL_SECONDS={poll_seconds} is too small; clamping to 1s"
-                )
-                poll_seconds = 1
-
-            intervals: list[int] = []
-            for part in (raw_intervals or "").split(","):
-                part = part.strip()
-                if not part:
-                    continue
-                try:
-                    val = int(part)
-                    if val > 0:
-                        intervals.append(val)
-                except ValueError:
-                    logger.warning(f"Ignoring invalid EVAL_CHECKPOINT_INTERVAL_SECONDS item: {part}")
-
-            if not intervals:
-                intervals = [3600]
-
-            # Add AI trade interval to the list (union, auto-dedup)
-            intervals.append(ai_trade_interval)
-            intervals = sorted(set(intervals))
-
-            def _run_eval_checkpoint_job():
-                return run_checkpoint_jobs(intervals)
-
-            task_scheduler.add_interval_task(
-                task_func=_run_eval_checkpoint_job,
-                interval_seconds=poll_seconds,
-                task_id="eval_checkpoint_job",
-            )
-            logger.info(
-                f"Evaluation checkpoint job started: intervals={intervals}, poll={poll_seconds}s"
-            )
+            schedule_eval_checkpoint_job()
         except Exception as e:
             logger.error(f"Failed to start evaluation checkpoint job: {e}")
-        
+
         logger.info("All services initialized successfully")
-        
+
     except Exception as e:
         logger.error(f"Service initialization failed: {e}")
         raise
@@ -163,16 +177,16 @@ def shutdown_services():
             logger.info("Order scheduler stopped")
         except Exception as e:
             logger.error(f"Failed to stop order scheduler: {e}")
-        
+
         # Shutdown Docker Container Service
         try:
             ContainerService().shutdown()
             logger.info("Docker Container Service shutdown successfully")
         except Exception as e:
             logger.error(f"Failed to shutdown Docker Container Service: {e}")
-            
+
         logger.info("All services have been shut down")
-        
+
     except Exception as e:
         logger.error(f"Failed to shut down services: {e}")
 
@@ -189,7 +203,7 @@ async def shutdown_event():
 
 def schedule_auto_trading(interval_seconds: int = 300, max_ratio: float = 0.2, use_ai: bool = True) -> None:
     """Schedule automatic trading tasks
-    
+
     Args:
         interval_seconds: Interval between trading attempts
         max_ratio: Maximum portion of portfolio to use per trade
@@ -228,7 +242,7 @@ def schedule_auto_trading(interval_seconds: int = 300, max_ratio: float = 0.2, u
         task_id=job_id,
         max_ratio=max_ratio,
     )
-    
+
     # Execute the first trade immediately in a separate thread to avoid blocking
     initial_trade = threading.Thread(target=execute_trade, daemon=True)
     initial_trade.start()
