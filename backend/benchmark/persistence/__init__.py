@@ -1,0 +1,48 @@
+"""M19: Repository and Unit of Work boundary.
+
+Layout (per module task doc M19):
+
+- ``uow``: synchronous ``UnitOfWork`` protocol (one repository attribute
+  per domain) + SQLAlchemy implementation + per-worker factory.
+- ``repositories``: one protocol per domain; DB access only.
+- ``views``: read-only DTOs — the only shapes public extensions see.
+- ``sqlalchemy_repositories``: adapters; never commit (the UoW owns the
+  transaction).
+
+Importing this package must not create engines or sessions; concrete
+wiring is resolved lazily inside factories.
+"""
+
+from benchmark.persistence.repositories import (
+    AccountRepository,
+    DecisionRepository,
+    EvaluationRepository,
+    OrderRepository,
+    PositionRepository,
+    SnapshotRepository,
+    TraceRepository,
+    TradeRepository,
+    UserRepository,
+)
+from benchmark.persistence.uow import (
+    SqlAlchemyUnitOfWork,
+    UnitOfWork,
+    UnitOfWorkFactory,
+    default_unit_of_work_factory,
+)
+
+__all__ = [
+    "AccountRepository",
+    "PositionRepository",
+    "OrderRepository",
+    "TradeRepository",
+    "DecisionRepository",
+    "TraceRepository",
+    "SnapshotRepository",
+    "EvaluationRepository",
+    "UserRepository",
+    "UnitOfWork",
+    "UnitOfWorkFactory",
+    "SqlAlchemyUnitOfWork",
+    "default_unit_of_work_factory",
+]
