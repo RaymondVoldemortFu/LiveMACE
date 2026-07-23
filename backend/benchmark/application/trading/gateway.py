@@ -32,10 +32,7 @@ class TradeCommandGateway:
         except BaseException:
             self._store.fail(key)
             raise
-        if result.accepted:
-            self._store.complete(key, result)
-        else:
-            self._store.fail(key)
+        self._store.complete(key, result)
         return result
 
     def _execute_once(self, command: TradeCommand) -> TradeCommandResult:

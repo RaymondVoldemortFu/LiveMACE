@@ -114,6 +114,8 @@ def execute_trade_tool(
         elif decision_round_id and tool_call_id:
             normalized_idempotency_key = f"{decision_round_id}:{tool_call_id}"
         else:
+            # TODO(M06/M10 integration): pass decision_round_id and tool_call_id from the
+            # production Agent tool path once ToolInvoker/DecisionRoundService are wired.
             normalized_idempotency_key = f"tool:{uuid4()}"
         command = TradeCommand(
             account_id=account_id,

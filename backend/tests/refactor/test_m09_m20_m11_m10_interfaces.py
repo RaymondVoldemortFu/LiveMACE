@@ -109,7 +109,7 @@ def test_m11_gateway_is_synchronous_and_idempotent():
     assert first.normalized_command.symbol == "BTC"
 
 
-def test_m11_gateway_does_not_cache_rejected_results():
+def test_m11_gateway_caches_rejected_results_for_same_key():
     calls = []
 
     def fake_legacy(**kwargs):
@@ -125,8 +125,8 @@ def test_m11_gateway_does_not_cache_rejected_results():
 
     assert first.accepted is False
     assert second.accepted is False
-    assert first is not second
-    assert len(calls) == 2
+    assert second is first
+    assert len(calls) == 1
 
 
 
