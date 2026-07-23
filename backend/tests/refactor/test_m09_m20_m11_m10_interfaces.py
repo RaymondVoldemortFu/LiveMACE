@@ -109,6 +109,26 @@ def test_m11_gateway_is_synchronous_and_idempotent():
     assert first.normalized_command.symbol == "BTC"
 
 
+def test_m11_gateway_does_not_cache_rejected_results():
+    calls = []
+
+    def fake_legacy(**kwargs):
+        calls.append(kwargs)
+        return {"executed": False, "error": "market is closed"}
+
+    store = TradeCommandIdempotencyStore()
+    gateway = TradeCommandGateway(db=object(), executor=fake_legacy, _store=store)
+    command = TradeCommand(1, "open", Market.CRYPTO, "BTC", "long", "portion", Decimal("0.2"), 1, "test", "round-1:call-1")
+
+    first = gateway.execute(command)
+    second = gateway.execute(command)
+
+    assert first.accepted is False
+    assert second.accepted is False
+    assert first is not second
+    assert len(calls) == 2
+
+
 
 def test_m11_gateway_deduplicates_concurrent_same_key():
     started = Event()
@@ -227,7 +247,7 @@ def test_m20_symbol_registry_normalizes_and_validates_supported_markets():
         resolve_symbol_market("BTC", "US")
 
 
-def test_m11_execute_trade_tool_generates_idempotency_key_from_normalized_inputs(monkeypatch):
+def test_m11_execute_trade_tool_uses_round_tool_call_idempotency_key(monkeypatch):
     from benchmark.contracts import TradeCommandResult
 
     monkeypatch.setenv("ALPACA_KEY", "dummy")
@@ -262,6 +282,8 @@ def test_m11_execute_trade_tool_generates_idempotency_key_from_normalized_inputs
         direction=" LONG ",
         target_portion_of_balance=0.1,
         leverage="2",
+        decision_round_id="round-1",
+        tool_call_id="call-1",
     )
     trade_execution_tool.execute_trade_tool(
         db=object(),
@@ -272,12 +294,49 @@ def test_m11_execute_trade_tool_generates_idempotency_key_from_normalized_inputs
         direction="long",
         target_portion_of_balance=0.1,
         leverage=2,
+        decision_round_id="round-2",
+        tool_call_id="call-1",
     )
 
     assert captured_keys == [
-        "tool:1:open:BTC:CRYPTO:long:portion:0.1:2",
-        "tool:1:open:BTC:CRYPTO:long:portion:0.1:2",
+        "round-1:call-1",
+        "round-2:call-1",
     ]
+
+
+def test_m11_execute_trade_tool_without_round_uses_per_call_key(monkeypatch):
+    from benchmark.contracts import TradeCommandResult
+
+    monkeypatch.setenv("ALPACA_KEY", "dummy")
+    monkeypatch.setenv("ALPACA_SECRET", "dummy")
+
+    import benchmark.application.trading as trading_app
+    from services.agent import trade_execution_tool
+
+    captured_keys = []
+
+    class FakeGateway:
+        def execute(self, command):
+            captured_keys.append(command.idempotency_key)
+            return TradeCommandResult(True, True, None, None, 1, 2, command)
+
+    monkeypatch.setattr(trading_app, "get_default_trade_gateway", lambda db: FakeGateway())
+
+    for _ in range(2):
+        trade_execution_tool.execute_trade_tool(
+            db=object(),
+            account_id=1,
+            operation="open",
+            symbol="BTC",
+            market="CRYPTO",
+            direction="long",
+            target_portion_of_balance=0.1,
+            leverage=2,
+        )
+
+    assert captured_keys[0].startswith("tool:")
+    assert captured_keys[1].startswith("tool:")
+    assert captured_keys[0] != captured_keys[1]
 
 
 
@@ -388,7 +447,7 @@ def test_m09_legacy_memory_adapter_matches_existing_store_contract():
                     "market": market,
                 }
             )
-            return 42
+            return {"memory_id": "mem-42"}
 
         def search(self, query, account_id, limit=2, db=None, market="CRYPTO"):
             self.search_calls.append(
@@ -406,7 +465,7 @@ def test_m09_legacy_memory_adapter_matches_existing_store_contract():
                     "content": "US memory",
                     "metadata": {"source": "test"},
                     "similarity": "0.75",
-                    "created_at": datetime(2026, 7, 20, 12, 0, tzinfo=timezone.utc),
+                    "created_at": "2026-07-20T12:00:00+00:00",
                 }
             ]
 
@@ -421,7 +480,7 @@ def test_m09_legacy_memory_adapter_matches_existing_store_contract():
     records = adapter.search(7, "AAPL", 4, db=db, market="US")
     deleted = adapter.delete_all(7)
 
-    assert memory_id == "42"
+    assert memory_id == "mem-42"
     assert legacy.add_calls == [
         {
             "content": "remember AAPL",

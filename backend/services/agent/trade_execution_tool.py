@@ -2,6 +2,7 @@ import logging
 import re
 from decimal import Decimal
 from typing import Any, Dict, Optional
+from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
@@ -78,6 +79,8 @@ def execute_trade_tool(
     leverage: int = 1,
     reason: str = "",
     idempotency_key: Optional[str] = None,
+    decision_round_id: Optional[str] = None,
+    tool_call_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Execute one trading action through the TradeCommandGateway."""
     from decimal import Decimal
@@ -106,11 +109,12 @@ def execute_trade_tool(
         normalized_symbol = (symbol or "").strip().upper()
         normalized_direction = (direction or "long").strip().lower()
         normalized_leverage = _parse_int_loose(leverage, default=1)
-        normalized_idempotency_key = (
-            idempotency_key
-            or f"tool:{account_id}:{normalized_operation}:{normalized_symbol}:{market_norm.value}:"
-            f"{normalized_direction}:{normalized_size_mode}:{sizing_value}:{normalized_leverage}"
-        )
+        if idempotency_key:
+            normalized_idempotency_key = idempotency_key
+        elif decision_round_id and tool_call_id:
+            normalized_idempotency_key = f"{decision_round_id}:{tool_call_id}"
+        else:
+            normalized_idempotency_key = f"tool:{uuid4()}"
         command = TradeCommand(
             account_id=account_id,
             operation=normalized_operation,

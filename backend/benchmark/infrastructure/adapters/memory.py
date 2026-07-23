@@ -62,16 +62,15 @@ class LegacyMemoryStoreAdapter(MemoryStorePort):
         db: Session | None = None,
         market: str = "CRYPTO",
     ) -> str:
-        return str(
-            self._store.add(
-                account_id=str(account_id),
-                content=content,
-                metadata=dict(metadata),
-                trace_id=trace_id,
-                db=db,
-                market=market,
-            )
+        result = self._store.add(
+            account_id=str(account_id),
+            content=content,
+            metadata=dict(metadata),
+            trace_id=trace_id,
+            db=db,
+            market=market,
         )
+        return _extract_memory_id(result)
 
     def delete_all(self, account_id: int | str) -> int:
         return int(self._store.clear_account_memories(account_id=str(account_id)))
@@ -90,7 +89,24 @@ def _as_optional_float(value: object) -> float | None:
 
 
 def _as_optional_datetime(value: object) -> datetime | None:
-    return value if isinstance(value, datetime) else None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    return None
+
+
+def _extract_memory_id(result: object) -> str:
+    if isinstance(result, Mapping):
+        for key in ("id", "memory_id"):
+            value = result.get(key)
+            if value is not None:
+                return str(value)
+        return ""
+    return "" if result is None else str(result)
 
 
 __all__ = ["LegacyMemoryStoreAdapter"]

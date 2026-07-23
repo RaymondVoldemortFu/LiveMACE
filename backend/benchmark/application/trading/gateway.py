@@ -32,7 +32,10 @@ class TradeCommandGateway:
         except BaseException:
             self._store.fail(key)
             raise
-        self._store.complete(key, result)
+        if result.accepted:
+            self._store.complete(key, result)
+        else:
+            self._store.fail(key)
         return result
 
     def _execute_once(self, command: TradeCommand) -> TradeCommandResult:
@@ -141,6 +144,12 @@ class TradeCommandIdempotencyStore:
     def fail(self, key: tuple[int, str]) -> None:
         with self._condition:
             self._in_flight.discard(key)
+            self._condition.notify_all()
+
+    def clear(self) -> None:
+        with self._condition:
+            self._results.clear()
+            self._in_flight.clear()
             self._condition.notify_all()
 
 
