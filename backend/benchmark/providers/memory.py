@@ -8,7 +8,7 @@ from typing import Any, Mapping, Protocol, Sequence
 
 from sqlalchemy.orm import Session
 
-from benchmark.contracts import JsonValue
+from benchmark.contracts import JsonValue, Market
 from benchmark.contracts.common import _freeze_mapping, _require_aware, _require_non_empty
 
 from .health import HealthStatus
@@ -43,8 +43,8 @@ class MemoryStorePort(Protocol):
         query: str,
         limit: int,
         *,
+        market: Market,
         db: Session | None = None,
-        market: str = "CRYPTO",
     ) -> Sequence[MemoryRecord]: ...
 
     def add(
@@ -53,9 +53,9 @@ class MemoryStorePort(Protocol):
         content: str,
         metadata: Mapping[str, JsonValue],
         *,
+        market: Market,
         trace_id: str | None = None,
         db: Session | None = None,
-        market: str = "CRYPTO",
     ) -> str: ...
 
     def delete_all(self, account_id: int | str) -> int: ...

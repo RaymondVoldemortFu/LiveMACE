@@ -7,7 +7,7 @@ from typing import Any, Mapping, Sequence
 
 from sqlalchemy.orm import Session
 
-from benchmark.contracts import JsonValue
+from benchmark.contracts import JsonValue, Market
 from benchmark.providers import HealthStatus, MemoryRecord, MemoryStorePort
 
 
@@ -26,15 +26,15 @@ class LegacyMemoryStoreAdapter(MemoryStorePort):
         query: str,
         limit: int,
         *,
+        market: Market,
         db: Session | None = None,
-        market: str = "CRYPTO",
     ) -> Sequence[MemoryRecord]:
         rows = self._store.search(
             account_id=str(account_id),
             query=query,
             limit=limit,
             db=db,
-            market=market,
+            market=market.value,
         )
         records = []
         for row in rows or []:
@@ -58,9 +58,9 @@ class LegacyMemoryStoreAdapter(MemoryStorePort):
         content: str,
         metadata: Mapping[str, JsonValue],
         *,
+        market: Market,
         trace_id: str | None = None,
         db: Session | None = None,
-        market: str = "CRYPTO",
     ) -> str:
         result = self._store.add(
             account_id=str(account_id),
@@ -68,7 +68,7 @@ class LegacyMemoryStoreAdapter(MemoryStorePort):
             metadata=dict(metadata),
             trace_id=trace_id,
             db=db,
-            market=market,
+            market=market.value,
         )
         return _extract_memory_id(result)
 

@@ -426,6 +426,7 @@ def test_m11_execute_trade_tool_preserves_legacy_result_fields(monkeypatch):
 def test_m09_legacy_memory_adapter_matches_existing_store_contract():
     from datetime import datetime, timezone
 
+    from benchmark.contracts import Market
     from benchmark.infrastructure.adapters.memory import LegacyMemoryStoreAdapter
 
     db = object()
@@ -476,8 +477,8 @@ def test_m09_legacy_memory_adapter_matches_existing_store_contract():
     legacy = FakeLegacyMemory()
     adapter = LegacyMemoryStoreAdapter(legacy)
 
-    memory_id = adapter.add(7, "remember AAPL", {"symbol": "AAPL"}, trace_id="trace-1", db=db, market="US")
-    records = adapter.search(7, "AAPL", 4, db=db, market="US")
+    memory_id = adapter.add(7, "remember AAPL", {"symbol": "AAPL"}, market=Market.US, trace_id="trace-1", db=db)
+    records = adapter.search(7, "AAPL", 4, market=Market.US, db=db)
     deleted = adapter.delete_all(7)
 
     assert memory_id == "mem-42"
