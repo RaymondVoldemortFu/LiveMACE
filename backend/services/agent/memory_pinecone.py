@@ -158,6 +158,7 @@ class PineconeMemory(MemoryInterface):
             db.commit()
 
             logger.info(f"Memory saved to Pinecone and SQLite for account {account_id}: {content[:100]}...")
+            return memory_id
 
         except Exception as e:
             logger.error(f"Error adding memory to Pinecone: {e}")

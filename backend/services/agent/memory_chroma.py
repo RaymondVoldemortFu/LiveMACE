@@ -162,6 +162,7 @@ class ChromaMemory(MemoryInterface):
                     db.rollback()
 
             logger.info(f"Memory added to Chroma for account {account_id}: {content[:100]}...")
+            return memory_id
 
         except Exception as e:
             logger.error(f"Error adding memory to Chroma: {e}")

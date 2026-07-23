@@ -170,6 +170,7 @@ class LocalMemory(MemoryInterface):
             session.add(mem_entry)
             session.commit()
             logger.info(f"Memory saved to DB for account {account_id}: {content[:100]}...")
+            return memory_id
 
         except Exception as e:
             logger.error(f"Error adding memory: {e}")
