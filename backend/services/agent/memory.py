@@ -256,7 +256,7 @@ class LocalMemory(MemoryInterface):
                         ).update(
                             {
                                 AgentMemory.retrieval_count: AgentMemory.retrieval_count + 1,
-                                AgentMemory.last_retrieved_at: datetime.now()
+                                AgentMemory.last_retrieved_at: datetime.now(timezone.utc)
                             },
                             synchronize_session=False
                         )
