@@ -466,7 +466,7 @@ def test_m09_legacy_memory_adapter_matches_existing_store_contract():
                     "content": "US memory",
                     "metadata": {"source": "test"},
                     "similarity": "0.75",
-                    "created_at": "2026-07-20T12:00:00+00:00",
+                    "created_at": "2026-07-20T12:00:00",
                 }
             ]
 

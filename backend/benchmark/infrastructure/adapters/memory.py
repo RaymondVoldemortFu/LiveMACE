@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Mapping, Sequence
 
 from sqlalchemy.orm import Session
@@ -90,13 +90,19 @@ def _as_optional_float(value: object) -> float | None:
 
 def _as_optional_datetime(value: object) -> datetime | None:
     if isinstance(value, datetime):
-        return value
+        return _ensure_aware(value)
     if isinstance(value, str):
         try:
-            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return _ensure_aware(datetime.fromisoformat(value.replace("Z", "+00:00")))
         except ValueError:
             return None
     return None
+
+
+def _ensure_aware(value: datetime) -> datetime:
+    if value.tzinfo is None or value.tzinfo.utcoffset(value) is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
 
 
 def _extract_memory_id(result: object) -> str:
