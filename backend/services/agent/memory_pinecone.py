@@ -243,7 +243,7 @@ class PineconeMemory(MemoryInterface):
                     "id": mem.memory_id,
                     "content": mem.content,
                     "metadata": mem.metadata_json or {},
-                    "created_at": mem.created_at.isoformat() if mem.created_at else None
+                    "created_at": mem.created_at.replace(tzinfo=timezone.utc).isoformat() if mem.created_at else None
                 })
 
             return results
