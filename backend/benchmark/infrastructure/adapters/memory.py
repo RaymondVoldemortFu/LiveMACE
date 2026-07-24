@@ -101,8 +101,8 @@ def _as_optional_datetime(value: object) -> datetime | None:
 
 def _ensure_aware(value: datetime) -> datetime:
     if value.tzinfo is None or value.tzinfo.utcoffset(value) is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value
+        value = value.astimezone()
+    return value.astimezone(timezone.utc)
 
 
 def _extract_memory_id(result: object) -> str:

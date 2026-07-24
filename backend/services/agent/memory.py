@@ -9,7 +9,7 @@ import math
 import numpy as np
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from config.agent_config import AgentConfig
@@ -72,16 +72,19 @@ class MemoryInterface(ABC):
 
         half_life = getattr(AgentConfig, 'MEMORY_TIME_DECAY_HALF_LIFE_DAYS', 7)
         alpha = getattr(AgentConfig, 'MEMORY_RERANK_SIMILARITY_WEIGHT', 0.8)
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
 
         for r in results:
             # Parse created_at
             created_at = r.get("created_at")
             if isinstance(created_at, str):
                 try:
-                    created_at = datetime.fromisoformat(created_at)
+                    created_at = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
                 except (ValueError, TypeError):
                     created_at = None
+
+            if isinstance(created_at, datetime):
+                created_at = MemoryInterface._normalize_created_at(created_at)
 
             if created_at:
                 age_days = max((now - created_at).total_seconds() / 86400, 0)
@@ -95,6 +98,12 @@ class MemoryInterface(ABC):
 
         results.sort(key=lambda x: x["final_score"], reverse=True)
         return results[:limit]
+
+    @staticmethod
+    def _normalize_created_at(value: datetime) -> datetime:
+        if value.tzinfo is None or value.tzinfo.utcoffset(value) is None:
+            value = value.astimezone()
+        return value.astimezone(timezone.utc)
 
 
 class LocalMemory(MemoryInterface):

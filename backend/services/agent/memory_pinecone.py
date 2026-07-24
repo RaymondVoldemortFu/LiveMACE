@@ -6,7 +6,7 @@ import logging
 import json
 import uuid
 from typing import List, Dict, Any, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from config.agent_config import AgentConfig
@@ -140,7 +140,7 @@ class PineconeMemory(MemoryInterface):
                     "market": market,
                     "content": content[:1000],  # Pinecone metadata limit
                     "trace_id": trace_id or "",
-                    "created_at": datetime.now().isoformat()
+                    "created_at": datetime.now(timezone.utc).isoformat()
                 }
             }])
 

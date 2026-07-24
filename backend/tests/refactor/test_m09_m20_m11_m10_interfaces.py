@@ -499,4 +499,5 @@ def test_m09_legacy_memory_adapter_matches_existing_store_contract():
     assert records[0].content == "US memory"
     assert records[0].metadata["source"] == "test"
     assert records[0].score == 0.75
-    assert records[0].created_at == datetime(2026, 7, 20, 12, 0, tzinfo=timezone.utc)
+    expected_created_at = datetime(2026, 7, 20, 12, 0).astimezone().astimezone(timezone.utc)
+    assert records[0].created_at == expected_created_at
