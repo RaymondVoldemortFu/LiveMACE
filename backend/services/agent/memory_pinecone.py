@@ -214,7 +214,7 @@ class PineconeMemory(MemoryInterface):
                     ).update(
                         {
                             AgentMemory.retrieval_count: AgentMemory.retrieval_count + 1,
-                            AgentMemory.last_retrieved_at: datetime.now(timezone.utc)
+                            AgentMemory.last_retrieved_at: datetime.now(timezone.utc).replace(tzinfo=None)
                         },
                         synchronize_session=False
                     )

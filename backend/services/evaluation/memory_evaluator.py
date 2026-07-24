@@ -8,7 +8,7 @@ Focused on 3 core metrics:
 """
 
 from typing import Dict, Any, List, Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import logging
 import numpy as np
 from collections import Counter
@@ -77,7 +77,7 @@ class MemoryEvaluator(BaseEvaluator):
         high_value_memories = sum(1 for c in retrieval_counts if c >= 5)
 
         # Count memories retrieved in last 24 hours
-        now = datetime.now()
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         recently_retrieved_24h = sum(
             1 for m in memories
             if getattr(m, 'last_retrieved_at', None) and
