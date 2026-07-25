@@ -20,4 +20,3 @@ Important protocol:
 - If execution_plan includes hold steps, execute them in order like the other plan items.
 - If execution_plan is empty, output <TRADE_DONE> immediately.
 - Do not end without <TRADE_DONE>.
-

@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 from hashlib import sha256
+from time import perf_counter
 
 import pytest
 
-from benchmark.contracts import PromptRenderError
+from benchmark._structured import StructuredDataError, load_structured_text
+from benchmark.contracts import ExtensionRef, PromptRenderError
 from benchmark.prompts import (
     PROMPT_FILE_MAX_BYTES,
     PromptLoadError,
+    PromptRegistry,
     load_prompt_directory,
     validate_prompt_directory,
 )
@@ -31,6 +34,16 @@ def _write_index(root, *, file="system.txt", variables="[portfolio]", optional="
     )
 
 
+def _shared_alias_dag(levels: int) -> str:
+    lines = ["node0: &node0 [leaf]"]
+    for level in range(1, levels + 1):
+        lines.append(
+            f"node{level}: &node{level} [*node{level - 1}, *node{level - 1}]"
+        )
+    lines.append(f"root: *node{levels}")
+    return "\n".join(lines) + "\n"
+
+
 def test_file_provider_normalizes_lf_and_renders_canonical_json(tmp_path):
     _write_index(tmp_path, variables="[portfolio]", optional='      memory_block: ""')
     (tmp_path / "system.txt").write_bytes(
@@ -47,6 +60,17 @@ def test_file_provider_normalizes_lf_and_renders_canonical_json(tmp_path):
     assert (
         rendered.content_sha256 == sha256(rendered.content.encode("utf-8")).hexdigest()
     )
+
+
+def test_loaded_directory_can_be_registered_as_prompt_provider(tmp_path):
+    _write_index(tmp_path)
+    (tmp_path / "system.txt").write_text("{portfolio}", encoding="utf-8")
+    loaded = load_prompt_directory(tmp_path, tmp_path / "index.yaml")
+    registry = PromptRegistry()
+
+    registry.register_provider(ExtensionRef("test.prompts", "1.0.0"), loaded, 100)
+
+    assert registry.render("core.example.system", {"portfolio": "ok"}).content == "ok"
 
 
 def test_render_rejects_missing_and_unknown_variables(tmp_path):
@@ -107,6 +131,43 @@ def test_duplicate_yaml_keys_are_rejected(tmp_path):
 
     assert report.valid is False
     assert report.errors[0].code == "PROMPT_INDEX_DUPLICATE_KEY"
+
+
+def test_shared_alias_dag_is_validated_in_bounded_time():
+    started = perf_counter()
+
+    value = load_structured_text(
+        _shared_alias_dag(22), format_name="yaml", max_depth=32
+    )
+
+    assert value["root"][0] is value["root"][1]
+    assert perf_counter() - started < 2.0
+
+
+def test_recursive_yaml_alias_is_rejected():
+    with pytest.raises(StructuredDataError) as caught:
+        load_structured_text(
+            "root: &root\n  self: *root\n",
+            format_name="yaml",
+        )
+
+    assert caught.value.code == "RECURSIVE_ALIAS"
+
+
+def test_cached_alias_height_is_checked_from_deeper_paths():
+    text = (
+        "shared: &shared\n"
+        "  child:\n"
+        "    leaf: value\n"
+        "shallow: *shared\n"
+        "deep:\n"
+        "  nested: *shared\n"
+    )
+
+    with pytest.raises(StructuredDataError) as caught:
+        load_structured_text(text, format_name="yaml", max_depth=4)
+
+    assert caught.value.code == "NESTING_TOO_DEEP"
 
 
 def test_prompt_file_size_and_utf8_are_validated(tmp_path):

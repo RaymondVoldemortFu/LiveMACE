@@ -72,4 +72,3 @@ When you are ready to deliver the final answer, you MUST output the following JS
 </FINAL_RESPONSE>
 
 Only output the JSON object in the required format when the final response is complete.
-

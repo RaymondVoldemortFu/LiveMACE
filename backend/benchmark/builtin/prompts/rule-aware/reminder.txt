@@ -13,4 +13,3 @@ When you output your final decision:
 - Include [Conflict Resolution] if applicable
 - Execute trades using execute_trade (you may call it multiple times)
 - End with ONLY: <TRADE_DONE>
-

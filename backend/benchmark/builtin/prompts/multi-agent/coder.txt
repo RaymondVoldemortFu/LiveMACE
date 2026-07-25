@@ -5,4 +5,3 @@ You have access to a python execution environment.
 Instruction: {instruction}
 
 Output your code execution results and interpretation.
-

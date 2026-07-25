@@ -37,4 +37,3 @@ Standard Final Decision Format:
   "leverage": int (1-10),
   "reason": "Explanation"
 }}
-

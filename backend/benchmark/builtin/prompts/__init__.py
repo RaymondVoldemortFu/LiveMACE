@@ -118,7 +118,7 @@ def get_builtin_prompt_registry() -> PromptRegistry:
     registry = PromptRegistry()
     registry.register_provider(
         BUILTIN_PROMPT_EXTENSION,
-        loaded.provider,
+        loaded,
         PromptSourcePriority.BUILTIN,
     )
     registry.register_profiles(

@@ -79,6 +79,15 @@ class LoadedPromptDirectory:
     provider: PromptProvider
     profiles: tuple[PromptProfileDescriptor, ...] = ()
 
+    def list_prompts(self) -> Sequence[PromptSpec]:
+        return self.provider.list_prompts()
+
+    def render(
+        self,
+        prompt_id: str,
+        variables: Mapping[str, JsonValue],
+    ) -> RenderedPrompt:
+        return self.provider.render(prompt_id, variables)
 
 __all__ = [
     "PromptProvider",

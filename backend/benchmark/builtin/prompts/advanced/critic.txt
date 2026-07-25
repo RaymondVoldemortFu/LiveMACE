@@ -21,4 +21,3 @@ Return ONLY JSON:
   "veto_conditions": ["Condition 1"],
   "final_warning": "Most important caution"
 }}}}
-

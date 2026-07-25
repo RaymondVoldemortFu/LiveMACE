@@ -25,4 +25,3 @@ Return ONLY JSON:
   "implications": ["How this affects the current trade setup"],
   "confidence": 0.0
 }}}}
-

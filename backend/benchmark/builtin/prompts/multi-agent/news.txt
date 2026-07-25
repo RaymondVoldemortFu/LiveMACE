@@ -5,4 +5,3 @@ You have access to search tools.
 Instruction: {instruction}
 
 Output your findings and sentiment analysis.
-

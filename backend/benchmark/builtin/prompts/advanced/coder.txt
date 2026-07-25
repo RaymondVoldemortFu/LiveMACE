@@ -21,4 +21,3 @@ Return ONLY JSON:
   "limitations": ["Limitation 1"],
   "recommendation_impact": "How these results should affect the trade"
 }}}}
-

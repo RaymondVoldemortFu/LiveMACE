@@ -105,4 +105,3 @@ Example when there are multiple actionable trades:
   "confidence": 0.76,
   "time_horizon": "swing"
 }}}}
-

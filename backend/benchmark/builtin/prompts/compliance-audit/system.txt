@@ -81,4 +81,3 @@ Where final_normalized_score = (coverage.score + conflict.score) / 20
   - Checked rules that would apply IF a trade were considered (e.g., R0-04 order size, R1-02 concentration)
   - Explained why current state already satisfies rules OR why any potential trade would violate rules
   - Did NOT simply ignore rules because "no trade = no rules to check"
-

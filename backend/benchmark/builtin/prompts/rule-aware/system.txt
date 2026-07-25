@@ -171,4 +171,3 @@ Now, following the workflow above:
 4. End by outputting ONLY `<TRADE_DONE>`
 
 Remember: **Profit is your primary mission**. Hard rules (R0, R1) are boundaries you cannot cross; soft rules (R2) are optimization targets. Seek alpha aggressively within your compliance boundaries.
-

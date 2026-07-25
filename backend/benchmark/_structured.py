@@ -90,8 +90,9 @@ def _reject_duplicate_json(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 def _check_json_value_and_depth(value: Any, *, max_depth: int) -> None:
     active: set[int] = set()
+    heights: dict[int, int] = {}
 
-    def visit(item: Any, depth: int) -> None:
+    def visit(item: Any, depth: int) -> int:
         if depth > max_depth:
             raise StructuredDataError(
                 f"document exceeds nesting depth {max_depth}",
@@ -99,31 +100,57 @@ def _check_json_value_and_depth(value: Any, *, max_depth: int) -> None:
             )
         if isinstance(item, Mapping):
             identity = id(item)
+            cached_height = heights.get(identity)
+            if cached_height is not None:
+                if depth + cached_height - 1 > max_depth:
+                    raise StructuredDataError(
+                        f"document exceeds nesting depth {max_depth}",
+                        code="NESTING_TOO_DEEP",
+                    )
+                return cached_height
             if identity in active:
                 raise StructuredDataError(
                     "recursive aliases are not supported", code="RECURSIVE_ALIAS"
                 )
             active.add(identity)
-            for key, child in item.items():
-                if not isinstance(key, str):
-                    raise StructuredDataError(
-                        "mapping keys must be strings",
-                        code="NON_STRING_KEY",
-                    )
-                visit(child, depth + 1)
-            active.remove(identity)
+            try:
+                child_heights = []
+                for key, child in item.items():
+                    if not isinstance(key, str):
+                        raise StructuredDataError(
+                            "mapping keys must be strings",
+                            code="NON_STRING_KEY",
+                        )
+                    child_heights.append(visit(child, depth + 1))
+            finally:
+                active.remove(identity)
+            height = 1 + max(child_heights, default=0)
+            heights[identity] = height
+            return height
         elif isinstance(item, Sequence) and not isinstance(
             item, (str, bytes, bytearray)
         ):
             identity = id(item)
+            cached_height = heights.get(identity)
+            if cached_height is not None:
+                if depth + cached_height - 1 > max_depth:
+                    raise StructuredDataError(
+                        f"document exceeds nesting depth {max_depth}",
+                        code="NESTING_TOO_DEEP",
+                    )
+                return cached_height
             if identity in active:
                 raise StructuredDataError(
                     "recursive aliases are not supported", code="RECURSIVE_ALIAS"
                 )
             active.add(identity)
-            for child in item:
-                visit(child, depth + 1)
-            active.remove(identity)
+            try:
+                child_heights = [visit(child, depth + 1) for child in item]
+            finally:
+                active.remove(identity)
+            height = 1 + max(child_heights, default=0)
+            heights[identity] = height
+            return height
         elif isinstance(item, float):
             if not math.isfinite(item):
                 raise StructuredDataError(
@@ -135,6 +162,7 @@ def _check_json_value_and_depth(value: Any, *, max_depth: int) -> None:
                 "document contains a non-JSON value",
                 code="NON_JSON_VALUE",
             )
+        return 1
 
     visit(value, 1)
 
