@@ -98,6 +98,7 @@ from eval.offline_llm_audit import (
     _extract_completed_record_ids,
     _parse_int_like,
 )
+from eval._security import redact_database_url
 
 try:
     import matplotlib.pyplot as plt
@@ -567,7 +568,7 @@ def _write_output_bundle(
                     "total_processed": success,
                     "total_failed": failed,
                     "write_db": write_db,
-                    "database_url": DATABASE_URL,
+                    "database_url": redact_database_url(DATABASE_URL),
                 },
                 "results": results,
             },
@@ -801,7 +802,7 @@ def run_rule_informed_audit(
         out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
 
-    logger.info("Using DATABASE_URL=%s", DATABASE_URL)
+    logger.info("Using DATABASE_URL=%s", redact_database_url(DATABASE_URL))
     logger.info("Output directory: %s", out_path)
     if write_db:
         logger.info("--write-db enabled: llm_audit_* fields will be overwritten in DB.")

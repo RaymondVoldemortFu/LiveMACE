@@ -350,6 +350,7 @@ chroma_db
 temp
 *.sqlite
 backend/script/results/*
+backend/eval/eval_output/
 *.sql
 *.docx
 *_report.md

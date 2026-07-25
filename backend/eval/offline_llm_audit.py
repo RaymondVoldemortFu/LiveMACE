@@ -87,6 +87,7 @@ from database.models import RuleEvaluationResult, AgentTrace, Account
 from services.agent.llm_client import LLMClient
 from services.agent.rule_aware.llm_auditor import LLMAuditor
 from services.agent.rule_aware.rule_engine import RuleEngine
+from eval._security import redact_database_url
 
 # ── Logging ──────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -620,7 +621,7 @@ def _write_output_files(
                     "total_processed": success,
                     "total_failed": failed,
                     "write_db": write_db,
-                    "database_url": DATABASE_URL,
+                    "database_url": redact_database_url(DATABASE_URL),
                 },
                 "results": results,
             },
@@ -756,7 +757,7 @@ def run_offline_audit(
     auditor = LLMAuditor(llm_client)
     rule_documents = rule_engine.format_rules_for_prompt()
 
-    logger.info("Using DATABASE_URL=%s", DATABASE_URL)
+    logger.info("Using DATABASE_URL=%s", redact_database_url(DATABASE_URL))
 
     write_db = not dry_run
     out_path: Optional[Path] = None
