@@ -206,26 +206,3 @@ All options from `offline_llm_audit.py` are supported, plus:
    ```
 3. Compare `original_llm_audit_score` vs `new_final_normalized_score` in `results.json`
    and review the trend charts and summary table.
-
----
-
-## rule_aware_stats_report.py
-
-Generate Rule-Aware Agent statistics directly from SQLite without starting backend.
-
-Includes:
-- Account-level summary (all-time and recent 7 days)
-- Final performance metrics from `account_snapshots`: final equity, PnL, return %, max drawdown
-- LLM audit aggregates
-- Trend charts for `s_rule_sat`, `s_audit`, `final_score`, and final return %
-
-Quick start:
-
-```bash
-cd backend
-conda run -n uvbench python eval/rule_aware_stats_report.py --db-path ./alpha_arena.sqlite --days 14
-```
-
-Outputs are written to `backend/eval_outputs/rule_aware_stats/` by default.
-
-Full guide: `eval/RULE_AWARE_STATS_REPORT.md`
