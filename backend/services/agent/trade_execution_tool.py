@@ -2,6 +2,7 @@ import logging
 import re
 from decimal import Decimal
 from typing import Any, Dict, Optional
+from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
@@ -21,7 +22,7 @@ SUPPORTED_US_SYMBOLS = {
 
 
 def _parse_float_loose(value: Any) -> Optional[float]:
-    """从数字或杂糅 XML/文本中提取第一个合法 float；无法解析返回 None。"""
+    """Extract the first valid float from numeric or loose text input."""
     if value is None:
         return None
     if isinstance(value, bool):
@@ -63,7 +64,102 @@ def _parse_int_loose(value: Any, *, default: int = 1) -> int:
         return default
 
 
+
 def execute_trade_tool(
+    db: Session,
+    account_id: int,
+    operation: str,
+    symbol: Optional[str] = None,
+    market: str = "CRYPTO",
+    direction: str = "long",
+    size_mode: str = "portion",
+    target_portion_of_balance: Optional[float] = None,
+    usd_amount: Optional[float] = None,
+    close_ratio: Optional[float] = None,
+    leverage: int = 1,
+    reason: str = "",
+    idempotency_key: Optional[str] = None,
+    decision_round_id: Optional[str] = None,
+    tool_call_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Execute one trading action through the TradeCommandGateway."""
+    from decimal import Decimal
+
+    from benchmark.application.trading import get_default_trade_gateway
+    from benchmark.contracts import Market, TradeCommand
+
+    normalized_size_mode = (size_mode or "portion").strip().lower()
+    sizing_value = None
+    if normalized_size_mode == "usd" and usd_amount is not None:
+        sizing_value = Decimal(str(usd_amount))
+    elif close_ratio is not None:
+        normalized_size_mode = "close_ratio"
+        sizing_value = Decimal(str(close_ratio))
+    elif target_portion_of_balance is not None:
+        sizing_value = Decimal(str(target_portion_of_balance))
+
+    try:
+        market_text = (market or "CRYPTO").strip().upper()
+        if market_text in {"STOCK", "STOCKS"}:
+            market_text = "US"
+        if market_text == "HYPERLIQUID":
+            market_text = "CRYPTO"
+        market_norm = Market(market_text)
+        normalized_operation = (operation or "").strip().lower()
+        normalized_symbol = (symbol or "").strip().upper()
+        normalized_direction = (direction or "long").strip().lower()
+        normalized_leverage = _parse_int_loose(leverage, default=1)
+        if idempotency_key:
+            normalized_idempotency_key = idempotency_key
+        elif decision_round_id and tool_call_id:
+            normalized_idempotency_key = f"{decision_round_id}:{tool_call_id}"
+        else:
+            # TODO(M06/M10 integration): pass decision_round_id and tool_call_id from the
+            # production Agent tool path once ToolInvoker/DecisionRoundService are wired.
+            normalized_idempotency_key = f"tool:{uuid4()}"
+        command = TradeCommand(
+            account_id=account_id,
+            operation=normalized_operation,
+            market=market_norm,
+            symbol=normalized_symbol,
+            direction=normalized_direction,
+            sizing_mode=normalized_size_mode,
+            sizing_value=sizing_value,
+            leverage=normalized_leverage,
+            reason=reason or "",
+            idempotency_key=normalized_idempotency_key,
+        )
+        gateway_result = get_default_trade_gateway(db).execute(command)
+        result = dict(gateway_result.raw_result)
+        if gateway_result.accepted:
+            result.setdefault("executed", gateway_result.executed)
+            result.setdefault("operation", gateway_result.normalized_command.operation)
+            if gateway_result.normalized_command.symbol:
+                result.setdefault("symbol", gateway_result.normalized_command.symbol)
+            if not gateway_result.raw_result:
+                result.setdefault("market", gateway_result.normalized_command.market.value)
+                if gateway_result.normalized_command.direction:
+                    result.setdefault("direction", gateway_result.normalized_command.direction)
+            if gateway_result.order_id is not None:
+                result.setdefault("order_id", gateway_result.order_id)
+            if gateway_result.trade_id is not None:
+                result.setdefault("trade_id", gateway_result.trade_id)
+            return result
+        result.setdefault("executed", False)
+        result.setdefault("error", gateway_result.reject_message)
+        result.setdefault("reject_code", gateway_result.reject_code)
+        result.setdefault("operation", gateway_result.normalized_command.operation)
+        if gateway_result.normalized_command.symbol:
+            result.setdefault("symbol", gateway_result.normalized_command.symbol)
+        if not gateway_result.raw_result:
+            result.setdefault("market", gateway_result.normalized_command.market.value)
+        return result
+    except Exception as exc:
+        logger.error("execute_trade_tool gateway adapter failed: %s", exc, exc_info=True)
+        return {"executed": False, "error": str(exc), "reject_code": "TRADE_GATEWAY_ERROR"}
+
+
+def _execute_trade_tool_legacy(
     db: Session,
     account_id: int,
     operation: str,
@@ -603,3 +699,4 @@ def _save_trade_log(
     except Exception as e:
         db.rollback()
         logger.warning(f"Failed to save execute_trade decision log: {e}")
+

@@ -5,7 +5,7 @@ Provides significant performance improvement over SQLite full-scan approach.
 import logging
 import uuid
 from typing import List, Dict, Any, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from config.agent_config import AgentConfig
@@ -125,7 +125,7 @@ class ChromaMemory(MemoryInterface):
             chroma_metadata = {
                 "account_id": str(account_id),
                 "market": market,
-                "created_at": datetime.now().isoformat()
+                "created_at": datetime.now(timezone.utc).isoformat()
             }
             if trace_id:
                 chroma_metadata["trace_id"] = trace_id
@@ -162,6 +162,7 @@ class ChromaMemory(MemoryInterface):
                     db.rollback()
 
             logger.info(f"Memory added to Chroma for account {account_id}: {content[:100]}...")
+            return memory_id
 
         except Exception as e:
             logger.error(f"Error adding memory to Chroma: {e}")
@@ -222,7 +223,7 @@ class ChromaMemory(MemoryInterface):
                         ).update(
                             {
                                 AgentMemory.retrieval_count: AgentMemory.retrieval_count + 1,
-                                AgentMemory.last_retrieved_at: datetime.now()
+                                AgentMemory.last_retrieved_at: datetime.now(timezone.utc).replace(tzinfo=None)
                             },
                             synchronize_session=False
                         )

@@ -60,7 +60,6 @@ def test_account_workers_run_in_parallel_with_distinct_closed_sessions(monkeypat
         "_get_portfolio_data",
         lambda db, account: {"total_assets": 1000.0},
     )
-    monkeypatch.setattr(trading_commands.AgentConfig, "USE_AGENT", True)
     monkeypatch.setattr(trading_commands, "call_agent_for_decision", fake_agent)
 
     with ThreadPoolExecutor(max_workers=2) as executor:

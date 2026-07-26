@@ -9,7 +9,7 @@ import math
 import numpy as np
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from config.agent_config import AgentConfig
@@ -72,16 +72,19 @@ class MemoryInterface(ABC):
 
         half_life = getattr(AgentConfig, 'MEMORY_TIME_DECAY_HALF_LIFE_DAYS', 7)
         alpha = getattr(AgentConfig, 'MEMORY_RERANK_SIMILARITY_WEIGHT', 0.8)
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
 
         for r in results:
             # Parse created_at
             created_at = r.get("created_at")
             if isinstance(created_at, str):
                 try:
-                    created_at = datetime.fromisoformat(created_at)
+                    created_at = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
                 except (ValueError, TypeError):
                     created_at = None
+
+            if isinstance(created_at, datetime):
+                created_at = MemoryInterface._normalize_created_at(created_at)
 
             if created_at:
                 age_days = max((now - created_at).total_seconds() / 86400, 0)
@@ -95,6 +98,12 @@ class MemoryInterface(ABC):
 
         results.sort(key=lambda x: x["final_score"], reverse=True)
         return results[:limit]
+
+    @staticmethod
+    def _normalize_created_at(value: datetime) -> datetime:
+        if value.tzinfo is None or value.tzinfo.utcoffset(value) is None:
+            value = value.astimezone()
+        return value.astimezone(timezone.utc)
 
 
 class LocalMemory(MemoryInterface):
@@ -170,6 +179,7 @@ class LocalMemory(MemoryInterface):
             session.add(mem_entry)
             session.commit()
             logger.info(f"Memory saved to DB for account {account_id}: {content[:100]}...")
+            return memory_id
 
         except Exception as e:
             logger.error(f"Error adding memory: {e}")
@@ -225,7 +235,7 @@ class LocalMemory(MemoryInterface):
                     "content": mem.content,
                     "metadata": mem.metadata_json or {},
                     "similarity": similarity,
-                    "created_at": mem.created_at.isoformat() if mem.created_at else None
+                    "created_at": mem.created_at.replace(tzinfo=timezone.utc).isoformat() if mem.created_at else None
                 })
 
             # Sort by similarity (descending) and over-fetch for rerank
@@ -246,7 +256,7 @@ class LocalMemory(MemoryInterface):
                         ).update(
                             {
                                 AgentMemory.retrieval_count: AgentMemory.retrieval_count + 1,
-                                AgentMemory.last_retrieved_at: datetime.now()
+                                AgentMemory.last_retrieved_at: datetime.now(timezone.utc).replace(tzinfo=None)
                             },
                             synchronize_session=False
                         )
@@ -279,7 +289,7 @@ class LocalMemory(MemoryInterface):
                     "id": mem.memory_id,
                     "content": mem.content,
                     "metadata": mem.metadata_json or {},
-                    "created_at": mem.created_at.isoformat() if mem.created_at else None
+                    "created_at": mem.created_at.replace(tzinfo=timezone.utc).isoformat() if mem.created_at else None
                 })
 
             return results

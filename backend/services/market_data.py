@@ -120,6 +120,9 @@ def _get_cached_latest_price(symbol: str, market: str) -> float | None:
         if (now_timestamp() - row.timestamp) > KLINE_CACHE_MAX_STALE_SECONDS:
             return None
         return float(row.close_price) if row.close_price is not None else None
+    except Exception as cache_err:
+        logger.warning("Latest price SQL cache unavailable for %s.%s, treating as miss: %s", symbol, market, cache_err)
+        return None
     finally:
         db.close()
 
@@ -172,6 +175,9 @@ def _get_cached_klines(symbol: str, market: str, period: str, count: int) -> Lis
             }
             for r in rows_sorted
         ]
+    except Exception as cache_err:
+        logger.warning("K-line SQL cache unavailable for %s.%s period=%s, treating as miss: %s", symbol, market, period, cache_err)
+        return []
     finally:
         db.close()
 

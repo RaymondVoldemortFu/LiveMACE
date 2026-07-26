@@ -116,12 +116,12 @@ class ReActAgent(BaseAgent):
     def run(self, portfolio: Dict[str, Any], prices: Dict[str, float], on_step: Optional[Callable[[Dict], None]] = None, trace_id: Optional[str] = None) -> Dict[str, Any]:
         """
         输入:
-            portfolio: 和原 call_ai_for_decision 中一致的结构
+            portfolio: 和 Agent 决策上下文一致的结构
             prices: symbol -> price 的字典
             on_step: Optional callback function called after each step with the message dict
             trace_id: Trace ID for current session
         输出:
-            与原先 call_ai_for_decision 返回值同结构的决策 dict
+            Agent 决策 dict
         """
         # Log start of decision process
         logger.info("Starting agent decision process (ReAct Architecture)")

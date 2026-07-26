@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
+from types import MappingProxyType
+from typing import Any, Mapping
 
 from .common import Market, _require_non_empty
 
@@ -48,6 +50,7 @@ class TradeCommandResult:
     order_id: int | None
     trade_id: int | None
     normalized_command: TradeCommand
+    raw_result: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not isinstance(self.accepted, bool) or not isinstance(self.executed, bool):
@@ -62,6 +65,9 @@ class TradeCommandResult:
             value = getattr(self, name)
             if value is not None and (not isinstance(value, int) or value <= 0):
                 raise ValueError(f"{name} must be a positive integer or None")
+        if not isinstance(self.raw_result, Mapping):
+            raise TypeError("raw_result must be a mapping")
+        object.__setattr__(self, "raw_result", MappingProxyType(dict(self.raw_result)))
 
 
 __all__ = ["TradeCommand", "TradeCommandResult"]

@@ -317,6 +317,9 @@ backend/tests/characterization/__pycache__/
 backend/tests/fakes/__pycache__/
 !backend/tests/agents/
 !backend/tests/agents/**
+!backend/tests/refactor/
+!backend/tests/refactor/**
+backend/tests/refactor/__pycache__/
 backend/tests/agents/__pycache__/
 !backend/tests/bootstrap/
 !backend/tests/bootstrap/**
