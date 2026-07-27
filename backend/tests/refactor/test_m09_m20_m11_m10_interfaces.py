@@ -475,10 +475,10 @@ def test_m09_legacy_memory_adapter_matches_existing_store_contract():
             return 3
 
     legacy = FakeLegacyMemory()
-    adapter = LegacyMemoryStoreAdapter(legacy)
+    adapter = LegacyMemoryStoreAdapter(legacy, db=db, trace_id="trace-1")
 
-    memory_id = adapter.add(7, "remember AAPL", {"symbol": "AAPL"}, market=Market.US, trace_id="trace-1", db=db)
-    records = adapter.search(7, "AAPL", 4, market=Market.US, db=db)
+    memory_id = adapter.add(7, "remember AAPL", {"symbol": "AAPL"}, market=Market.US)
+    records = adapter.search(7, "AAPL", 4, market=Market.US)
     deleted = adapter.delete_all(7)
 
     assert memory_id == "mem-42"

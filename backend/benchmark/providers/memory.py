@@ -6,8 +6,6 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Mapping, Protocol, Sequence
 
-from sqlalchemy.orm import Session
-
 from benchmark.contracts import JsonValue, Market
 from benchmark.contracts.common import _freeze_mapping, _require_aware, _require_non_empty
 
@@ -44,7 +42,6 @@ class MemoryStorePort(Protocol):
         limit: int,
         *,
         market: Market,
-        db: Session | None = None,
     ) -> Sequence[MemoryRecord]: ...
 
     def add(
@@ -54,8 +51,6 @@ class MemoryStorePort(Protocol):
         metadata: Mapping[str, JsonValue],
         *,
         market: Market,
-        trace_id: str | None = None,
-        db: Session | None = None,
     ) -> str: ...
 
     def delete_all(self, account_id: int | str) -> int: ...

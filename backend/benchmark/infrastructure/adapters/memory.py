@@ -17,8 +17,10 @@ class LegacyMemoryStoreAdapter(MemoryStorePort):
     capabilities = ("memory.read", "memory.write")
     config_schema: Mapping[str, JsonValue] = {"type": "object", "additionalProperties": False}
 
-    def __init__(self, store: Any) -> None:
+    def __init__(self, store: Any, db: Session | None = None, trace_id: str | None = None) -> None:
         self._store = store
+        self._db = db
+        self._trace_id = trace_id
 
     def search(
         self,
@@ -27,14 +29,13 @@ class LegacyMemoryStoreAdapter(MemoryStorePort):
         limit: int,
         *,
         market: Market,
-        db: Session | None = None,
     ) -> Sequence[MemoryRecord]:
         rows = self._store.search(
             account_id=str(account_id),
             query=query,
             limit=limit,
-            db=db,
-            market=market.value,
+            db=self._db,
+            market=_market_value(market),
         )
         records = []
         for row in rows or []:
@@ -59,16 +60,14 @@ class LegacyMemoryStoreAdapter(MemoryStorePort):
         metadata: Mapping[str, JsonValue],
         *,
         market: Market,
-        trace_id: str | None = None,
-        db: Session | None = None,
     ) -> str:
         result = self._store.add(
             account_id=str(account_id),
             content=content,
             metadata=dict(metadata),
-            trace_id=trace_id,
-            db=db,
-            market=market.value,
+            trace_id=self._trace_id,
+            db=self._db,
+            market=_market_value(market),
         )
         return _extract_memory_id(result)
 
@@ -77,6 +76,10 @@ class LegacyMemoryStoreAdapter(MemoryStorePort):
 
     def healthcheck(self) -> HealthStatus:
         return HealthStatus("ok", self.id)
+
+
+def _market_value(market: Market | str) -> str:
+    return market.value if isinstance(market, Market) else str(market)
 
 
 def _as_optional_float(value: object) -> float | None:
