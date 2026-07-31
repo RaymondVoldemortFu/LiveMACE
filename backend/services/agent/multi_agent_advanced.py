@@ -686,6 +686,7 @@ class AdvancedMultiAgent(BaseAgent):
         portfolio: Dict[str, Any],
         prices: Dict[str, Any],
         on_step: Optional[Callable] = None,
+        decision_round_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         messages = self._build_execution_messages(execution_plan, decision, portfolio, prices)
         available_tools_names = [t["function"]["name"] for t in self.tools.openai_tools]
@@ -752,7 +753,12 @@ class AdvancedMultiAgent(BaseAgent):
                             result = {"error": f"Tool not found: {name}"}
                         else:
                             try:
-                                result = tool_func(**args)
+                                result = self._invoke_llm_tool(
+                                    name,
+                                    args,
+                                    tool_call_id=tc_id,
+                                    decision_round_id=decision_round_id,
+                                )
                             except Exception as e:
                                 result = {"error": f"Tool execution failed for {name}: {e}"}
 
@@ -1025,6 +1031,7 @@ class AdvancedMultiAgent(BaseAgent):
         prices: Dict[str, float],
         on_step: Optional[Callable[[Dict], None]] = None,
         trace_id: Optional[str] = None,
+        decision_round_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         logger.info("Starting Advanced Multi-Agent decision process")
 
@@ -1156,6 +1163,7 @@ class AdvancedMultiAgent(BaseAgent):
                     portfolio=portfolio,
                     prices=prices,
                     on_step=on_step,
+                    decision_round_id=decision_round_id,
                 )
 
                 final_decision = {

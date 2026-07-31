@@ -36,6 +36,7 @@ if TYPE_CHECKING:  # ORM types for typing only; no runtime import side effects
         Order,
         Position,
         Trade,
+        TradeCommandReceipt,
         User,
     )
 
@@ -89,6 +90,29 @@ class TradeRepository(Protocol):
     def list_by_account(self, account_id: int) -> List["Trade"]: ...
 
     def list_by_order(self, order_id: int) -> List["Trade"]: ...
+
+
+@runtime_checkable
+class TradeCommandReceiptRepository(Protocol):
+    def get(
+        self,
+        account_id: int,
+        idempotency_key: str,
+    ) -> Optional["TradeCommandReceipt"]: ...
+
+    def claim(
+        self,
+        account_id: int,
+        idempotency_key: str,
+        command_json: str,
+    ) -> "TradeCommandReceipt": ...
+
+    def complete(
+        self,
+        receipt: "TradeCommandReceipt",
+        result_json: str,
+        completed_at: datetime,
+    ) -> "TradeCommandReceipt": ...
 
 
 @runtime_checkable

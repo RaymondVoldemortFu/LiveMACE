@@ -65,6 +65,7 @@ def test_uow_exposes_all_domain_repositories(session_factory):
         assert isinstance(uow.positions, PositionRepository)
         assert isinstance(uow.orders, OrderRepository)
         assert isinstance(uow.trades, TradeRepository)
+        assert uow.trade_command_receipts is not None
         assert isinstance(uow.decisions, DecisionRepository)
         assert isinstance(uow.traces, TraceRepository)
         assert isinstance(uow.snapshots, SnapshotRepository)
@@ -212,6 +213,7 @@ def test_sqlite_startup_migrations_add_missing_columns_idempotently():
 
     applied = run_startup_migrations(engine)
     assert applied == [
+        "202608_trade_command_receipts",
         "202606_agent_checkpoint_volatility",
         "202606_account_tool_routing_enabled",
     ]

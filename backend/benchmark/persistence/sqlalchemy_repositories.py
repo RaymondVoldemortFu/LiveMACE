@@ -179,6 +179,45 @@ class SqlAlchemyTradeRepository:
         return self._session.query(Trade).filter(Trade.order_id == order_id).all()
 
 
+class SqlAlchemyTradeCommandReceiptRepository:
+    def __init__(self, session: Session):
+        self._session = session
+
+    def get(self, account_id: int, idempotency_key: str):
+        from database.models import TradeCommandReceipt
+
+        return (
+            self._session.query(TradeCommandReceipt)
+            .filter(
+                TradeCommandReceipt.account_id == account_id,
+                TradeCommandReceipt.idempotency_key == idempotency_key,
+            )
+            .first()
+        )
+
+    def claim(self, account_id: int, idempotency_key: str, command_json: str):
+        from database.models import TradeCommandReceipt
+
+        receipt = TradeCommandReceipt(
+            account_id=account_id,
+            idempotency_key=idempotency_key,
+            status="PENDING",
+            command_json=command_json,
+        )
+        self._session.add(receipt)
+        self._session.flush()
+        return receipt
+
+    def complete(self, receipt, result_json: str, completed_at: datetime):
+        if receipt.status != "PENDING":
+            raise ValueError("only a pending trade command receipt can be completed")
+        receipt.status = "COMPLETED"
+        receipt.result_json = result_json
+        receipt.completed_at = completed_at
+        self._session.flush()
+        return receipt
+
+
 class SqlAlchemyDecisionRepository:
     def __init__(self, session: Session):
         self._session = session

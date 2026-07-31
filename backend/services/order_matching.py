@@ -9,7 +9,14 @@ from typing import Optional, Tuple
 from sqlalchemy.orm import Session
 import logging
 
-from database.models import Order, Position, Trade, Account, User, CRYPTO_MIN_COMMISSION, CRYPTO_COMMISSION_RATE, CRYPTO_MIN_ORDER_QUANTITY, CRYPTO_LOT_SIZE
+from database.models import (
+    Account,
+    CRYPTO_COMMISSION_RATE,
+    CRYPTO_MIN_COMMISSION,
+    Order,
+    Position,
+    Trade,
+)
 from .market_data import get_last_price
 from services.time_source import now_utc
 
@@ -52,7 +59,7 @@ def create_order(db: Session, account: Account, symbol: str, name: str,
 
     # For crypto, allow very small quantities (minimum $1 worth)
     if quantity <= 0:
-        raise ValueError(f"Order quantity must be > 0")
+        raise ValueError("Order quantity must be > 0")
 
     if order_type == "LIMIT" and (price is None or price <= 0):
         raise ValueError("Limit order must specify valid order price")
@@ -64,11 +71,13 @@ def create_order(db: Session, account: Account, symbol: str, name: str,
         try:
             current_market_price = get_last_price(symbol, market)
         except Exception as err:
-            raise ValueError(f"Unable to get market price for market order: {err}")
+            raise ValueError("Unable to get market price for market order") from err
         check_price = Decimal(str(current_market_price))
     else:
         # Limit order: use order price for fund validation
         check_price = Decimal(str(price))
+    if not check_price.is_finite() or check_price <= 0:
+        raise ValueError("Market or limit price must be positive and finite")
 
     # Pre-check funds and positions
     if side == "BUY":
@@ -127,7 +136,13 @@ def create_order(db: Session, account: Account, symbol: str, name: str,
     return order
 
 
-def check_and_execute_order(db: Session, order: Order) -> bool:
+def check_and_execute_order(
+    db: Session,
+    order: Order,
+    *,
+    manage_transaction: bool = True,
+    raise_on_error: bool = False,
+) -> bool:
     """
     Check and execute limit order
 
@@ -150,10 +165,16 @@ def check_and_execute_order(db: Session, order: Order) -> bool:
         # Get current market price
         current_price = get_last_price(order.symbol, order.market)
         current_price_decimal = Decimal(str(current_price))
+        if not current_price_decimal.is_finite() or current_price_decimal <= 0:
+            raise ValueError("Market price must be positive and finite")
 
         # Get user information
         account = db.query(Account).filter(Account.id == order.account_id).first()
         if not account:
+            if raise_on_error:
+                raise ValueError(
+                    f"Account {order.account_id} for order {order.order_no} does not exist"
+                )
             logger.error(f"Account corresponding to order {order.order_no} does not exist")
             return False
 
@@ -182,14 +203,26 @@ def check_and_execute_order(db: Session, order: Order) -> bool:
                     should_execute = True
                     execution_price = current_price_decimal  # Execute at market price
 
+        elif raise_on_error:
+            raise ValueError(f"Unsupported order type: {order.order_type}")
+
         if not should_execute:
             logger.debug(f"Order {order.order_no} does not meet execution condition: {order.side} {order.price} vs market {current_price}")
             return False
 
         # Execute order
-        return _execute_order(db, order, account, execution_price)
+        return _execute_order(
+            db,
+            order,
+            account,
+            execution_price,
+            manage_transaction=manage_transaction,
+            raise_on_error=raise_on_error,
+        )
 
     except Exception as e:
+        if raise_on_error:
+            raise
         logger.error(f"Error checking order {order.order_no}: {e}")
         return False
 
@@ -203,7 +236,15 @@ def _release_frozen_on_fill(account: Account, order: Order, execution_price: Dec
         account.frozen_cash = float(max(Decimal(str(account.frozen_cash)) - frozen_to_release, Decimal('0')))
 
 
-def _execute_order(db: Session, order: Order, account: Account, execution_price: Decimal) -> bool:
+def _execute_order(
+    db: Session,
+    order: Order,
+    account: Account,
+    execution_price: Decimal,
+    *,
+    manage_transaction: bool = True,
+    raise_on_error: bool = False,
+) -> bool:
     """
     Execute order fill
 
@@ -390,13 +431,19 @@ def _execute_order(db: Session, order: Order, account: Account, execution_price:
         order.filled_quantity = float(quantity)
         order.status = "FILLED"
         
-        db.commit()
+        if manage_transaction:
+            db.commit()
+        else:
+            db.flush()
         
         logger.info(f"Order {order.order_no} executed: {order.side} {quantity} {order.symbol} @ ${execution_price}")
         return True
         
     except Exception as e:
-        db.rollback()
+        if manage_transaction:
+            db.rollback()
+        if raise_on_error:
+            raise
         logger.error(f"Error executing order {order.order_no}: {e}")
         return False
 
@@ -420,12 +467,21 @@ def get_pending_orders(db: Session, account_id: Optional[int] = None) -> list[Or
     return query.order_by(Order.created_at).all()
 
 
-def _release_frozen_on_cancel(account: Account, order: Order):
+def _release_frozen_on_cancel(
+    account: Account,
+    order: Order,
+    *,
+    strict: bool = False,
+):
     """Release frozen on order cancel (BUY only)"""
     if order.side == "BUY":
         # Conservative release: estimate frozen amount based on order price, avoid getting market price
         ref_price = float(order.price or 0.0)
         if ref_price <= 0:
+            if strict:
+                raise ValueError(
+                    f"Cannot cancel BUY order {order.order_no} without a reference price"
+                )
             # If no order price (theoretically shouldn't happen), use conservative estimate
             logger.warning(f"Order {order.order_no} has no order price, unable to accurately release frozen funds")
             ref_price = 100.0  # Use default value
@@ -436,7 +492,14 @@ def _release_frozen_on_cancel(account: Account, order: Order):
         account.frozen_cash = float(max(Decimal(str(account.frozen_cash)) - release_amt, Decimal('0')))
 
 
-def cancel_order(db: Session, order: Order, reason: str = "User cancelled") -> bool:
+def cancel_order(
+    db: Session,
+    order: Order,
+    reason: str = "User cancelled",
+    *,
+    manage_transaction: bool = True,
+    raise_on_error: bool = False,
+) -> bool:
     """
     Cancel order
 
@@ -456,14 +519,24 @@ def cancel_order(db: Session, order: Order, reason: str = "User cancelled") -> b
         # Release frozen
         account = db.query(Account).filter(Account.id == order.account_id).first()
         if account:
-            _release_frozen_on_cancel(account, order)
-        db.commit()
+            _release_frozen_on_cancel(account, order, strict=raise_on_error)
+        elif raise_on_error:
+            raise ValueError(
+                f"Account {order.account_id} for order {order.order_no} does not exist"
+            )
+        if manage_transaction:
+            db.commit()
+        else:
+            db.flush()
         
         logger.info(f"Order {order.order_no} cancelled: {reason}")
         return True
         
     except Exception as e:
-        db.rollback()
+        if manage_transaction:
+            db.rollback()
+        if raise_on_error:
+            raise
         logger.error(f"Error cancelling order {order.order_no}: {e}")
         return False
 

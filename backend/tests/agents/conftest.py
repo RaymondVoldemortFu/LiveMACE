@@ -13,6 +13,8 @@ from benchmark.contracts import (
     ToolResult,
 )
 from benchmark.tools import ToolInvoker
+from benchmark.prompts import PromptRegistry
+from benchmark.testing import FakeLLMClientPort
 
 
 class RecordingEvents:
@@ -50,10 +52,12 @@ def tool_invoker():
 
 @pytest.fixture
 def build_context(event_sink, tool_invoker):
+    prompts = PromptRegistry()
+    prompts.freeze()
     return AgentBuildContext(
-        llm=object(),
+        llm=FakeLLMClientPort(),
         tools=tool_invoker,
-        prompts=object(),
+        prompts=prompts,
         events=event_sink,
     )
 

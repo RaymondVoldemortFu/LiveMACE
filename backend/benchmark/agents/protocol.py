@@ -18,6 +18,8 @@ from benchmark.contracts import (
     require_semver,
 )
 from benchmark.tools.protocol import ToolInvoker
+from benchmark.prompts.protocol import PromptResolver
+from benchmark.providers.llm import LLMClientPort
 
 
 def _freeze(value: Any) -> Any:
@@ -69,10 +71,20 @@ class EventSink(Protocol):
 class AgentBuildContext:
     """Framework-owned ports available while constructing an Agent."""
 
-    llm: Any
+    llm: LLMClientPort
     tools: ToolInvoker
-    prompts: Any
+    prompts: PromptResolver
     events: EventSink
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.llm, LLMClientPort):
+            raise TypeError("llm must implement LLMClientPort")
+        if not isinstance(self.tools, ToolInvoker):
+            raise TypeError("tools must implement ToolInvoker")
+        if not isinstance(self.prompts, PromptResolver):
+            raise TypeError("prompts must implement PromptResolver")
+        if not isinstance(self.events, EventSink):
+            raise TypeError("events must implement EventSink")
 
 
 @dataclass(frozen=True)

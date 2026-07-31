@@ -55,6 +55,8 @@ def validate_supported(symbol: str, market: Market) -> None:
             raise ValueError(f"Unsupported US stock symbol: {symbol}")
     if market is Market.CRYPTO and symbol in US_SYMBOLS:
         raise ValueError(f"Invalid market for symbol '{symbol}': use market='US'")
+    if market is Market.CRYPTO and symbol not in CRYPTO_SYMBOLS:
+        raise ValueError(f"Unsupported CRYPTO symbol: {symbol}")
 
 
 def infer_market(symbol: str, explicit_market: str | Market | None = None) -> Market:
@@ -74,4 +76,3 @@ __all__ = [
     "resolve_symbol_market",
     "validate_supported",
 ]
-

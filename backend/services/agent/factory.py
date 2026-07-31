@@ -19,6 +19,8 @@ from benchmark.agents import (
     ComponentNotFoundError,
     NullEventSink,
 )
+from benchmark.infrastructure.adapters import LegacyLLMClientAdapter
+from benchmark.prompts import PromptRegistry
 from config.agent_config import AgentConfig
 
 from .base import BaseAgent
@@ -30,6 +32,9 @@ from .tools import ToolRegistry
 
 logger = logging.getLogger(__name__)
 
+_EMPTY_PROMPT_REGISTRY = PromptRegistry()
+_EMPTY_PROMPT_REGISTRY.freeze()
+
 
 class _LegacyAgentFactory:
     def __init__(self, builder: Callable[..., BaseAgent]) -> None:
@@ -40,7 +45,10 @@ class _LegacyAgentFactory:
         context: AgentBuildContext,
         config: Mapping[str, Any],
     ) -> BaseAgent:
-        return self._builder(context.llm, context.tools, **dict(config))
+        llm = context.llm
+        if isinstance(llm, LegacyLLMClientAdapter):
+            llm = llm.legacy_client
+        return self._builder(llm, context.tools, **dict(config))
 
 
 def _build_react(llm: LLMClient, tools: ToolRegistry, **config: Any) -> BaseAgent:
@@ -176,9 +184,9 @@ def create_agent(
         raise ValueError(f"Invalid config for agent type {agent_type}: {message}")
     return registered.factory.create(
         AgentBuildContext(
-            llm=llm,
+            llm=LegacyLLMClientAdapter(llm),
             tools=tools,
-            prompts=None,
+            prompts=_EMPTY_PROMPT_REGISTRY,
             events=NullEventSink(),
         ),
         report.normalized_config,

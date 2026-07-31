@@ -1,0 +1,296 @@
+from __future__ import annotations
+
+import subprocess
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from benchmark.contracts import Market
+from benchmark.infrastructure.adapters.llm import LegacyLLMClientAdapter
+from benchmark.infrastructure.adapters.market import _FunctionMarketDataAdapter
+from benchmark.infrastructure.adapters.memory import LegacyMemoryStoreAdapter
+from benchmark.infrastructure.adapters.sandbox import ContainerServiceSandboxAdapter
+from benchmark.providers import (
+    Freshness,
+    LLMClientPort,
+    LLMRequest,
+    LLMResponse,
+    MarketDataPort,
+    MemoryStorePort,
+    ProviderError,
+    SandboxPort,
+)
+from benchmark.testing import (
+    FakeLLMClientPort,
+    FakeMarketDataPort,
+    FakeMemoryStorePort,
+    FakeSandboxPort,
+)
+
+BACKEND_DIR = Path(__file__).resolve().parents[2]
+
+
+class FakeLegacyLLM:
+    model = "model-1"
+
+    def __init__(self, message=None, error: Exception | None = None):
+        self.message = message or SimpleNamespace(content="ok", tool_calls=[])
+        self.error = error
+        self.kwargs = None
+
+    def call(self, **kwargs):
+        self.kwargs = kwargs
+        if self.error:
+            raise self.error
+        return self.message
+
+    @staticmethod
+    def extract_text_content(message):
+        return message.content
+
+    @staticmethod
+    def tool_call_parts(value):
+        return value.id, value.name, value.arguments
+
+    def test_connection(self, timeout_seconds):
+        return "ok"
+
+
+def test_llm_adapter_forwards_options_and_removes_sdk_objects():
+    tool_call = SimpleNamespace(id="call-1", name="core.echo", arguments='{"x":1}')
+    client = FakeLegacyLLM(SimpleNamespace(content="done", tool_calls=[tool_call]))
+    adapter = LegacyLLMClientAdapter(client)
+    request = LLMRequest(
+        messages=({"role": "user", "content": "hello"},),
+        model="model-1",
+        tools=({"type": "function", "function": {"name": "core.echo"}},),
+        temperature=0.2,
+        max_tokens=20,
+        metadata={"timeout_seconds": 3.0},
+    )
+
+    result = adapter.complete(request)
+
+    assert result == LLMResponse(
+        content="done",
+        tool_calls=result.tool_calls,
+        raw={},
+    )
+    assert result.tool_calls[0].arguments == {"x": 1}
+    assert client.kwargs["temperature"] == 0.2
+    assert client.kwargs["max_tokens"] == 20
+    assert client.kwargs["timeout"] == 3.0
+
+
+def test_llm_adapter_rejects_model_mismatch_and_bad_tool_arguments():
+    adapter = LegacyLLMClientAdapter(FakeLegacyLLM())
+    with pytest.raises(ProviderError) as mismatch:
+        adapter.complete(LLMRequest(messages=(), model="other"))
+    assert mismatch.value.code == "LLM_MODEL_MISMATCH"
+
+    bad = SimpleNamespace(
+        content="",
+        tool_calls=[SimpleNamespace(id="c", name="tool", arguments="not-json")],
+    )
+    adapter = LegacyLLMClientAdapter(FakeLegacyLLM(bad))
+    with pytest.raises(ProviderError) as invalid:
+        adapter.complete(LLMRequest(messages=(), model="model-1"))
+    assert invalid.value.code == "LLM_TOOL_ARGUMENTS_INVALID"
+
+
+def test_llm_provider_error_is_stable_and_does_not_leak_secret():
+    adapter = LegacyLLMClientAdapter(
+        FakeLegacyLLM(error=TimeoutError("api_key=super-secret"))
+    )
+    with pytest.raises(ProviderError) as caught:
+        adapter.complete(LLMRequest(messages=(), model="model-1"))
+    assert caught.value.code == "LLM_TIMEOUT"
+    assert caught.value.retryable is True
+    assert "super-secret" not in str(caught.value)
+    assert "super-secret" not in repr(caught.value.details)
+
+
+@pytest.mark.parametrize("operation", ["llm", "market", "memory", "sandbox"])
+def test_adapters_reject_awaitables(operation):
+    async def async_value(*args, **kwargs):
+        return None
+
+    if operation == "llm":
+        client = FakeLegacyLLM()
+        client.call = async_value
+
+        def invoke():
+            return LegacyLLMClientAdapter(client).complete(
+                LLMRequest(messages=(), model="model-1")
+            )
+    elif operation == "market":
+        adapter = _FunctionMarketDataAdapter(
+            provider_id="fake.market.adapter",
+            price_loader=async_value,
+            kline_loader=lambda *args: [],
+            status_loader=lambda symbol: {"is_trading": True},
+            supported_market=Market.CRYPTO,
+        )
+        def invoke():
+            return adapter.get_price("BTC", Market.CRYPTO)
+    elif operation == "memory":
+        store = SimpleNamespace(
+            search=async_value,
+            add=lambda **kwargs: "id",
+            clear_account_memories=lambda **kwargs: 0,
+        )
+        def invoke():
+            return LegacyMemoryStoreAdapter(store).search(
+                1,
+                "q",
+                1,
+                market=Market.CRYPTO,
+            )
+    else:
+        service = SimpleNamespace(
+            lease_container=async_value,
+            release_container=lambda account_id: None,
+        )
+        def invoke():
+            return ContainerServiceSandboxAdapter(service).lease(1)
+
+    with pytest.raises(ProviderError) as caught:
+        invoke()
+    assert caught.value.code == "ASYNC_PROVIDER_UNSUPPORTED"
+
+
+def test_market_adapter_status_validation_and_error_mapping():
+    adapter = _FunctionMarketDataAdapter(
+        provider_id="fake.market.adapter",
+        price_loader=lambda symbol: 10,
+        kline_loader=lambda *args: [{"close": 10}],
+        status_loader=lambda symbol: {"is_trading": False, "reason": "closed"},
+        supported_market=Market.US,
+    )
+    status = adapter.get_market_status("AAPL", Market.US)
+    assert status.is_trading is False
+    assert status.reason == "closed"
+    assert adapter.get_price("AAPL", Market.US).freshness is Freshness.FRESH
+
+    broken = _FunctionMarketDataAdapter(
+        provider_id="fake.market.broken",
+        price_loader=lambda symbol: (_ for _ in ()).throw(RuntimeError("secret")),
+        kline_loader=lambda *args: [],
+        status_loader=lambda symbol: {"is_trading": True},
+        supported_market=Market.US,
+    )
+    with pytest.raises(ProviderError) as caught:
+        broken.get_price("AAPL", Market.US)
+    assert caught.value.code == "PROVIDER_OPERATION_FAILED"
+    assert "secret" not in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    ("module_name", "adapter_name", "market"),
+    [
+        (
+            "services.hyperliquid_market_data",
+            "HyperliquidMarketDataAdapter",
+            Market.CRYPTO,
+        ),
+        ("services.alpaca_market_data", "AlpacaMarketDataAdapter", Market.US),
+    ],
+)
+def test_production_market_adapters_follow_the_same_contract(
+    monkeypatch,
+    module_name,
+    adapter_name,
+    market,
+):
+    import importlib
+
+    monkeypatch.setenv("ALPACA_KEY", "test")
+    monkeypatch.setenv("ALPACA_SECRET", "test")
+    module = importlib.import_module(module_name)
+    prefix = "hyperliquid" if market is Market.CRYPTO else "alpaca"
+    monkeypatch.setattr(
+        module,
+        f"get_last_price_from_{prefix}",
+        lambda symbol: 100.0,
+    )
+    monkeypatch.setattr(
+        module,
+        f"get_kline_data_from_{prefix}",
+        lambda *args: [{"close": 100.0}],
+    )
+    monkeypatch.setattr(
+        module,
+        f"get_market_status_from_{prefix}",
+        lambda symbol: {"is_trading": True},
+    )
+    adapters = importlib.import_module("benchmark.infrastructure.adapters.market")
+    adapter = getattr(adapters, adapter_name)()
+
+    assert isinstance(adapter, MarketDataPort)
+    assert adapter.get_price("BTC" if market is Market.CRYPTO else "AAPL", market).value
+    assert adapter.get_market_status("BTC", market).is_trading is True
+
+
+def test_memory_adapter_preserves_account_market_namespace_and_rejects_bad_rows():
+    calls = []
+
+    class Store:
+        def search(self, **kwargs):
+            calls.append(kwargs)
+            return [{"id": "m1", "content": "BTC note", "metadata": {}}]
+
+        def add(self, **kwargs):
+            calls.append(kwargs)
+            return {"id": "m2"}
+
+        def clear_account_memories(self, **kwargs):
+            return 2
+
+    adapter = LegacyMemoryStoreAdapter(Store())
+    assert adapter.search(7, "BTC", 2, market=Market.CRYPTO)[0].id == "m1"
+    assert adapter.add(7, "note", {}, market=Market.US) == "m2"
+    assert calls[0]["account_id"] == "7"
+    assert calls[0]["market"] == "CRYPTO"
+    assert calls[1]["market"] == "US"
+
+    bad = Store()
+    bad.search = lambda **kwargs: [{"content": "missing id"}]
+    with pytest.raises(ProviderError) as caught:
+        LegacyMemoryStoreAdapter(bad).search(1, "q", 1, market=Market.CRYPTO)
+    assert caught.value.code == "PROVIDER_RESULT_INVALID"
+
+
+def test_sandbox_managed_lease_releases_once_even_on_error():
+    released = []
+    service = SimpleNamespace(
+        lease_container=lambda account_id: f"container-{account_id}",
+        release_container=lambda account_id: released.append(account_id),
+    )
+    adapter = ContainerServiceSandboxAdapter(service)
+    with pytest.raises(RuntimeError, match="boom"):
+        with adapter.managed_lease(9) as lease:
+            assert lease.container_id == "container-9"
+            raise RuntimeError("boom")
+    adapter.release(lease)
+    assert released == [9]
+
+
+def test_reusable_fakes_implement_every_public_port():
+    assert isinstance(FakeLLMClientPort(), LLMClientPort)
+    assert isinstance(FakeMemoryStorePort(), MemoryStorePort)
+    assert isinstance(FakeMarketDataPort(), MarketDataPort)
+    assert isinstance(FakeSandboxPort(), SandboxPort)
+
+
+def test_public_provider_import_does_not_load_vendor_sdks():
+    code = f"""
+import sys
+sys.path.insert(0, {str(BACKEND_DIR)!r})
+import benchmark.providers, benchmark.testing
+banned = ['openai', 'pinecone', 'alpaca', 'docker']
+loaded = [name for name in banned if name in sys.modules]
+assert not loaded, loaded
+"""
+    subprocess.run([sys.executable, "-c", code], check=True)

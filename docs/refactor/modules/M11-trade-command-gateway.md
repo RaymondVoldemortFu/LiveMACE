@@ -22,14 +22,16 @@ def process_pending(command: ProcessPendingOrders) -> ProcessingResult
 
 ## TODO
 
-- [ ] 将 symbol/market、market status、price、operation、direction、sizing、leverage 校验归一为 policy，但不改变规则值。
-- [ ] Gateway 以 UoW 开启单个写事务；失败 rollback，返回结构化 reject。
-- [ ] Gateway 暴露同步接口并在返回前完成事务；Agent 工具必须等待结果，不存在后台延迟提交。
-- [ ] `idempotency_key` 在同一账户重复调用返回首个结果，不再次修改账本；设计持久化或事务内唯一约束方案。
-- [ ] 普通 MARKET/LIMIT 继续使用 `order_matching`，杠杆 Crypto 继续使用现有 executor；gateway 只编排。
-- [ ] `execute_trade_tool()` 缩为参数 adapter，最终在 M06 由 `core.execute_trade` 替换。
-- [ ] 映射当前 ValueError 到稳定 reject code，并保留用户可见 message。
-- [ ] 返回 order/trade ref、normalized command，不返回 ORM entity。
+- [x] 将 symbol/market、market status、price、operation、direction、sizing、leverage 校验归一为 policy，但不改变规则值。
+- [x] Gateway 以 UoW 开启单个写事务；失败 rollback，返回结构化 reject。
+- [x] Gateway 暴露同步接口并在返回前完成事务；Agent 工具必须等待结果，不存在后台延迟提交。
+- [x] `idempotency_key` 在同一账户重复调用返回首个结果，不再次修改账本；设计持久化或事务内唯一约束方案。
+- [x] 普通 MARKET/LIMIT 继续使用 `order_matching`，杠杆 Crypto 继续使用现有 executor；gateway 只编排。
+- [x] `execute_trade_tool()` 缩为参数 adapter，最终在 M06 由 `core.execute_trade` 替换。
+- [x] 映射当前 ValueError 到稳定 reject code，并保留用户可见 message。
+- [x] 返回 order/trade ref、normalized command，不返回 ORM entity。
+
+实现说明和验证证据见 [M11-implementation-report.md](M11-implementation-report.md)。
 
 ## 验收
 

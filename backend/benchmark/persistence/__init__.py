@@ -22,6 +22,7 @@ from benchmark.persistence.repositories import (
     SnapshotRepository,
     TraceRepository,
     TradeRepository,
+    TradeCommandReceiptRepository,
     UserRepository,
 )
 from benchmark.persistence.uow import (
@@ -36,6 +37,7 @@ __all__ = [
     "PositionRepository",
     "OrderRepository",
     "TradeRepository",
+    "TradeCommandReceiptRepository",
     "DecisionRepository",
     "TraceRepository",
     "SnapshotRepository",

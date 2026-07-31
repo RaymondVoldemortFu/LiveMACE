@@ -69,7 +69,26 @@ def _never_applied(conn: Connection) -> bool:
     return False
 
 
+def _trade_command_receipts_exists(conn: Connection) -> bool:
+    from sqlalchemy import inspect
+
+    return inspect(conn).has_table("trade_command_receipts")
+
+
+def _create_trade_command_receipts(conn: Connection) -> None:
+    from database.models import TradeCommandReceipt
+
+    TradeCommandReceipt.__table__.create(bind=conn, checkfirst=True)
+
+
 STARTUP_MIGRATIONS: List[StartupMigration] = [
+    StartupMigration(
+        migration_id="202608_trade_command_receipts",
+        dialect=None,
+        is_applied=_trade_command_receipts_exists,
+        apply=_create_trade_command_receipts,
+        fatal=True,
+    ),
     StartupMigration(
         migration_id="202606_agent_checkpoint_volatility",
         dialect="sqlite",

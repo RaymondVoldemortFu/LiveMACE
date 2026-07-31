@@ -6,7 +6,17 @@ from decimal import Decimal
 from typing import Mapping
 
 from benchmark.contracts import JsonValue, Market
-from benchmark.providers import Freshness, HealthStatus, KlineQuery, KlineResult, MarketDataPort, PriceResult
+from benchmark.providers import (
+    Freshness,
+    HealthStatus,
+    KlineQuery,
+    KlineResult,
+    MarketDataPort,
+    MarketStatusResult,
+    PriceResult,
+    ProviderError,
+)
+from benchmark.providers.runtime import provider_failure, require_sync_result
 
 
 class LegacyMarketDataAdapter(MarketDataPort):
@@ -22,28 +32,95 @@ class LegacyMarketDataAdapter(MarketDataPort):
             from services import market_data
             from services.time_source import now_utc
 
-            value = Decimal(str(market_data.get_last_price(symbol, market.value)))
+            value = Decimal(
+                str(
+                    require_sync_result(
+                        market_data.get_last_price(symbol, market.value),
+                        provider_id=self.id,
+                        operation="get_price",
+                    )
+                )
+            )
             freshness = Freshness.FRESH if value > 0 else Freshness.UNAVAILABLE
             error = None if value > 0 else "price is not positive"
             return PriceResult(value=value, as_of=now_utc(), source=self.id, freshness=freshness, error=error)
+        except (KeyboardInterrupt, SystemExit, GeneratorExit):
+            raise
+        except ProviderError:
+            raise
         except Exception as exc:
-            return PriceResult(value=None, as_of=None, source=self.id, freshness=Freshness.UNAVAILABLE, error=str(exc))
+            raise provider_failure(self.id, "get_price", exc, retryable=True) from exc
 
     def get_klines(self, query: KlineQuery) -> KlineResult:
         try:
             from services import market_data
 
-            rows = market_data.get_kline_data(
-                query.symbol,
-                query.market.value,
-                query.period,
-                query.count,
-                query.start_time,
-                query.end_time,
+            rows = require_sync_result(
+                market_data.get_kline_data(
+                    query.symbol,
+                    query.market.value,
+                    query.period,
+                    query.count,
+                    query.start_time,
+                    query.end_time,
+                ),
+                provider_id=self.id,
+                operation="get_klines",
             )
             return KlineResult(rows=tuple(rows), source=self.id, freshness=Freshness.FRESH)
+        except (KeyboardInterrupt, SystemExit, GeneratorExit):
+            raise
+        except ProviderError:
+            raise
         except Exception as exc:
-            return KlineResult(rows=(), source=self.id, freshness=Freshness.UNAVAILABLE, error=str(exc))
+            raise provider_failure(self.id, "get_klines", exc, retryable=True) from exc
+
+    def get_market_status(
+        self,
+        symbol: str,
+        market: Market,
+    ) -> MarketStatusResult:
+        try:
+            from services import market_data
+            from services.time_source import now_utc
+
+            raw = require_sync_result(
+                market_data.get_market_status(symbol, market.value),
+                provider_id=self.id,
+                operation="get_market_status",
+            )
+        except (KeyboardInterrupt, SystemExit, GeneratorExit):
+            raise
+        except ProviderError:
+            raise
+        except Exception as exc:
+            raise provider_failure(
+                self.id,
+                "get_market_status",
+                exc,
+                retryable=True,
+            ) from exc
+        if not isinstance(raw, Mapping) or not isinstance(raw.get("is_trading"), bool):
+            raise ProviderError(
+                "Market provider returned an invalid market status",
+                code="PROVIDER_RESULT_INVALID",
+                provider_id=self.id,
+                details={"operation": "get_market_status"},
+            )
+        reason = raw.get("reason") or raw.get("message")
+        if reason is not None and not isinstance(reason, str):
+            raise ProviderError(
+                "Market status reason must be text",
+                code="PROVIDER_RESULT_INVALID",
+                provider_id=self.id,
+                details={"operation": "get_market_status"},
+            )
+        return MarketStatusResult(
+            raw["is_trading"],
+            self.id,
+            now_utc(),
+            reason,
+        )
 
     def healthcheck(self) -> HealthStatus:
         return HealthStatus(status="ok", provider_id=self.id)

@@ -30,6 +30,7 @@ from benchmark.persistence.repositories import (
     SnapshotRepository,
     TraceRepository,
     TradeRepository,
+    TradeCommandReceiptRepository,
     UserRepository,
 )
 
@@ -40,6 +41,7 @@ class UnitOfWork(Protocol):
     positions: PositionRepository
     orders: OrderRepository
     trades: TradeRepository
+    trade_command_receipts: TradeCommandReceiptRepository
     decisions: DecisionRepository
     traces: TraceRepository
     snapshots: SnapshotRepository
@@ -68,6 +70,7 @@ class SqlAlchemyUnitOfWork:
     positions: PositionRepository
     orders: OrderRepository
     trades: TradeRepository
+    trade_command_receipts: TradeCommandReceiptRepository
     decisions: DecisionRepository
     traces: TraceRepository
     snapshots: SnapshotRepository
@@ -103,6 +106,7 @@ class SqlAlchemyUnitOfWork:
             SqlAlchemySnapshotRepository,
             SqlAlchemyTraceRepository,
             SqlAlchemyTradeRepository,
+            SqlAlchemyTradeCommandReceiptRepository,
             SqlAlchemyUserRepository,
         )
 
@@ -110,6 +114,7 @@ class SqlAlchemyUnitOfWork:
         self.positions = SqlAlchemyPositionRepository(session)
         self.orders = SqlAlchemyOrderRepository(session)
         self.trades = SqlAlchemyTradeRepository(session)
+        self.trade_command_receipts = SqlAlchemyTradeCommandReceiptRepository(session)
         self.decisions = SqlAlchemyDecisionRepository(session)
         self.traces = SqlAlchemyTraceRepository(session)
         self.snapshots = SqlAlchemySnapshotRepository(session)

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Mapping, Protocol
+from typing import Mapping, Protocol, runtime_checkable
 
 from benchmark.contracts import JsonValue
 from benchmark.contracts.common import _freeze_mapping, _require_non_empty
@@ -24,6 +24,7 @@ class SandboxLease:
         object.__setattr__(self, "metadata", _freeze_mapping(self.metadata, "metadata"))
 
 
+@runtime_checkable
 class SandboxPort(Protocol):
     id: str
     version: str

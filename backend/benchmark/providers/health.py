@@ -8,6 +8,8 @@ from typing import Mapping
 from benchmark.contracts import JsonValue
 from benchmark.contracts.common import _freeze_mapping, _require_non_empty
 
+HEALTHCHECK_TIMEOUT_SECONDS = 15.0
+
 
 @dataclass(frozen=True)
 class HealthStatus:
@@ -25,4 +27,4 @@ class HealthStatus:
         object.__setattr__(self, "details", _freeze_mapping(self.details, "details"))
 
 
-__all__ = ["HealthStatus"]
+__all__ = ["HEALTHCHECK_TIMEOUT_SECONDS", "HealthStatus"]

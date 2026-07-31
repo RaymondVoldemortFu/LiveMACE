@@ -113,7 +113,14 @@ class ReActAgent(BaseAgent):
             return True
         return False
 
-    def run(self, portfolio: Dict[str, Any], prices: Dict[str, float], on_step: Optional[Callable[[Dict], None]] = None, trace_id: Optional[str] = None) -> Dict[str, Any]:
+    def run(
+        self,
+        portfolio: Dict[str, Any],
+        prices: Dict[str, float],
+        on_step: Optional[Callable[[Dict], None]] = None,
+        trace_id: Optional[str] = None,
+        decision_round_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
         输入:
             portfolio: 和 Agent 决策上下文一致的结构
@@ -298,7 +305,12 @@ class ReActAgent(BaseAgent):
                                         )
                                     }
                                 else:
-                                    result = tool(**args)
+                                    result = self._invoke_llm_tool(
+                                        name,
+                                        args,
+                                        tool_call_id=tc_id,
+                                        decision_round_id=decision_round_id,
+                                    )
                                     if should_cache_tool_result:
                                         tool_call_cache[cache_key] = result
                                     # Meta tool handling, optional for special tools

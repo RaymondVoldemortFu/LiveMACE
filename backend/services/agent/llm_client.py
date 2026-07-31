@@ -200,6 +200,8 @@ class LLMClient:
         tools=None,
         timeout: Optional[float] = None,
         response_format: Optional[dict] = None,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
     ):
         """
         统一的 LLM 调用入口，支持 tools（函数调用）
@@ -211,12 +213,12 @@ class LLMClient:
             "model": self.model,
             "messages": self._normalize_messages_for_api(messages, model=self.model),
             "tools": tools,
-            "temperature": 0.4,
+            "temperature": 0.4 if temperature is None else temperature,
         }
         if self.is_grok_model():
-            request_kwargs["max_completion_tokens"] = 4000
+            request_kwargs["max_completion_tokens"] = 4000 if max_tokens is None else max_tokens
         else:
-            request_kwargs["max_tokens"] = 4000
+            request_kwargs["max_tokens"] = 4000 if max_tokens is None else max_tokens
         request_kwargs["timeout"] = self.default_timeout_seconds if timeout is None else timeout
         if response_format is not None:
             request_kwargs["response_format"] = response_format

@@ -39,6 +39,8 @@ class TradeCommand:
         if not isinstance(self.reason, str):
             raise TypeError("reason must be str")
         _require_non_empty(self.idempotency_key, "idempotency_key")
+        if len(self.idempotency_key) > 255:
+            raise ValueError("idempotency_key must not exceed 255 characters")
 
 
 @dataclass(frozen=True)

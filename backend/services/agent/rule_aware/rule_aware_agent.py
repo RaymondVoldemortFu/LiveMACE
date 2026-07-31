@@ -118,7 +118,8 @@ class RuleAwareAgent(BaseAgent):
         portfolio: Dict[str, Any], 
         prices: Dict[str, float], 
         on_step: Optional[Callable[[Dict], None]] = None,
-        trace_id: Optional[str] = None
+        trace_id: Optional[str] = None,
+        decision_round_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Execute rule-aware decision making process
@@ -240,8 +241,12 @@ class RuleAwareAgent(BaseAgent):
 
                         # Execute tool - get tool from registry and call it
                         try:
-                            tool = self.tools.get(func_name)
-                            result = tool(**args)
+                            result = self._invoke_llm_tool(
+                                func_name,
+                                args,
+                                tool_call_id=tc_id,
+                                decision_round_id=decision_round_id,
+                            )
                         except Exception as tool_err:
                             logger.error(f"Tool execution failed for {func_name}: {tool_err}", exc_info=True)
                             result = {"error": f"Tool execution failed: {str(tool_err)}"}
@@ -553,4 +558,3 @@ class RuleAwareAgent(BaseAgent):
                 
         except Exception as e:
             logger.error(f"Failed to update account audit stats: {e}", exc_info=True)
-

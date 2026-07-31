@@ -459,3 +459,26 @@ class RuleEvaluationResult(Base):
 
     # Relationships
     account = relationship("Account")
+
+
+class TradeCommandReceipt(Base):
+    """Durable idempotency receipt for one account trade command."""
+
+    __tablename__ = "trade_command_receipts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False, index=True)
+    idempotency_key = Column(String(255), nullable=False)
+    status = Column(String(20), nullable=False, default="PENDING")
+    command_json = Column(Text, nullable=False)
+    result_json = Column(Text, nullable=True)
+    created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
+    completed_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "account_id",
+            "idempotency_key",
+            name="uix_trade_command_receipt_key",
+        ),
+    )

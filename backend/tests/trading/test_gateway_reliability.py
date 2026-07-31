@@ -1,0 +1,354 @@
+from __future__ import annotations
+
+from concurrent.futures import ThreadPoolExecutor
+from decimal import Decimal
+from threading import Event, Lock
+
+import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from benchmark.application.trading import (
+    CancelOrderCommand,
+    CreateOrderCommand,
+    ProcessPendingOrders,
+    SynchronousTradeCommandGateway,
+)
+from benchmark.contracts import Market, TradeCommand
+from benchmark.contracts import TradeCommandResult
+from benchmark.contracts.errors import TradeGatewayError
+from benchmark.persistence import SqlAlchemyUnitOfWork
+from database.connection import Base
+from database.models import (
+    AIDecisionLog,
+    Account,
+    Order,
+    Position,
+    Trade,
+    TradeCommandReceipt,
+    User,
+)
+
+
+@pytest.fixture()
+def session_factory(tmp_path):
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'gateway.db'}",
+        connect_args={"check_same_thread": False, "timeout": 10},
+    )
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    session = factory()
+    user = User(username="trader", is_active="true")
+    session.add(user)
+    session.flush()
+    session.add(
+        Account(
+            id=1,
+            user_id=user.id,
+            version="v1",
+            name="gateway-account",
+            account_type="AI",
+            initial_capital=10000,
+            current_cash=10000,
+            frozen_cash=0,
+            margin_used=0,
+            is_active="true",
+        )
+    )
+    session.commit()
+    session.close()
+    yield factory
+    engine.dispose()
+
+
+def _gateway(session_factory, executor=None):
+    return SynchronousTradeCommandGateway(
+        lambda: SqlAlchemyUnitOfWork(session_factory),
+        executor=executor,
+    )
+
+
+def _command(key="round-1:call-1", **changes):
+    values = {
+        "account_id": 1,
+        "operation": "open",
+        "market": Market.CRYPTO,
+        "symbol": "btc",
+        "direction": "long",
+        "sizing_mode": "portion",
+        "sizing_value": Decimal("0.2"),
+        "leverage": 1,
+        "reason": "test",
+        "idempotency_key": key,
+    }
+    values.update(changes)
+    return TradeCommand(**values)
+
+
+def test_success_commits_business_write_and_receipt_once(session_factory):
+    calls = []
+
+    def executor(session, command):
+        calls.append(command)
+        account = session.query(Account).filter(Account.id == 1).one()
+        account.current_cash = 9000
+        return {"executed": True, "order_id": 10}
+
+    first = _gateway(session_factory, executor).execute(_command())
+    second = _gateway(session_factory, executor).execute(_command())
+
+    assert first == second
+    assert len(calls) == 1
+    with session_factory() as session:
+        assert float(session.query(Account).filter(Account.id == 1).one().current_cash) == 9000
+        receipt = session.query(TradeCommandReceipt).one()
+        assert receipt.status == "COMPLETED"
+
+
+def test_unexpected_failure_rolls_back_and_is_not_recorded(session_factory):
+    def executor(session, command):
+        session.query(Account).filter(Account.id == 1).one().current_cash = 1
+        raise RuntimeError("database password=secret")
+
+    with pytest.raises(TradeGatewayError) as caught:
+        _gateway(session_factory, executor).execute(_command())
+
+    assert caught.value.code == "TRADE_GATEWAY_INFRASTRUCTURE_ERROR"
+    assert "secret" not in str(caught.value)
+    with session_factory() as session:
+        assert float(session.query(Account).filter(Account.id == 1).one().current_cash) == 10000
+        assert session.query(TradeCommandReceipt).count() == 0
+
+
+def test_business_reject_is_durable_and_not_reexecuted(session_factory):
+    calls = []
+
+    def executor(session, command):
+        calls.append(command)
+        session.query(Account).filter(Account.id == 1).one().current_cash = 1
+        return {"executed": False, "error": "US market is closed for AAPL"}
+
+    command = _command(market=Market.US, symbol="AAPL")
+    first = _gateway(session_factory, executor).execute(command)
+    second = _gateway(session_factory, executor).execute(command)
+
+    assert first.accepted is False
+    assert first.reject_code == "MARKET_CLOSED"
+    assert second == first
+    assert len(calls) == 1
+    with session_factory() as session:
+        assert float(session.query(Account).filter(Account.id == 1).one().current_cash) == 10000
+        assert session.query(TradeCommandReceipt).count() == 1
+
+
+def test_reusing_key_for_different_command_fails_explicitly(session_factory):
+    gateway = _gateway(
+        session_factory,
+        lambda session, command: {"executed": True, "order_id": 1},
+    )
+    gateway.execute(_command())
+
+    with pytest.raises(TradeGatewayError) as caught:
+        gateway.execute(_command(symbol="ETH"))
+    assert caught.value.code == "TRADE_IDEMPOTENCY_KEY_REUSED"
+
+
+def test_concurrent_gateway_instances_execute_only_once(session_factory):
+    entered = Event()
+    release = Event()
+    calls = 0
+    lock = Lock()
+
+    def executor(session, command):
+        nonlocal calls
+        with lock:
+            calls += 1
+        entered.set()
+        assert release.wait(timeout=5)
+        return {"executed": True, "order_id": 9}
+
+    first_gateway = _gateway(session_factory, executor)
+    second_gateway = _gateway(session_factory, executor)
+    command = _command(key="concurrent")
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first_future = pool.submit(first_gateway.execute, command)
+        assert entered.wait(timeout=5)
+        second_future = pool.submit(second_gateway.execute, command)
+        release.set()
+        first = first_future.result(timeout=10)
+        second = second_future.result(timeout=10)
+
+    assert first == second
+    assert calls == 1
+
+
+def test_legacy_execution_failure_rolls_back_every_financial_write(
+    session_factory,
+    monkeypatch,
+):
+    from services.agent import trade_execution_tool
+    from services import order_executor_leverage
+
+    monkeypatch.setattr(trade_execution_tool, "get_last_price", lambda *args: 100.0)
+    monkeypatch.setattr(trade_execution_tool, "calc_positions_value", lambda *args: 0.0)
+    monkeypatch.setattr(order_executor_leverage, "get_last_price", lambda *args: 100.0)
+    monkeypatch.setattr(
+        trade_execution_tool,
+        "_save_trade_log",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("audit insert failed")),
+    )
+
+    with pytest.raises(TradeGatewayError):
+        _gateway(session_factory).execute(_command(key="rollback"))
+
+    with session_factory() as session:
+        account = session.query(Account).filter(Account.id == 1).one()
+        assert float(account.current_cash) == 10000
+        assert session.query(Order).count() == 0
+        assert session.query(Trade).count() == 0
+        assert session.query(Position).count() == 0
+        assert session.query(TradeCommandReceipt).count() == 0
+
+
+def test_legacy_execution_and_receipt_commit_atomically(session_factory, monkeypatch):
+    from services.agent import trade_execution_tool
+    from services import order_executor_leverage
+
+    monkeypatch.setattr(trade_execution_tool, "get_last_price", lambda *args: 100.0)
+    monkeypatch.setattr(trade_execution_tool, "calc_positions_value", lambda *args: 0.0)
+    monkeypatch.setattr(order_executor_leverage, "get_last_price", lambda *args: 100.0)
+
+    gateway = _gateway(session_factory)
+    first = gateway.execute(_command(key="actual"))
+    second = _gateway(session_factory).execute(_command(key="actual"))
+
+    assert first == second
+    with session_factory() as session:
+        assert session.query(Order).count() == 1
+        assert session.query(Trade).count() == 1
+        assert session.query(Position).count() == 1
+        assert session.query(AIDecisionLog).count() == 1
+        assert session.query(TradeCommandReceipt).count() == 1
+
+
+def test_internal_create_cancel_and_pending_commands_share_uow(
+    session_factory,
+    monkeypatch,
+):
+    from services import order_matching
+
+    monkeypatch.setattr(order_matching, "get_last_price", lambda *args: 100.0)
+    gateway = _gateway(session_factory)
+    created = gateway.create_order(
+        CreateOrderCommand(
+            account_id=1,
+            symbol="BTC",
+            market=Market.CRYPTO,
+            side="BUY",
+            order_type="LIMIT",
+            quantity=Decimal("1"),
+            price=Decimal("101"),
+        )
+    )
+    assert created.accepted is True
+
+    processed = gateway.process_pending(ProcessPendingOrders(account_id=1))
+    assert processed.processed == 1
+    assert processed.executed == 1
+
+    second = gateway.create_order(
+        CreateOrderCommand(
+            account_id=1,
+            symbol="BTC",
+            market=Market.CRYPTO,
+            side="BUY",
+            order_type="LIMIT",
+            quantity=Decimal("1"),
+            price=Decimal("90"),
+        )
+    )
+    with session_factory() as session:
+        order_no = session.query(Order).filter(Order.id == second.order_id).one().order_no
+    cancelled = gateway.cancel_order(CancelOrderCommand(1, order_no, "test"))
+    assert cancelled.accepted is True
+    with session_factory() as session:
+        assert session.query(Order).filter(Order.id == second.order_id).one().status == "CANCELLED"
+
+
+def test_order_provider_failure_is_rejected_without_leaking_details(
+    session_factory,
+    monkeypatch,
+):
+    from services import order_matching
+
+    monkeypatch.setattr(
+        order_matching,
+        "get_last_price",
+        lambda *args: (_ for _ in ()).throw(RuntimeError("api_key=secret")),
+    )
+    result = _gateway(session_factory).create_order(
+        CreateOrderCommand(
+            account_id=1,
+            symbol="BTC",
+            market=Market.CRYPTO,
+            side="BUY",
+            order_type="MARKET",
+            quantity=Decimal("1"),
+        )
+    )
+    assert result.accepted is False
+    assert result.reject_code == "PRICE_UNAVAILABLE"
+    assert "secret" not in result.reject_message
+
+
+def test_corrupt_pending_order_fails_explicitly_and_rolls_back(session_factory):
+    with session_factory() as session:
+        order = Order(
+            version="v1",
+            account_id=1,
+            order_no="CORRUPT-1",
+            symbol="BTC",
+            name="BTC",
+            market="CRYPTO",
+            side="BUY",
+            order_type="MARKET",
+            price=None,
+            quantity=1,
+            leverage=1,
+            filled_quantity=0,
+            status="PENDING",
+        )
+        session.add(order)
+        session.commit()
+
+    with pytest.raises(TradeGatewayError) as caught:
+        _gateway(session_factory).cancel_order(
+            CancelOrderCommand(1, "CORRUPT-1", "test")
+        )
+    assert caught.value.code == "TRADE_GATEWAY_INFRASTRUCTURE_ERROR"
+    with session_factory() as session:
+        assert session.query(Order).filter(Order.order_no == "CORRUPT-1").one().status == "PENDING"
+
+
+def test_committed_trade_is_not_reported_as_rejected_when_session_refresh_fails():
+    from services.agent.trade_execution_tool import execute_trade_tool
+
+    class Gateway:
+        def execute(self, command):
+            return TradeCommandResult(True, True, None, None, 1, 1, command)
+
+    class BrokenCallerSession:
+        def expire_all(self):
+            raise ValueError("driver detail")
+
+    with pytest.raises(TradeGatewayError) as caught:
+        execute_trade_tool(
+            db=BrokenCallerSession(),
+            account_id=1,
+            operation="hold",
+            idempotency_key="round:call",
+            gateway=Gateway(),
+        )
+    assert caught.value.code == "TRADE_CALLER_SESSION_REFRESH_FAILED"
+    assert "driver detail" not in str(caught.value)

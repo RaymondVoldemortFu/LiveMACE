@@ -51,7 +51,15 @@ class MultiAgent(BaseAgent):
                 missing.append(name)
         return missing
 
-    def _run_sub_agent(self, agent_name: str, instruction: str, portfolio: Dict, prices: Dict, on_step: Optional[Callable] = None) -> str:
+    def _run_sub_agent(
+        self,
+        agent_name: str,
+        instruction: str,
+        portfolio: Dict,
+        prices: Dict,
+        on_step: Optional[Callable] = None,
+        decision_round_id: Optional[str] = None,
+    ) -> str:
         """Run a single turn for a sub-agent"""
         
         # Select prompt and tools based on agent name
@@ -184,7 +192,12 @@ class MultiAgent(BaseAgent):
                                     )
                                 }
                             else:
-                                result = tool_func(**args)
+                                result = self._invoke_llm_tool(
+                                    name,
+                                    args,
+                                    tool_call_id=tc_id,
+                                    decision_round_id=decision_round_id,
+                                )
                     except Exception as tool_err:
                         logger.error(f"Sub-agent tool execution failed for {name}: {tool_err}")
                         result = {"error": f"Tool execution failed: {str(tool_err)}"}
@@ -217,7 +230,14 @@ class MultiAgent(BaseAgent):
         
         return current_response
 
-    def run(self, portfolio: Dict[str, Any], prices: Dict[str, float], on_step: Optional[Callable[[Dict], None]] = None, trace_id: Optional[str] = None) -> Dict[str, Any]:
+    def run(
+        self,
+        portfolio: Dict[str, Any],
+        prices: Dict[str, float],
+        on_step: Optional[Callable[[Dict], None]] = None,
+        trace_id: Optional[str] = None,
+        decision_round_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
         
         logger.info("Starting Multi-Agent decision process")
 
@@ -273,7 +293,14 @@ class MultiAgent(BaseAgent):
                     self.context.append(f"Step {step+1}: Manager decided to call {agent_name}. Reason: {reason}")
                     
                     # Execute Sub-agent
-                    result = self._run_sub_agent(agent_name, instruction, portfolio, prices, on_step)
+                    result = self._run_sub_agent(
+                        agent_name,
+                        instruction,
+                        portfolio,
+                        prices,
+                        on_step,
+                        decision_round_id,
+                    )
                     
                     self.context.append(f"Result from {agent_name}: {result}")
                     
@@ -304,4 +331,3 @@ class MultiAgent(BaseAgent):
             }
 
         return final_decision
-

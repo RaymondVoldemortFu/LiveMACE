@@ -8,7 +8,8 @@ from typing import Any, Mapping, Sequence
 from sqlalchemy.orm import Session
 
 from benchmark.contracts import JsonValue, Market
-from benchmark.providers import HealthStatus, MemoryRecord, MemoryStorePort
+from benchmark.providers import HealthStatus, MemoryRecord, MemoryStorePort, ProviderError
+from benchmark.providers.runtime import provider_failure, require_sync_result
 
 
 class LegacyMemoryStoreAdapter(MemoryStorePort):
@@ -30,26 +31,68 @@ class LegacyMemoryStoreAdapter(MemoryStorePort):
         *,
         market: Market,
     ) -> Sequence[MemoryRecord]:
-        rows = self._store.search(
-            account_id=str(account_id),
-            query=query,
-            limit=limit,
-            db=self._db,
-            market=_market_value(market),
-        )
+        if not isinstance(query, str) or not query:
+            raise ValueError("query must be a non-empty string")
+        if not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0:
+            raise ValueError("limit must be a positive integer")
+        try:
+            rows = require_sync_result(
+                self._store.search(
+                    account_id=str(account_id),
+                    query=query,
+                    limit=limit,
+                    db=self._db,
+                    market=_market_value(market),
+                ),
+                provider_id=self.id,
+                operation="search",
+            )
+        except (KeyboardInterrupt, SystemExit, GeneratorExit):
+            raise
+        except ProviderError:
+            raise
+        except Exception as exc:
+            raise provider_failure(self.id, "search", exc, retryable=True) from exc
+        if rows is None:
+            rows = ()
+        if not isinstance(rows, Sequence) or isinstance(rows, (str, bytes)):
+            raise ProviderError(
+                "Memory provider returned an invalid search result",
+                code="PROVIDER_RESULT_INVALID",
+                provider_id=self.id,
+                details={"operation": "search"},
+            )
         records = []
-        for row in rows or []:
+        for row in rows:
             if isinstance(row, MemoryRecord):
                 records.append(row)
             elif isinstance(row, Mapping):
+                record_id = row.get("id") or row.get("memory_id")
+                if record_id is None:
+                    raise ProviderError(
+                        "Memory search row has no id",
+                        code="PROVIDER_RESULT_INVALID",
+                        provider_id=self.id,
+                        details={"operation": "search"},
+                    )
                 records.append(
                     MemoryRecord(
-                        id=str(row.get("id") or row.get("memory_id") or "unknown"),
+                        id=str(record_id),
                         content=str(row.get("content") or row.get("text") or ""),
                         metadata=row.get("metadata") or {},
                         score=_as_optional_float(row.get("similarity", row.get("score"))),
                         created_at=_as_optional_datetime(row.get("created_at")),
                     )
+                )
+            else:
+                raise ProviderError(
+                    "Memory search row has an unsupported type",
+                    code="PROVIDER_RESULT_INVALID",
+                    provider_id=self.id,
+                    details={
+                        "operation": "search",
+                        "row_type": type(row).__name__,
+                    },
                 )
         return tuple(records)
 
@@ -61,18 +104,58 @@ class LegacyMemoryStoreAdapter(MemoryStorePort):
         *,
         market: Market,
     ) -> str:
-        result = self._store.add(
-            account_id=str(account_id),
-            content=content,
-            metadata=dict(metadata),
-            trace_id=self._trace_id,
-            db=self._db,
-            market=_market_value(market),
-        )
-        return _extract_memory_id(result)
+        if not isinstance(content, str) or not content:
+            raise ValueError("content must be a non-empty string")
+        try:
+            result = require_sync_result(
+                self._store.add(
+                    account_id=str(account_id),
+                    content=content,
+                    metadata=dict(metadata),
+                    trace_id=self._trace_id,
+                    db=self._db,
+                    market=_market_value(market),
+                ),
+                provider_id=self.id,
+                operation="add",
+            )
+            memory_id = _extract_memory_id(result)
+        except (KeyboardInterrupt, SystemExit, GeneratorExit):
+            raise
+        except ProviderError:
+            raise
+        except Exception as exc:
+            raise provider_failure(self.id, "add", exc) from exc
+        if not memory_id:
+            raise ProviderError(
+                "Memory provider did not return an id",
+                code="PROVIDER_RESULT_INVALID",
+                provider_id=self.id,
+                details={"operation": "add"},
+            )
+        return memory_id
 
     def delete_all(self, account_id: int | str) -> int:
-        return int(self._store.clear_account_memories(account_id=str(account_id)))
+        try:
+            result = require_sync_result(
+                self._store.clear_account_memories(account_id=str(account_id)),
+                provider_id=self.id,
+                operation="delete_all",
+            )
+            if isinstance(result, bool) or not isinstance(result, int) or result < 0:
+                raise ProviderError(
+                    "Memory provider returned an invalid delete count",
+                    code="PROVIDER_RESULT_INVALID",
+                    provider_id=self.id,
+                    details={"operation": "delete_all"},
+                )
+            return result
+        except (KeyboardInterrupt, SystemExit, GeneratorExit):
+            raise
+        except ProviderError:
+            raise
+        except Exception as exc:
+            raise provider_failure(self.id, "delete_all", exc) from exc
 
     def healthcheck(self) -> HealthStatus:
         return HealthStatus("ok", self.id)

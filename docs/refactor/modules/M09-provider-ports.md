@@ -16,16 +16,18 @@
 
 ## TODO
 
-- [ ] 定义 LLM request/response/tool-call DTO，隔离 OpenAI SDK object。
-- [ ] 所有 Provider port 对系统暴露同步方法；现有同步实现不套 async adapter。
-- [ ] Provider 返回 coroutine/awaitable 视为接口违规。第三方内部使用异步时必须自行运行并同步返回，系统不管理 event loop。
-- [ ] `LLMClient` adapter 保留 retry、Gemini/Grok tool-call normalization 和错误状态码映射。
-- [ ] 为 Local/Chroma/Pinecone memory 提供同一 adapter；account namespace 行为保持。
-- [ ] 为 Hyperliquid/Alpaca 定义 market adapter；不在 port 中暴露 provider-specific feed 参数。
-- [ ] 为 `ContainerService` 提供 lease/context adapter，确保释放幂等。
-- [ ] 所有外部异常转 `ProviderError(code, retryable, provider_id)`，禁止泄露 key。
-- [ ] healthcheck 不做写操作；规定 timeout，返回 ok/degraded/unavailable。
-- [ ] fake ports 放在 `benchmark.testing`，供第三方契约测试复用。
+- [x] 定义 LLM request/response/tool-call DTO，隔离 OpenAI SDK object。
+- [x] 所有 Provider port 对系统暴露同步方法；现有同步实现不套 async adapter。
+- [x] Provider 返回 coroutine/awaitable 视为接口违规。第三方内部使用异步时必须自行运行并同步返回，系统不管理 event loop。
+- [x] `LLMClient` adapter 保留 retry、Gemini/Grok tool-call normalization 和错误状态码映射。
+- [x] 为 Local/Chroma/Pinecone memory 提供同一 adapter；account namespace 行为保持。
+- [x] 为 Hyperliquid/Alpaca 定义 market adapter；不在 port 中暴露 provider-specific feed 参数。
+- [x] 为 `ContainerService` 提供 lease/context adapter，确保释放幂等。
+- [x] 所有外部异常转 `ProviderError(code, retryable, provider_id)`，禁止泄露 key。
+- [x] healthcheck 不做写操作；规定 timeout，返回 ok/degraded/unavailable。
+- [x] fake ports 放在 `benchmark.testing`，供第三方契约测试复用。
+
+实现说明和验证证据见 [M09-implementation-report.md](M09-implementation-report.md)。
 
 ## 验收
 
