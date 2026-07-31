@@ -6,7 +6,13 @@ from decimal import Decimal
 import pytest
 
 from benchmark.agents import AgentBuildContext
-from benchmark.contracts import AccountView, DecisionContext, PortfolioView
+from benchmark.contracts import (
+    AccountView,
+    DecisionContext,
+    PortfolioView,
+    ToolResult,
+)
+from benchmark.tools import ToolInvoker
 
 
 class RecordingEvents:
@@ -17,16 +23,36 @@ class RecordingEvents:
         self.events.append(event)
 
 
+class FakeToolInvoker:
+    def __init__(self):
+        self.calls = []
+
+    def call(self, name, arguments):
+        self.calls.append((name, arguments))
+        return ToolResult(
+            ok=False,
+            error_code="TOOL_NOT_CONFIGURED",
+            error_message="No Tool configured for this Agent runtime test",
+        )
+
+
 @pytest.fixture
 def event_sink():
     return RecordingEvents()
 
 
 @pytest.fixture
-def build_context(event_sink):
+def tool_invoker():
+    value = FakeToolInvoker()
+    assert isinstance(value, ToolInvoker)
+    return value
+
+
+@pytest.fixture
+def build_context(event_sink, tool_invoker):
     return AgentBuildContext(
         llm=object(),
-        tools=object(),
+        tools=tool_invoker,
         prompts=object(),
         events=event_sink,
     )
@@ -56,4 +82,3 @@ def decision_context():
         config={},
         started_at=now,
     )
-

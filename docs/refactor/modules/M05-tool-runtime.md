@@ -24,16 +24,18 @@ class ToolRegistry:
 
 ## TODO
 
-- [ ] 校验 tool 名称 namespace、JSON Schema draft、timeout 范围和 side effect/capability 一致性。
-- [ ] 重复名称一律失败；仅保留旧 provider 返回 `namespace:name` 的 suffix normalization adapter，并在 M06 删除。
-- [ ] Invoker 固定执行 pipeline：权限、input schema、timeout、invoke、output schema、redaction、event。
-- [ ] `ToolInvoker.call()` 与 `Tool.invoke()` 都是同步接口；一个工具返回后 Agent 才执行下一步骤。
-- [ ] 返回 coroutine/awaitable 的第三方 Tool 视为 `ToolRuntimeError`，系统不自动 await，也不提供 async Tool adapter。
-- [ ] `READ_ONLY` 且 `cacheable=True` 才可使用 tool cache；cache key 包含 round id、tool version、规范化参数。
-- [ ] Tool 返回业务失败用 `ToolResult`；schema/timeout/框架故障转换为稳定错误码。
-- [ ] trading.write 只授予 `core.execute_trade` adapter，外部 Tool 不得声明该 capability，除非系统管理员显式白名单。
-- [ ] active tool selection 作为 `ToolView` 过滤，不修改全局 registry。
-- [ ] 输出给 OpenAI 的 schema 由 runtime 生成，保证与 input schema 同源。
+- [x] 校验 tool 名称 namespace、JSON Schema draft、timeout 范围和 side effect/capability 一致性。
+- [x] 重复名称一律失败；仅保留旧 provider 返回 `namespace:name` 的 suffix normalization adapter，并在 M06 删除。
+- [x] Invoker 固定执行 pipeline：权限、input schema、timeout、invoke、output schema、redaction、event。
+- [x] `ToolInvoker.call()` 与 `Tool.invoke()` 都是同步接口；一个工具返回后 Agent 才执行下一步骤。
+- [x] 返回 coroutine/awaitable 的第三方 Tool 视为 `ToolRuntimeError`，系统不自动 await，也不提供 async Tool adapter。
+- [x] `READ_ONLY` 且 `cacheable=True` 才可使用 tool cache；cache key 包含 round id、tool version、规范化参数。
+- [x] Tool 返回业务失败用 `ToolResult`；schema/timeout/框架故障转换为稳定错误码。
+- [x] trading.write 只授予 `core.execute_trade` adapter，外部 Tool 不得声明该 capability，除非系统管理员显式白名单。
+- [x] active tool selection 作为 `ToolView` 过滤，不修改全局 registry。
+- [x] 输出给 OpenAI 的 schema 由 runtime 生成，保证与 input schema 同源。
+
+实现说明与验证结果见 [M05 实现报告](M05-implementation-report.md)。
 
 ## 验收
 

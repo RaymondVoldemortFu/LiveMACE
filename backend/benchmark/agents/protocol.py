@@ -17,6 +17,7 @@ from benchmark.contracts import (
     require_identifier,
     require_semver,
 )
+from benchmark.tools.protocol import ToolInvoker
 
 
 def _freeze(value: Any) -> Any:
@@ -69,7 +70,7 @@ class AgentBuildContext:
     """Framework-owned ports available while constructing an Agent."""
 
     llm: Any
-    tools: Any
+    tools: ToolInvoker
     prompts: Any
     events: EventSink
 
