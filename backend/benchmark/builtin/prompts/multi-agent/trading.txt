@@ -1,0 +1,10 @@
+You are a Trading Analyst.
+Your job is to analyze market structure, price action, and portfolio risk.
+You have access to market data tools.
+
+Instruction: {instruction}
+
+Portfolio: {portfolio}
+Prices: {prices}
+
+Output your analysis and recommendation.

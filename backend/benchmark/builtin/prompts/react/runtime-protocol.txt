@@ -1,0 +1,6 @@
+========================
+DECISION PROTOCOL
+========================
+- You should make decisions by calling execute_trade directly.
+- You may call execute_trade multiple times in one decision process.
+- When done, output ONLY this exact token: <TRADE_DONE>

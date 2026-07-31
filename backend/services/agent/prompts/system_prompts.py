@@ -1,6 +1,5 @@
 from config.agent_config import AgentConfig
 
-
 SIMULATION_NOTICE_BLOCK = """
 ========================
 SIMULATION ENVIRONMENT NOTICE
@@ -307,14 +306,19 @@ Common constraints:
 - For leverage, keep within [1, 10] and use leverage=1 for US market.
 """
 
-# TODO: memory prompts should be moved to a separate file, and load dynamically from the file system. 
+# TODO: memory prompts should be moved to a separate file, and load dynamically from the file system.
 # TODO: Trade tool should be included in basic tools and always available.
 
-def get_trade_agent_prompt(memory_enabled: bool = False, tool_routing_enabled: bool | None = None) -> str:
+
+def _get_trade_agent_prompt_legacy(
+    memory_enabled: bool = False, tool_routing_enabled: bool | None = None
+) -> str:
     """
     Get trading agent prompt with dynamic memory/protocol sections.
     """
-    include_simulation_notice = bool(getattr(AgentConfig, "AGENT_INCLUDE_SIMULATION_NOTICE", False))
+    include_simulation_notice = bool(
+        getattr(AgentConfig, "AGENT_INCLUDE_SIMULATION_NOTICE", False)
+    )
     enable_tool_routing = (
         bool(getattr(AgentConfig, "AGENT_ENABLE_TOOL_ROUTING", True))
         if tool_routing_enabled is None
@@ -322,12 +326,18 @@ def get_trade_agent_prompt(memory_enabled: bool = False, tool_routing_enabled: b
     )
 
     return TRADE_AGENT_PROMPT_TEMPLATE.format(
-        simulation_notice_block=(SIMULATION_NOTICE_BLOCK if include_simulation_notice else "").strip(),
+        simulation_notice_block=(
+            SIMULATION_NOTICE_BLOCK if include_simulation_notice else ""
+        ).strip(),
         tool_routing_block=(
-            TOOL_ROUTING_ENABLED_BLOCK if enable_tool_routing else TOOL_ROUTING_DISABLED_BLOCK
+            TOOL_ROUTING_ENABLED_BLOCK
+            if enable_tool_routing
+            else TOOL_ROUTING_DISABLED_BLOCK
         ).strip(),
         tool_selector_tool_hint=(
-            TOOL_SELECTOR_TOOL_HINT_BLOCK if enable_tool_routing else TOOL_SELECTOR_TOOL_DISABLED_HINT_BLOCK
+            TOOL_SELECTOR_TOOL_HINT_BLOCK
+            if enable_tool_routing
+            else TOOL_SELECTOR_TOOL_DISABLED_HINT_BLOCK
         ).strip(),
         available_tools_block=(
             ""
@@ -337,7 +347,9 @@ def get_trade_agent_prompt(memory_enabled: bool = False, tool_routing_enabled: b
             )
         ).strip(),
         workflow_core_block=(
-            TOOL_ROUTING_HIGH_LEVEL_WORKFLOW_BLOCK if enable_tool_routing else WORKFLOW_CORE_BLOCK
+            TOOL_ROUTING_HIGH_LEVEL_WORKFLOW_BLOCK
+            if enable_tool_routing
+            else WORKFLOW_CORE_BLOCK
         ).strip(),
         workflow_memory_block=(
             ""
@@ -345,8 +357,28 @@ def get_trade_agent_prompt(memory_enabled: bool = False, tool_routing_enabled: b
             else (WORKFLOW_MEMORY_BLOCK if memory_enabled else WORKFLOW_NO_MEMORY_BLOCK)
         ).strip(),
         memory_system_block=(MEMORY_SYSTEM_BLOCK if memory_enabled else "").strip(),
-        memory_checklist_block=(MEMORY_CHECKLIST_BLOCK if memory_enabled else "").strip(),
+        memory_checklist_block=(
+            MEMORY_CHECKLIST_BLOCK if memory_enabled else ""
+        ).strip(),
         runtime_protocol_block=RUNTIME_PROTOCOL_TOOL_BLOCK.strip(),
         final_output_block=FINAL_OUTPUT_TOOL_BLOCK.strip(),
     ).strip()
 
+
+def get_trade_agent_prompt(
+    memory_enabled: bool = False, tool_routing_enabled: bool | None = None
+) -> str:
+    from benchmark.builtin.prompts import render_react_prompt
+
+    enable_tool_routing = (
+        bool(getattr(AgentConfig, "AGENT_ENABLE_TOOL_ROUTING", True))
+        if tool_routing_enabled is None
+        else bool(tool_routing_enabled)
+    )
+    return render_react_prompt(
+        memory_enabled=bool(memory_enabled),
+        tool_routing_enabled=enable_tool_routing,
+        include_simulation_notice=bool(
+            getattr(AgentConfig, "AGENT_INCLUDE_SIMULATION_NOTICE", False)
+        ),
+    )

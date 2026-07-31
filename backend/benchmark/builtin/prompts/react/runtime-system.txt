@@ -1,0 +1,3 @@
+{system_prompt}
+
+Current Time (UTC+8): {current_time}

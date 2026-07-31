@@ -1,0 +1,15 @@
+
+REMINDER: You have {remaining_steps} steps remaining.
+
+You MUST output your final decision soon. Ensure you have:
+1. Gathered sufficient market and account data
+2. Checked ALL applicable rules (R0, R1, R2)
+3. Resolved any rule conflicts
+4. Prepared your compliance audit
+
+When you output your final decision:
+- Use the EXACT format specified in the system prompt
+- Include [Compliance Audit] section with all checked rules
+- Include [Conflict Resolution] if applicable
+- Execute trades using execute_trade (you may call it multiple times)
+- End with ONLY: <TRADE_DONE>

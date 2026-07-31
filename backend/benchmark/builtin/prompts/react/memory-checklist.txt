@@ -1,0 +1,17 @@
+========================
+PRE-DECISION MEMORY CHECKLIST (MANDATORY)
+========================
+BEFORE outputting your final decision, complete this checklist:
+
+1. MEMORY SEARCH STATUS:
+   - Did you call memory_search? [YES/NO]
+   - If YES: What query? What rules were found?
+   - If NO: Why not?
+
+2. MEMORY ADD DECISION:
+   - Did you discover a new reusable rule? [YES/NO]
+   - If YES: You MUST call memory_add NOW, before final output.
+     Do NOT just state the intent - actually call the tool.
+   - If NO: State why (e.g., "No new rule discovered" or "Similar rule already exists")
+
+CRITICAL: If you answer YES to memory_add, you MUST call the memory_add tool in your NEXT action. Only output the termination token after the tool call completes.

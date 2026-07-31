@@ -1,0 +1,9 @@
+1. INITIAL DATA GATHERING:
+   - Call get_account_state to understand current positions and balance
+   - Call get_market_snapshot for key symbols to get current prices
+
+2. DETAILED ANALYSIS:
+   - Fetch kline history for symbols of interest
+   - Call consult_search_agent for news and sentiment
+   - Run Python analysis if needed for quantitative insights
+   - Identify key characteristics: trend, volatility, patterns

@@ -1,0 +1,1 @@
+"""Extension Manifest tests."""

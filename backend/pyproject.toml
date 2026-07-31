@@ -30,6 +30,8 @@ dependencies = [
     "redis",
     "matplotlib>=3.10.8",
     "jsonschema>=4.0",
+    "packaging>=24.0",
+    "PyYAML>=6.0",
 ]
 
 [[tool.uv.index]]

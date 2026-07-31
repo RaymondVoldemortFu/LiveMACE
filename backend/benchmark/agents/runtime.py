@@ -10,7 +10,7 @@ from typing import Any
 from benchmark.contracts import (
     AgentRunResult,
     AgentRuntimeError,
-    AlphaArenaError,
+    BenchmarkError,
     ComponentConfigError,
     DecisionContext,
     TerminationReason,
@@ -116,7 +116,7 @@ class AgentRuntime:
             self._validate_result(result, context)
         except (KeyboardInterrupt, SystemExit, GeneratorExit):
             raise
-        except AlphaArenaError:
+        except BenchmarkError:
             self._emit("agent.failed", descriptor.id, descriptor.version, context)
             raise
         except Exception as exc:

@@ -3,6 +3,8 @@ Rule-Aware Agent Prompts
 Specialized prompts for rule-compliant trading
 """
 
+from benchmark.builtin.prompts import read_builtin_template
+
 RULE_AWARE_SYSTEM_PROMPT = r"""
 # Role: Expert Financial AI Trading Agent with Rule Compliance
 
@@ -194,3 +196,6 @@ When you output your final decision:
 - Execute trades using execute_trade (you may call it multiple times)
 - End with ONLY: <TRADE_DONE>
 """
+
+RULE_AWARE_SYSTEM_PROMPT = read_builtin_template("rule-aware/system.txt")
+RULE_AWARE_REMINDER_PROMPT = read_builtin_template("rule-aware/reminder.txt")

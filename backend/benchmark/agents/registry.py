@@ -8,6 +8,7 @@ from typing import Any
 import copy
 
 from jsonschema import Draft202012Validator, SchemaError, validators
+from benchmark.contracts import ValidationIssue, ValidationReport, semver_key
 
 from .errors import (
     AgentRegistryFrozenError,
@@ -19,9 +20,6 @@ from .protocol import (
     AgentDescriptor,
     AgentFactory,
     RegisteredAgent,
-    ValidationIssue,
-    ValidationReport,
-    _SEMVER_RE,
     _thaw,
 )
 
@@ -39,21 +37,6 @@ def _validator_with_defaults(schema: Mapping[str, Any]):
         yield from properties(validator, properties_schema, instance, full_schema)
 
     return validators.extend(base, {"properties": set_defaults})(schema)
-
-
-def _version_key(
-    version: str,
-) -> tuple[int, int, int, int, tuple[tuple[int, int | str], ...]]:
-    match = _SEMVER_RE.fullmatch(version)
-    if match is None:  # AgentDescriptor has already rejected this.
-        return (0, 0, 0, 0, ((1, version),))
-    major, minor, patch, prerelease = match.groups()
-    prerelease_key = tuple(
-        (0, int(item)) if item.isdigit() else (1, item)
-        for item in (prerelease or "").split(".")
-        if item
-    )
-    return (int(major), int(minor), int(patch), int(prerelease is None), prerelease_key)
 
 
 class AgentRegistry:
@@ -116,8 +99,14 @@ class AgentRegistry:
             if version is not None:
                 entry = self._entries.get((agent_id, version))
             else:
-                candidates = [entry for key, entry in self._entries.items() if key[0] == agent_id]
-                entry = max(candidates, key=lambda item: _version_key(item.descriptor.version), default=None)
+                candidates = [
+                    entry for key, entry in self._entries.items() if key[0] == agent_id
+                ]
+                entry = max(
+                    candidates,
+                    key=lambda item: semver_key(item.descriptor.version),
+                    default=None,
+                )
             if entry is None:
                 suffix = f"@{version}" if version else ""
                 raise ComponentNotFoundError(
@@ -130,7 +119,11 @@ class AgentRegistry:
     def list(self) -> tuple[AgentDescriptor, ...]:
         with self._lock:
             descriptors = (entry.descriptor for entry in self._entries.values())
-            return tuple(sorted(descriptors, key=lambda item: (item.id, _version_key(item.version))))
+            return tuple(
+                sorted(
+                    descriptors, key=lambda item: (item.id, semver_key(item.version))
+                )
+            )
 
     def validate_config(
         self,
@@ -152,7 +145,10 @@ class AgentRegistry:
             )
             for error in sorted(
                 validator.iter_errors(normalized),
-                key=lambda item: (tuple(str(part) for part in item.absolute_path), item.message),
+                key=lambda item: (
+                    tuple(str(part) for part in item.absolute_path),
+                    item.message,
+                ),
             )
         )
         return ValidationReport(not errors, errors=errors, normalized_config=normalized)

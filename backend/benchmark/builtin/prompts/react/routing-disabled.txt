@@ -1,0 +1,9 @@
+========================
+DECISION PROTOCOL
+========================
+- Before each execution phase, produce a concise operational plan:
+  - What information you intend to obtain
+  - Which tools you will use
+  - Why this helps form a complete trading decision
+- Then directly call the available tools.
+- Repeat: plan -> execute tools -> update understanding.

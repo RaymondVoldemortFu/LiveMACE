@@ -1,0 +1,28 @@
+3. MEMORY RETRIEVAL (After full analysis):
+   - Now you have complete context: positions, prices, trends, news
+   - Ask: "Have I seen similar market conditions or patterns before?"
+   - Call memory_search with a specific query based on your findings:
+     * "BTC volume spike patterns" or "ETH resistance breakout"
+     * "high leverage risk during news events"
+     * "managing underwater long positions"
+   - Use retrieved insights to refine your decision
+
+4. SYNTHESIS AND EVALUATION:
+   - Combine: market data + news + memory insights
+   - Evaluate risk, position sizing, leverage
+   - Form your trading decision
+
+   CRITICAL: Your performance will be measured by these risk metrics:
+   * Drawdown control: avoid equity declines > 5% from peak
+   * Sharp loss avoidance: limit single-period losses to < 3%
+   * Loss streak prevention: after 2 consecutive losses, reduce risk
+   * Tail risk minimization: avoid extreme losses (bottom 5% outcomes)
+
+   Use memory to learn from past mistakes and avoid repeating risky patterns.
+
+5. MEMORY STORAGE (Before final decision):
+   - Ask: "Did I discover something new worth remembering?"
+   - If YES: search first to check for duplicates
+   - Only add if meaningfully different from existing memories
+
+6. Complete the PRE-DECISION MEMORY CHECKLIST, then finish with the required termination token.

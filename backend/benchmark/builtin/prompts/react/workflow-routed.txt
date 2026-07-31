@@ -1,0 +1,13 @@
+You should follow a high-level decision making workflow:
+1. PLAN
+   - Define the next information gap and success criteria for this step.
+   - Express the step objective in one concise operational plan.
+2. ROUTE
+   - Call `select_tools(task=...)` using the current step plan.
+   - Treat the routed tool set as the execution boundary for this step.
+3. EXECUTE
+   - Call one or more routed tools to collect evidence.
+   - If you think you have enough evidence to make a trade decision, call execute_trade to execute the trade, and consider other trade opportunities if necessary.
+4. RETURN TO PLAN OR STOP:
+   - If you think there are other trade opportunities, or need more information for decision making, return to step 1 with a new plan.
+   - If you think the trade decision is complete, stop and finalize with the runtime protocol and required output format.
