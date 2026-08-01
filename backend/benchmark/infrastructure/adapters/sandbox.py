@@ -29,9 +29,10 @@ class ContainerServiceSandboxAdapter(SandboxPort):
         self._lock = RLock()
 
     def lease(self, account_id: int) -> SandboxLease:
+        lease_id = f"sandbox-lease-{uuid4().hex}"
         try:
             container_id = require_sync_result(
-                self._container_service.lease_container(account_id),
+                self._container_service.lease_container(account_id, lease_id),
                 provider_id=self.id,
                 operation="lease",
             )
@@ -51,7 +52,7 @@ class ContainerServiceSandboxAdapter(SandboxPort):
         return SandboxLease(
             account_id=account_id,
             container_id=str(container_id),
-            metadata={"lease_id": f"sandbox-lease-{uuid4().hex}"},
+            metadata={"lease_id": lease_id},
         )
 
     def release(self, lease: SandboxLease) -> None:
@@ -76,7 +77,7 @@ class ContainerServiceSandboxAdapter(SandboxPort):
                 )
             try:
                 require_sync_result(
-                    release(lease.account_id),
+                    release(lease.account_id, lease_id),
                     provider_id=self.id,
                     operation="release",
                 )

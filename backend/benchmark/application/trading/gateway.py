@@ -158,6 +158,14 @@ class SynchronousTradeCommandGateway:
         try:
             with self.uow_factory() as uow:
                 session = _session_from_uow(uow)
+                account = uow.accounts.get_for_update(command.account_id)
+                if account is None:
+                    uow.rollback()
+                    return OrderCommandResult(
+                        False,
+                        reject_code="ACCOUNT_NOT_FOUND",
+                        reject_message=f"Account {command.account_id} not found",
+                    )
                 order = uow.orders.get_by_no_for_update(command.order_no)
                 if order is None or order.account_id != command.account_id:
                     uow.rollback()
@@ -196,28 +204,50 @@ class SynchronousTradeCommandGateway:
         if not isinstance(command, ProcessPendingOrders):
             raise TypeError("command must be ProcessPendingOrders")
         try:
-            with self.uow_factory() as uow:
-                session = _session_from_uow(uow)
-                pending = tuple(uow.orders.list_pending_for_update(command.account_id))
-                from services.order_matching import check_and_execute_order
+            if command.account_id is not None:
+                return self._process_pending_for_account(command.account_id)
 
-                executed = 0
-                for order in pending:
-                    if check_and_execute_order(
-                        session,
-                        order,
-                        manage_transaction=False,
-                        raise_on_error=True,
-                    ):
-                        executed += 1
-                uow.commit()
-                return ProcessingResult(processed=len(pending), executed=executed)
+            # Discover only account ids in this short read transaction. Each
+            # account is then processed in its own account-first transaction,
+            # preventing a global batch from holding unrelated account locks.
+            with self.uow_factory() as uow:
+                account_ids = tuple(uow.orders.list_pending_account_ids())
+                uow.rollback()
+            processed = 0
+            executed = 0
+            for account_id in account_ids:
+                result = self._process_pending_for_account(account_id)
+                processed += result.processed
+                executed += result.executed
+            return ProcessingResult(processed=processed, executed=executed)
         except (KeyboardInterrupt, SystemExit, GeneratorExit):
             raise
         except TradeGatewayError:
             raise
         except Exception as exc:
             raise _unexpected_gateway_error("process_pending", exc) from exc
+
+    def _process_pending_for_account(self, account_id: int) -> ProcessingResult:
+        with self.uow_factory() as uow:
+            session = _session_from_uow(uow)
+            account = uow.accounts.get_for_update(account_id)
+            if account is None:
+                uow.rollback()
+                return ProcessingResult(processed=0, executed=0)
+            pending = tuple(uow.orders.list_pending_for_update(account_id))
+            from services.order_matching import check_and_execute_order
+
+            executed = 0
+            for order in pending:
+                if check_and_execute_order(
+                    session,
+                    order,
+                    manage_transaction=False,
+                    raise_on_error=True,
+                ):
+                    executed += 1
+            uow.commit()
+            return ProcessingResult(processed=len(pending), executed=executed)
 
     def _execute_durable(self, command: TradeCommand) -> TradeCommandResult:
         command_json = _encode_command(command)

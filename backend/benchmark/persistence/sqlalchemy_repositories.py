@@ -151,7 +151,19 @@ class SqlAlchemyOrderRepository:
         query = self._session.query(Order).filter(Order.status == "PENDING")
         if account_id is not None:
             query = query.filter(Order.account_id == account_id)
-        return query.with_for_update().all()
+        return query.order_by(Order.id.asc()).with_for_update().all()
+
+    def list_pending_account_ids(self) -> List[int]:
+        from database.models import Order
+
+        rows = (
+            self._session.query(Order.account_id)
+            .filter(Order.status == "PENDING")
+            .distinct()
+            .order_by(Order.account_id.asc())
+            .all()
+        )
+        return [int(row[0]) for row in rows]
 
 
 class SqlAlchemyTradeRepository:

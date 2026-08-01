@@ -9,9 +9,6 @@ from typing import Mapping, Protocol, runtime_checkable
 from benchmark.contracts import JsonValue, to_jsonable
 from benchmark.contracts.common import _freeze_mapping, _require_non_empty
 
-from .health import HealthStatus
-
-
 @dataclass(frozen=True)
 class LLMToolCall:
     id: str
@@ -96,13 +93,7 @@ class LLMResponse:
 
 @runtime_checkable
 class LLMClientPort(Protocol):
-    id: str
-    version: str
-    capabilities: tuple[str, ...]
-    config_schema: Mapping[str, JsonValue]
-
     def complete(self, request: LLMRequest) -> LLMResponse: ...
-    def healthcheck(self) -> HealthStatus: ...
 
 
 __all__ = ["LLMClientPort", "LLMRequest", "LLMResponse", "LLMToolCall"]

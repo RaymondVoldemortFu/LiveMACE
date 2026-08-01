@@ -130,6 +130,22 @@ def test_uow_rejects_cross_thread_use(session_factory):
     assert errors and "thread" in errors[0]
 
 
+def test_repository_cannot_bypass_uow_cross_thread_guard(session_factory):
+    errors = []
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        def query_from_other_thread():
+            try:
+                uow.accounts.list_active_ai_accounts()
+            except RuntimeError as exc:
+                errors.append(str(exc))
+
+        thread = threading.Thread(target=query_from_other_thread)
+        thread.start()
+        thread.join()
+
+    assert errors and "thread" in errors[0]
+
+
 def test_uow_rejects_non_sync_session(session_factory):
     uow = SqlAlchemyUnitOfWork(lambda: object())
     with pytest.raises(TypeError, match="synchronous"):

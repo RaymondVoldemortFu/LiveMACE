@@ -173,6 +173,26 @@ def test_non_finite_sizing_is_rejected_before_executor(session_factory, value):
         assert session.query(Position).count() == 0
 
 
+@pytest.mark.parametrize("field", ["quantity", "price"])
+@pytest.mark.parametrize("value", ["NaN", "Infinity", "-Infinity"])
+def test_internal_order_command_rejects_non_finite_values(field, value):
+    kwargs = {
+        "account_id": 1,
+        "symbol": "BTC",
+        "market": Market.CRYPTO,
+        "side": "BUY",
+        "order_type": "LIMIT",
+        "quantity": Decimal("1"),
+        "price": Decimal("100"),
+    }
+    kwargs[field] = Decimal(value)
+
+    with pytest.raises(TradeGatewayError) as caught:
+        CreateOrderCommand(**kwargs)
+
+    assert caught.value.code == "SIZING_VALUE_INVALID"
+
+
 def test_unexpected_failure_rolls_back_and_is_not_recorded(session_factory):
     def executor(session, command):
         session.query(Account).filter(Account.id == 1).one().current_cash = 1
@@ -341,6 +361,70 @@ def test_internal_create_cancel_and_pending_commands_share_uow(
     assert cancelled.accepted is True
     with session_factory() as session:
         assert session.query(Order).filter(Order.id == second.order_id).one().status == "CANCELLED"
+
+
+def test_cancel_and_pending_use_account_first_lock_order(session_factory, monkeypatch):
+    from benchmark.persistence.sqlalchemy_repositories import (
+        SqlAlchemyAccountRepository,
+        SqlAlchemyOrderRepository,
+    )
+    from services import order_matching
+
+    monkeypatch.setattr(order_matching, "get_last_price", lambda *args: 100.0)
+    gateway = _gateway(session_factory)
+    created = gateway.create_order(
+        CreateOrderCommand(
+            account_id=1,
+            symbol="BTC",
+            market=Market.CRYPTO,
+            side="BUY",
+            order_type="LIMIT",
+            quantity=Decimal("1"),
+            price=Decimal("90"),
+        )
+    )
+    with session_factory() as session:
+        order_no = session.query(Order).filter(Order.id == created.order_id).one().order_no
+
+    events = []
+    original_account_lock = SqlAlchemyAccountRepository.get_for_update
+    original_order_lock = SqlAlchemyOrderRepository.get_by_no_for_update
+    original_pending_lock = SqlAlchemyOrderRepository.list_pending_for_update
+
+    def account_lock(self, account_id):
+        events.append("account")
+        return original_account_lock(self, account_id)
+
+    def order_lock(self, value):
+        events.append("order")
+        return original_order_lock(self, value)
+
+    def pending_lock(self, account_id=None):
+        events.append("orders")
+        return original_pending_lock(self, account_id)
+
+    monkeypatch.setattr(SqlAlchemyAccountRepository, "get_for_update", account_lock)
+    monkeypatch.setattr(SqlAlchemyOrderRepository, "get_by_no_for_update", order_lock)
+    monkeypatch.setattr(SqlAlchemyOrderRepository, "list_pending_for_update", pending_lock)
+
+    gateway.cancel_order(CancelOrderCommand(1, order_no, "test"))
+    assert events[:2] == ["account", "order"]
+
+    second = gateway.create_order(
+        CreateOrderCommand(
+            account_id=1,
+            symbol="BTC",
+            market=Market.CRYPTO,
+            side="BUY",
+            order_type="LIMIT",
+            quantity=Decimal("1"),
+            price=Decimal("90"),
+        )
+    )
+    assert second.accepted is True
+    events.clear()
+    gateway.process_pending(ProcessPendingOrders(account_id=1))
+    assert events[:2] == ["account", "orders"]
 
 
 def test_order_provider_failure_is_rejected_without_leaking_details(

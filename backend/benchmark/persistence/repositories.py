@@ -82,6 +82,8 @@ class OrderRepository(Protocol):
 
     def list_pending_for_update(self, account_id: Optional[int] = None) -> List["Order"]: ...
 
+    def list_pending_account_ids(self) -> List[int]: ...
+
 
 @runtime_checkable
 class TradeRepository(Protocol):

@@ -24,6 +24,21 @@ from benchmark.providers.runtime import (
 from services.time_source import now_utc
 
 
+_MARKET_STATUS_METADATA_FIELDS = frozenset(
+    {
+        "market_status",
+        "symbol",
+        "exchange",
+        "market_type",
+        "timestamp",
+        "current_time",
+        "base_currency",
+        "quote_currency",
+        "active",
+    }
+)
+
+
 class _FunctionMarketDataAdapter(MarketDataPort):
     id = "core.market.function"
     version = "1.0.0"
@@ -142,6 +157,14 @@ class _FunctionMarketDataAdapter(MarketDataPort):
                 provider_id=self.id,
                 details={"operation": "get_market_status"},
             )
+        if raw.get("error") is not None or raw.get("market_status") == "ERROR":
+            raise ProviderError(
+                "Market provider operation failed: get_market_status",
+                code="PROVIDER_OPERATION_FAILED",
+                retryable=True,
+                provider_id=self.id,
+                details={"operation": "get_market_status"},
+            )
         reason = raw.get("reason") or raw.get("message")
         if reason is not None and not isinstance(reason, str):
             raise ProviderError(
@@ -153,7 +176,7 @@ class _FunctionMarketDataAdapter(MarketDataPort):
         metadata = {
             str(key): value
             for key, value in raw.items()
-            if key not in {"is_trading", "reason", "message"}
+            if key in _MARKET_STATUS_METADATA_FIELDS
         }
         return MarketStatusResult(
             is_trading=raw["is_trading"],

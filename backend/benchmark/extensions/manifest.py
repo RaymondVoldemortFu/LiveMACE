@@ -22,7 +22,7 @@ from benchmark.contracts import (
     to_jsonable,
 )
 
-MANIFEST_FILENAME = "benchmark-extension.yaml"
+MANIFEST_FILENAME = "alpha-arena-extension.yaml"
 _SCHEMA_PATH = Path(__file__).with_name("schema") / "manifest-v1.json"
 _ENTRYPOINT_RE = re.compile(
     r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*:"
@@ -43,6 +43,7 @@ def _entrypoint(value: str, field_name: str) -> None:
 @dataclass(frozen=True)
 class PythonRequirement:
     requires: str
+    entrypoint: str
 
     def __post_init__(self) -> None:
         _non_empty(self.requires, "python.requires")
@@ -52,6 +53,7 @@ class PythonRequirement:
             raise ValueError(
                 "python.requires must be a valid version specifier"
             ) from exc
+        _entrypoint(self.entrypoint, "python.entrypoint")
 
 
 @dataclass(frozen=True)
@@ -153,7 +155,11 @@ def _build_manifest(raw: Mapping[str, Any]) -> ExtensionManifest:
         name=raw["name"],
         description=raw.get("description", ""),
         python=(
-            PythonRequirement(raw["python"]["requires"]) if "python" in raw else None
+            PythonRequirement(
+                raw["python"]["requires"], raw["python"]["entrypoint"]
+            )
+            if "python" in raw
+            else None
         ),
         components=ExtensionComponents(
             agents=tuple(

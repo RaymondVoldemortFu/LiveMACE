@@ -50,6 +50,26 @@ def test_prompt_only_extension_does_not_require_python(tmp_path):
     assert report.valid is True
 
 
+def test_python_manifest_requires_canonical_entrypoint(tmp_path):
+    (tmp_path / MANIFEST_FILENAME).write_text(
+        "api_version: 1\n"
+        "id: com.example.extension\n"
+        "version: 1.0.0\n"
+        "name: Example\n"
+        "python:\n"
+        '  requires: ">=3.10"\n'
+        "components:\n"
+        "  tools:\n"
+        "    - provider: fake_module:create_provider\n",
+        encoding="utf-8",
+    )
+
+    report = validate_extension_directory(tmp_path)
+
+    assert report.valid is False
+    assert any(issue.path == "python" for issue in report.errors)
+
+
 @pytest.mark.parametrize(
     ("overrides", "validator"),
     [
@@ -77,6 +97,7 @@ def test_semantic_validation_aggregates_duplicate_ids_and_missing_schemas(tmp_pa
         "name: Example\n"
         "python:\n"
         '  requires: ">=3.10"\n'
+        "  entrypoint: fake_module:extension\n"
         "components:\n"
         "  agents:\n"
         "    - id: com.example.agent\n"
@@ -105,6 +126,7 @@ def test_config_schema_cannot_escape_extension_root(tmp_path):
         "name: Example\n"
         "python:\n"
         '  requires: ">=3.10"\n'
+        "  entrypoint: fake_module:extension\n"
         "components:\n"
         "  agents:\n"
         "    - id: com.example.agent\n"
@@ -134,6 +156,7 @@ def test_static_validation_does_not_import_declared_factory(tmp_path):
         "name: Example\n"
         "python:\n"
         '  requires: ">=3.10"\n'
+        "  entrypoint: side_effect_module:extension\n"
         "components:\n"
         "  agents:\n"
         "    - id: com.example.agent\n"
@@ -170,6 +193,7 @@ def test_invalid_config_schema_is_reported(tmp_path):
         "name: Example\n"
         "python:\n"
         '  requires: ">=3.10"\n'
+        "  entrypoint: fake_module:extension\n"
         "components:\n"
         "  agents:\n"
         "    - id: com.example.agent\n"

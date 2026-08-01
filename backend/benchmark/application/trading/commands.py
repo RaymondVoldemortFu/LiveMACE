@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from benchmark.contracts import Market
+from benchmark.contracts.errors import TradeGatewayError
 
 
 @dataclass(frozen=True)
@@ -30,16 +31,34 @@ class CreateOrderCommand:
             raise ValueError("order side must be BUY or SELL")
         if self.order_type not in {"MARKET", "LIMIT"}:
             raise ValueError("unsupported order type")
-        if not isinstance(self.quantity, Decimal) or self.quantity <= 0:
-            raise ValueError("quantity must be a positive Decimal")
+        if not isinstance(self.quantity, Decimal) or not self.quantity.is_finite():
+            raise TradeGatewayError(
+                "quantity must be a finite Decimal",
+                code="SIZING_VALUE_INVALID",
+            )
+        if self.quantity <= 0:
+            raise TradeGatewayError(
+                "quantity must be positive",
+                code="SIZING_VALUE_INVALID",
+            )
         if self.order_type == "LIMIT" and (
-            not isinstance(self.price, Decimal) or self.price <= 0
+            not isinstance(self.price, Decimal)
+            or not self.price.is_finite()
+            or self.price <= 0
         ):
-            raise ValueError("LIMIT order requires a positive Decimal price")
+            raise TradeGatewayError(
+                "LIMIT order requires a finite positive Decimal price",
+                code="SIZING_VALUE_INVALID",
+            )
         if self.price is not None and (
-            not isinstance(self.price, Decimal) or self.price <= 0
+            not isinstance(self.price, Decimal)
+            or not self.price.is_finite()
+            or self.price <= 0
         ):
-            raise ValueError("price must be a positive Decimal or None")
+            raise TradeGatewayError(
+                "price must be a finite positive Decimal or None",
+                code="SIZING_VALUE_INVALID",
+            )
         if not isinstance(self.leverage, int) or not 1 <= self.leverage <= 10:
             raise ValueError("leverage must be an integer between 1 and 10")
         if self.market is Market.US and self.leverage != 1:

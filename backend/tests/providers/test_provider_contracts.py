@@ -153,7 +153,7 @@ def test_adapters_reject_awaitables(operation):
     else:
         service = SimpleNamespace(
             lease_container=async_value,
-            release_container=lambda account_id: None,
+            release_container=lambda account_id, lease_id: None,
         )
         def invoke():
             return ContainerServiceSandboxAdapter(service).lease(1)
@@ -238,6 +238,46 @@ def test_market_healthcheck_probes_status_loader():
     assert broken.healthcheck().status == "unavailable"
 
 
+def test_market_status_provider_error_is_not_reported_as_closed_or_leaked():
+    adapter = _FunctionMarketDataAdapter(
+        provider_id="fake.market.status-error",
+        price_loader=lambda symbol: 1,
+        kline_loader=lambda *args: [],
+        status_loader=lambda symbol: {
+            "market_status": "ERROR",
+            "is_trading": False,
+            "error": "api_key=super-secret",
+        },
+        supported_market=Market.US,
+    )
+
+    with pytest.raises(ProviderError) as caught:
+        adapter.get_market_status("AAPL", Market.US)
+
+    assert caught.value.code == "PROVIDER_OPERATION_FAILED"
+    assert "super-secret" not in str(caught.value)
+    assert "super-secret" not in repr(caught.value.details)
+
+
+def test_market_status_metadata_uses_an_explicit_allowlist():
+    adapter = _FunctionMarketDataAdapter(
+        provider_id="fake.market.status",
+        price_loader=lambda symbol: 1,
+        kline_loader=lambda *args: [],
+        status_loader=lambda symbol: {
+            "market_status": "OPEN",
+            "is_trading": True,
+            "symbol": symbol,
+            "access_token": "must-not-pass",
+        },
+        supported_market=Market.US,
+    )
+
+    result = adapter.get_market_status("AAPL", Market.US)
+
+    assert result.metadata == {"market_status": "OPEN", "symbol": "AAPL"}
+
+
 def test_memory_and_sandbox_healthchecks_do_not_report_unprobed_ok():
     memory = LegacyMemoryStoreAdapter(
         SimpleNamespace(
@@ -249,8 +289,8 @@ def test_memory_and_sandbox_healthchecks_do_not_report_unprobed_ok():
     sandbox = ContainerServiceSandboxAdapter(
         SimpleNamespace(
             client=None,
-            lease_container=lambda account_id: "container",
-            release_container=lambda account_id: None,
+            lease_container=lambda account_id, lease_id: "container",
+            release_container=lambda account_id, lease_id: None,
         )
     )
 
@@ -336,8 +376,8 @@ def test_memory_adapter_preserves_account_market_namespace_and_rejects_bad_rows(
 def test_sandbox_managed_lease_releases_once_even_on_error():
     released = []
     service = SimpleNamespace(
-        lease_container=lambda account_id: f"container-{account_id}",
-        release_container=lambda account_id: released.append(account_id),
+        lease_container=lambda account_id, lease_id: f"container-{account_id}",
+        release_container=lambda account_id, lease_id: released.append((account_id, lease_id)),
     )
     adapter = ContainerServiceSandboxAdapter(service)
     with pytest.raises(RuntimeError, match="boom"):
@@ -345,14 +385,14 @@ def test_sandbox_managed_lease_releases_once_even_on_error():
             assert lease.container_id == "container-9"
             raise RuntimeError("boom")
     adapter.release(lease)
-    assert released == [9]
+    assert released == [(9, lease.metadata["lease_id"])]
 
 
 def test_sandbox_reused_container_has_a_new_releasable_lease_identity():
     released = []
     service = SimpleNamespace(
-        lease_container=lambda account_id: "reused-container",
-        release_container=lambda account_id: released.append(account_id),
+        lease_container=lambda account_id, lease_id: "reused-container",
+        release_container=lambda account_id, lease_id: released.append((account_id, lease_id)),
     )
     adapter = ContainerServiceSandboxAdapter(service)
 
@@ -365,7 +405,10 @@ def test_sandbox_reused_container_has_a_new_releasable_lease_identity():
 
     assert first.container_id == second.container_id
     assert first.metadata["lease_id"] != second.metadata["lease_id"]
-    assert released == [9, 9]
+    assert released == [
+        (9, first.metadata["lease_id"]),
+        (9, second.metadata["lease_id"]),
+    ]
 
 
 def test_reusable_fakes_implement_every_public_port():

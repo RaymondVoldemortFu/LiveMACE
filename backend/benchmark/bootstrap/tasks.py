@@ -238,6 +238,11 @@ def default_task_descriptors() -> List[TaskDescriptor]:
 
         reset_auto_trading_job()
 
+    def _auto_trading_stop() -> None:
+        from services.scheduler import stop_auto_trading_jobs
+
+        stop_auto_trading_jobs()
+
     def _price_cache_cleanup() -> None:
         from services.price_cache import clear_expired_prices
         from services.scheduler import task_scheduler
@@ -279,7 +284,7 @@ def default_task_descriptors() -> List[TaskDescriptor]:
         TaskDescriptor("market_tasks", _market_tasks, required=True,
                        dependencies=("scheduler",)),
         TaskDescriptor("asset_curve_backfill_1h", _asset_curve_backfill, required=False),
-        TaskDescriptor("ai_auto_trading", _auto_trading, required=True,
+        TaskDescriptor("ai_auto_trading", _auto_trading, _auto_trading_stop, required=True,
                        dependencies=("scheduler", "market_tasks")),
         TaskDescriptor("price_cache_cleanup", _price_cache_cleanup, required=False,
                        dependencies=("scheduler",)),

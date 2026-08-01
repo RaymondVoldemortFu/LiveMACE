@@ -39,6 +39,10 @@ class ContainerService:
 
         # account_id -> container_object (leased)
         self.active_containers: Dict[int, docker.models.containers.Container] = {}
+        # Every adapter lease has an identity. A container may be shared by
+        # overlapping leases from the same account, but it is returned to the
+        # idle pool only after the final lease is released.
+        self._active_lease_ids: Dict[int, set[str]] = {}
         # idle pooled containers
         self.idle_containers: List[docker.models.containers.Container] = []
         # initialized pool marker
@@ -277,7 +281,9 @@ class ContainerService:
         self._pool_initialized = True
         logger.info(f"Container pool initialized with {len(self.idle_containers)} idle containers")
 
-    def lease_container(self, account_id: int) -> Optional[str]:
+    def lease_container(
+        self, account_id: int, lease_id: Optional[str] = None
+    ) -> Optional[str]:
         """
         Lease a container from the pool for a specific account.
         Returns container ID.
@@ -287,11 +293,15 @@ class ContainerService:
             return None
 
         with self._condition:
+            effective_lease_id = lease_id or "legacy-exclusive-lease"
             self._initialize_pool_if_needed()
             self._sync_pool_size()
 
             existing = self.active_containers.get(account_id)
             if existing and self._is_container_healthy(existing):
+                self._active_lease_ids.setdefault(account_id, set()).add(
+                    effective_lease_id
+                )
                 return existing.id
             if existing:
                 self._remove_container_quietly(existing)
@@ -309,6 +319,9 @@ class ContainerService:
                     candidate = self.idle_containers.pop()
                     if self._is_container_healthy(candidate):
                         self.active_containers[account_id] = candidate
+                        self._active_lease_ids.setdefault(account_id, set()).add(
+                            effective_lease_id
+                        )
                         logger.info(
                             f"Leased pooled container {candidate.id[:12]} to account {account_id}"
                         )
@@ -321,6 +334,9 @@ class ContainerService:
                     try:
                         new_container = self._create_container()
                         self.active_containers[account_id] = new_container
+                        self._active_lease_ids.setdefault(account_id, set()).add(
+                            effective_lease_id
+                        )
                         logger.info(
                             f"Leased new container {new_container.id[:12]} to account {account_id}"
                         )
@@ -334,12 +350,24 @@ class ContainerService:
                     return None
                 self._condition.wait(timeout=min(remaining, 1.0))
 
-    def release_container(self, account_id: int):
+    def release_container(self, account_id: int, lease_id: Optional[str] = None):
         """
         Return leased container to idle pool.
         Unhealthy containers are removed.
         """
         with self._condition:
+            effective_lease_id = lease_id or "legacy-exclusive-lease"
+            active_lease_ids = self._active_lease_ids.get(account_id)
+            if not active_lease_ids or effective_lease_id not in active_lease_ids:
+                if lease_id is not None:
+                    raise ValueError(
+                        f"Unknown sandbox lease {lease_id!r} for account {account_id}"
+                    )
+                return
+            active_lease_ids.remove(effective_lease_id)
+            if active_lease_ids:
+                return
+            self._active_lease_ids.pop(account_id, None)
             container = self.active_containers.pop(account_id, None)
             if not container:
                 return
@@ -359,6 +387,7 @@ class ContainerService:
 
     def _get_or_recover_container(self, account_id: int):
         with self._condition:
+            had_existing_lease = bool(self._active_lease_ids.get(account_id))
             container = self.active_containers.get(account_id)
             if container and self._is_container_healthy(container):
                 return container
@@ -370,10 +399,18 @@ class ContainerService:
 
             # Try to recover by leasing a fresh one transparently
             self.active_containers.pop(account_id, None)
-        leased_id = self.lease_container(account_id)
+        recovery_lease_id = (
+            f"internal-recovery-{time.monotonic_ns()}"
+            if had_existing_lease
+            else "legacy-exclusive-lease"
+        )
+        leased_id = self.lease_container(account_id, recovery_lease_id)
         if not leased_id:
             return None
         with self._condition:
+            lease_ids = self._active_lease_ids.get(account_id)
+            if had_existing_lease and lease_ids is not None:
+                lease_ids.discard(recovery_lease_id)
             return self.active_containers.get(account_id)
 
     def execute_command(self, account_id: int, cmd: str) -> Tuple[int, str]:
@@ -490,6 +527,7 @@ class ContainerService:
                 except Exception as e:
                     logger.error(f"Failed to remove active container for account {account_id}: {e}")
             self.active_containers.clear()
+            self._active_lease_ids.clear()
 
             for container in list(self.idle_containers):
                 try:
@@ -514,4 +552,3 @@ class ContainerService:
             self._condition.notify_all()
 
         logger.info("ContainerService shutdown complete.")
-

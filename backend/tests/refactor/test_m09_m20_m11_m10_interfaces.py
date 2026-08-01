@@ -400,12 +400,12 @@ def test_m09_sandbox_adapter_uses_lease_container():
             self.leased = []
             self.released = []
 
-        def lease_container(self, account_id):
-            self.leased.append(account_id)
+        def lease_container(self, account_id, lease_id):
+            self.leased.append((account_id, lease_id))
             return "container-1"
 
-        def release_container(self, account_id):
-            self.released.append(account_id)
+        def release_container(self, account_id, lease_id):
+            self.released.append((account_id, lease_id))
 
     service = FakeContainerService()
     adapter = ContainerServiceSandboxAdapter(service)
@@ -414,8 +414,8 @@ def test_m09_sandbox_adapter_uses_lease_container():
     adapter.release(lease)
 
     assert lease.container_id == "container-1"
-    assert service.leased == [7]
-    assert service.released == [7]
+    assert service.leased == [(7, lease.metadata["lease_id"])]
+    assert service.released == [(7, lease.metadata["lease_id"])]
 
 
 def test_m09_sandbox_adapter_rejects_missing_container_id():
@@ -423,7 +423,7 @@ def test_m09_sandbox_adapter_rejects_missing_container_id():
     from benchmark.providers.errors import ProviderError
 
     class FakeContainerService:
-        def lease_container(self, account_id):
+        def lease_container(self, account_id, lease_id):
             return None
 
     with pytest.raises(ProviderError, match="failed to lease sandbox container"):

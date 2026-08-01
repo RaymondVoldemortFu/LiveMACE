@@ -199,6 +199,23 @@ def test_default_task_table_matches_startup_contract():
     # Catalog must load after Redis and before the scheduler starts jobs.
     order = list(descriptors)
     assert order.index("redis_tool_cache") < order.index("extension_catalog") < order.index("scheduler")
+    assert descriptors["ai_auto_trading"].stop is not None
+
+
+def test_auto_trading_setup_failure_propagates_instead_of_becoming_running(
+    monkeypatch,
+):
+    from services import scheduler
+
+    monkeypatch.setenv("AI_TRADE_FIRST_EXECUTION_TIME", "2026-08-02T08:00:00+08:00")
+    monkeypatch.setattr(
+        scheduler,
+        "_ensure_market_data_ready",
+        lambda: (_ for _ in ()).throw(RuntimeError("market unavailable")),
+    )
+
+    with pytest.raises(RuntimeError, match="market unavailable"):
+        scheduler.reset_auto_trading_job()
 
 
 @pytest.mark.slow
@@ -213,8 +230,8 @@ def test_app_import_and_no_background_acceptance(tmp_path):
 import os, sys
 sys.path.insert(0, r'{BACKEND_DIR}')
 os.environ['DATABASE_URL'] = 'sqlite:///{db_path}'
-os.environ.setdefault('ALPACA_KEY', 'dummy')
-os.environ.setdefault('ALPACA_SECRET', 'dummy')
+os.environ.pop('ALPACA_KEY', None)
+os.environ.pop('ALPACA_SECRET', None)
 
 import main
 from services.scheduler import task_scheduler

@@ -36,6 +36,11 @@ def run_schema_bootstrap(engine: Optional[Engine] = None) -> SchemaReport:
     if engine is default_engine:
         ensure_database_exists(DATABASE_URL)
 
+    # Importing the declarative Base alone does not register model tables.
+    # Schema bootstrap owns this ordering explicitly so a clean process does
+    # not depend on an unrelated route or service importing database.models.
+    import database.models  # noqa: F401
+
     Base.metadata.create_all(bind=engine)
     report.tables_created = True
     logger.info("schema bootstrap: tables ensured")

@@ -110,16 +110,17 @@ class SqlAlchemyUnitOfWork:
             SqlAlchemyUserRepository,
         )
 
-        self.accounts = SqlAlchemyAccountRepository(session)
-        self.positions = SqlAlchemyPositionRepository(session)
-        self.orders = SqlAlchemyOrderRepository(session)
-        self.trades = SqlAlchemyTradeRepository(session)
-        self.trade_command_receipts = SqlAlchemyTradeCommandReceiptRepository(session)
-        self.decisions = SqlAlchemyDecisionRepository(session)
-        self.traces = SqlAlchemyTraceRepository(session)
-        self.snapshots = SqlAlchemySnapshotRepository(session)
-        self.evaluations = SqlAlchemyEvaluationRepository(session)
-        self.users = SqlAlchemyUserRepository(session)
+        guarded_session = _GuardedSessionAccess(self._active_session)
+        self.accounts = SqlAlchemyAccountRepository(guarded_session)
+        self.positions = SqlAlchemyPositionRepository(guarded_session)
+        self.orders = SqlAlchemyOrderRepository(guarded_session)
+        self.trades = SqlAlchemyTradeRepository(guarded_session)
+        self.trade_command_receipts = SqlAlchemyTradeCommandReceiptRepository(guarded_session)
+        self.decisions = SqlAlchemyDecisionRepository(guarded_session)
+        self.traces = SqlAlchemyTraceRepository(guarded_session)
+        self.snapshots = SqlAlchemySnapshotRepository(guarded_session)
+        self.evaluations = SqlAlchemyEvaluationRepository(guarded_session)
+        self.users = SqlAlchemyUserRepository(guarded_session)
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
@@ -171,3 +172,13 @@ def default_unit_of_work_factory(**session_kwargs: Any) -> UnitOfWorkFactory:
         return SqlAlchemyUnitOfWork(lambda: SessionLocal(**session_kwargs))
 
     return _factory
+
+
+class _GuardedSessionAccess:
+    """Resolve every repository Session access through the UoW guard."""
+
+    def __init__(self, provider: Callable[[], Session]) -> None:
+        self._provider = provider
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._provider(), name)

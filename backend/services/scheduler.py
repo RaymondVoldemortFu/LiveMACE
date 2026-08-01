@@ -7,7 +7,6 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.triggers.date import DateTrigger
 from sqlalchemy.orm import Session
-from sqlalchemy import func
 from typing import Dict, Set, Callable, Optional, List
 import logging
 from datetime import date, datetime, timezone, timedelta
@@ -696,7 +695,6 @@ def reset_auto_trading_job():
         place_ai_driven_crypto_order,
         place_baseline_driven_order,
     )
-    import threading
     import os
 
     def _parse_interval_env(env_name: str, default_value: int) -> int:
@@ -744,7 +742,7 @@ def reset_auto_trading_job():
     AI_TRADE_FIRST_JOB_ID = f"{AI_TRADE_JOB_ID}_first"
     BASELINE_TRADE_FIRST_JOB_ID = f"{BASELINE_TRADE_JOB_ID}_first"
 
-    def _setup_job_async():
+    def _setup_jobs():
         try:
             # Ensure market data is ready before scheduling trading tasks
             # This can take time, so we do it in this background thread
@@ -825,11 +823,27 @@ def reset_auto_trading_job():
             )
 
         except Exception as e:
-            logger.error(f"Failed to reset auto trading job in background: {e}")
+            logger.error(f"Failed to reset auto trading jobs: {e}")
+            raise
 
-    # Start the setup in a daemon thread so it doesn't block startup or request handling
-    threading.Thread(target=_setup_job_async, name="auto_trade_setup", daemon=True).start()
-    logger.info("Initiated background auto trading job reset")
+    # Runtime bootstrap already executes task startup in a worker thread. Do
+    # not create an unowned daemon here: successful return is the point at
+    # which TaskRegistry may truthfully mark this task RUNNING.
+    _setup_jobs()
+    logger.info("Completed auto trading job reset")
+
+
+def stop_auto_trading_jobs() -> None:
+    """Remove every job owned by the ai_auto_trading task descriptor."""
+    from services.trading_commands import AI_TRADE_JOB_ID, BASELINE_TRADE_JOB_ID
+
+    for job_id in (
+        f"{AI_TRADE_JOB_ID}_first",
+        AI_TRADE_JOB_ID,
+        f"{BASELINE_TRADE_JOB_ID}_first",
+        BASELINE_TRADE_JOB_ID,
+    ):
+        task_scheduler.remove_task(job_id)
 
 
 def get_ai_trade_schedule_status() -> Dict[str, Optional[str]]:
