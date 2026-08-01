@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from inspect import isawaitable
 from time import monotonic
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import uuid4
 
 from benchmark.contracts import (
@@ -33,14 +34,21 @@ from .validation import validation_messages
 
 _SENSITIVE_KEYS = frozenset(
     {
-        "api_key",
         "apikey",
         "authorization",
+        "proxyauthorization",
         "credential",
         "credentials",
         "password",
+        "passwd",
         "secret",
         "token",
+        "accesstoken",
+        "refreshtoken",
+        "clientsecret",
+        "xapikey",
+        "cookie",
+        "setcookie",
     }
 )
 _WRITE_SIDE_EFFECTS = frozenset(
@@ -52,18 +60,58 @@ _WRITE_SIDE_EFFECTS = frozenset(
 )
 
 
+def _normalized_sensitive_key(value: object) -> str:
+    return "".join(character for character in str(value).lower() if character.isalnum())
+
+
+def _redact_url_credentials(value: str) -> str:
+    try:
+        parsed = urlsplit(value)
+    except ValueError:
+        return value
+    if not parsed.scheme or not parsed.netloc:
+        return value
+
+    changed = False
+    netloc = parsed.netloc
+    if "@" in netloc:
+        netloc = f"[REDACTED]@{netloc.rsplit('@', 1)[1]}"
+        changed = True
+
+    query_items = []
+    for key, item in parse_qsl(parsed.query, keep_blank_values=True):
+        if _normalized_sensitive_key(key) in _SENSITIVE_KEYS:
+            query_items.append((key, "[REDACTED]"))
+            changed = True
+        else:
+            query_items.append((key, item))
+    if not changed:
+        return value
+    return urlunsplit(
+        (
+            parsed.scheme,
+            netloc,
+            parsed.path,
+            urlencode(query_items, doseq=True, safe="[]"),
+            parsed.fragment,
+        )
+    )
+
+
 def redact_tool_value(value: JsonValue) -> JsonValue:
     """Redact common credential fields before values enter runtime events."""
 
     if isinstance(value, dict):
         return {
             key: "[REDACTED]"
-            if key.lower() in _SENSITIVE_KEYS
+            if _normalized_sensitive_key(key) in _SENSITIVE_KEYS
             else redact_tool_value(item)
             for key, item in value.items()
         }
     if isinstance(value, list):
         return [redact_tool_value(item) for item in value]
+    if isinstance(value, str):
+        return _redact_url_credentials(value)
     return value
 
 
@@ -189,7 +237,8 @@ class SynchronousToolInvoker:
             self._emit_result("tool.denied", entry, call_id, normalized, result)
             return result
 
-        if self._deadline_at is not None and self._clock() >= self._deadline_at:
+        invocation_started_at = self._clock()
+        if self._deadline_at is not None and invocation_started_at >= self._deadline_at:
             result = ToolResult(
                 ok=False,
                 error_code="TOOL_DEADLINE_EXCEEDED",
@@ -199,12 +248,22 @@ class SynchronousToolInvoker:
             self._emit_result("tool.failed", entry, call_id, normalized, result)
             return result
 
+        tool_deadline_at = invocation_started_at + timedelta(
+            seconds=float(entry.spec.timeout_seconds)
+        )
+        effective_deadline_at = (
+            min(tool_deadline_at, self._deadline_at)
+            if self._deadline_at is not None
+            else tool_deadline_at
+        )
+
         context = ToolContext(
             account_id=self._account_id,
             decision_round_id=self._decision_round_id,
             trace_id=self._trace_id,
             call_id=call_id,
             capabilities=self._view.capabilities,
+            deadline_at=effective_deadline_at,
         )
         cached = self._get_cached(entry, normalized)
         if cached is not None:
@@ -264,9 +323,18 @@ class SynchronousToolInvoker:
             ) from exc
 
         elapsed = self._monotonic() - started_at
-        if elapsed > float(entry.spec.timeout_seconds):
+        effective_timeout_seconds = max(
+            0.0,
+            (effective_deadline_at - invocation_started_at).total_seconds(),
+        )
+        deadline_exceeded = self._clock() >= effective_deadline_at
+        if elapsed > effective_timeout_seconds or deadline_exceeded:
             if entry.spec.side_effect in _WRITE_SIDE_EFFECTS:
-                result = self._with_timeout_metadata(result, entry, elapsed)
+                result = self._with_timeout_metadata(
+                    result,
+                    effective_timeout_seconds,
+                    elapsed,
+                )
             else:
                 timeout_result = ToolResult(
                     ok=False,
@@ -274,7 +342,7 @@ class SynchronousToolInvoker:
                     error_message="Tool exceeded its synchronous timeout",
                     retryable=True,
                     metadata={
-                        "timeout_seconds": float(entry.spec.timeout_seconds),
+                        "timeout_seconds": effective_timeout_seconds,
                         "elapsed_seconds": elapsed,
                     },
                 )
@@ -328,14 +396,14 @@ class SynchronousToolInvoker:
     @staticmethod
     def _with_timeout_metadata(
         result: ToolResult,
-        entry: RegisteredTool,
+        timeout_seconds: float,
         elapsed: float,
     ) -> ToolResult:
         metadata = dict(result.metadata)
         metadata.update(
             {
                 "timeout_exceeded": True,
-                "timeout_seconds": float(entry.spec.timeout_seconds),
+                "timeout_seconds": timeout_seconds,
                 "elapsed_seconds": elapsed,
             }
         )
@@ -356,7 +424,10 @@ class SynchronousToolInvoker:
         )
 
     def _cache_namespace(self, entry: RegisteredTool) -> str:
-        return f"{entry.extension.id}@{entry.extension.version}:{entry.spec.name}"
+        return (
+            f"account:{self._account_id}:"
+            f"{entry.extension.id}@{entry.extension.version}:{entry.spec.name}"
+        )
 
     def _get_cached(
         self,
@@ -427,6 +498,8 @@ class SynchronousToolInvoker:
             self._events.emit(
                 ToolRuntimeEvent(
                     type="tool.denied",
+                    account_id=self._account_id,
+                    component=None,
                     tool_name=name,
                     tool_version="unknown",
                     trace_id=self._trace_id,
@@ -473,6 +546,8 @@ class SynchronousToolInvoker:
         self._events.emit(
             ToolRuntimeEvent(
                 type=event_type,
+                account_id=self._account_id,
+                component=entry.extension,
                 tool_name=entry.spec.name,
                 tool_version=entry.extension.version,
                 trace_id=self._trace_id,

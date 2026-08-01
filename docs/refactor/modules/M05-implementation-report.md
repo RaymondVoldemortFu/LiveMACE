@@ -79,7 +79,9 @@ Registry/View 解析
 
 Tool 在调用方账户 worker 线程内直接执行。Runtime 不创建 event loop、asyncio
 task 或额外 Agent worker，也不使用会让超时 Tool 在后台继续产生副作用的抢占式
-线程。只读/外部读取 Tool 完成后若已超过声明 timeout，返回稳定的
+线程。Invoker 将 Tool timeout 与决策 deadline 中较早者作为
+`ToolContext.deadline_at` 传给 Provider；Provider 负责将剩余时间落实到底层 I/O。
+Runtime 不抢占不遵守该合作式契约的第三方 Python 代码。只读/外部读取 Tool 完成后若已超过有效 deadline，返回稳定的
 `TOOL_TIMEOUT`。写副作用 Tool 已经同步完成时必须保留真实 `ToolResult`，并通过
 `timeout_exceeded`、`timeout_seconds`、`elapsed_seconds` metadata 记录超时，避免
 把已发生的 memory/sandbox/trading 写入伪装成可重试失败。
@@ -90,11 +92,13 @@ task 或额外 Agent worker，也不使用会让超时 Tool 在后台继续产�
 ## Cache、schema 与事件
 
 - 只有 `READ_ONLY` 且 `cacheable=True` 的成功结果写入 cache。
-- cache namespace 包含 extension id/version 和 Tool name；round id 与规范化参数
-  一并进入 cache key。
+- cache namespace 包含 account id、extension id/version 和 Tool name；round id 与
+  规范化参数一并进入 cache key。同一账户仍可复用，同一 decision round 内不同账户
+  不共享结果。早期受控内置工具的跨账户复用行为在开放 Tool 集合后停止。
 - OpenAI function schema 直接从 `ToolSpec.input_schema` 生成，没有第二份参数定义。
-- Tool 事件携带 trace、round、call 和 extension version；常见 credential 字段在
-  进入事件前脱敏，Agent 收到的业务结果不被修改。
+- Tool 事件携带 account、trace、round、call 和完整 `ExtensionRef`；未解析到 Tool
+  的 denied 事件 component 为 `None`。常见 credential/header 字段与 URL userinfo
+  在进入事件前脱敏，Agent 收到的业务结果不被修改。
 - cache 运行期读写故障降级为 miss，不伪造成功结果。
 
 ## Legacy 边界
@@ -114,7 +118,7 @@ bridge 由 M06 删除。
 - namespace、JSON Schema、timeout、副作用/capability、trading whitelist；
 - ToolView capability 和 active selection 隔离；
 - 同线程同步调用、输入/输出校验、业务失败、框架异常、awaitable 拒绝；
-- cache hit/miss、round/version/参数隔离、只读缓存限制；
+- cache hit/miss、account/round/version/参数隔离、只读缓存限制；
 - cache hit 不产生虚假的 `tool.started`，写副作用 elapsed timeout 保留真实结果；
 - timeout、OpenAI schema 同源、事件脱敏和公开 import boundary；
 - legacy adapter 行为。

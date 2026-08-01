@@ -12,7 +12,7 @@ from benchmark.contracts import (
     ToolResult,
     ToolRuntimeError,
 )
-from benchmark.tools import SynchronousToolInvoker, ToolRegistry
+from benchmark.tools import SynchronousToolInvoker, ToolRegistry, redact_tool_value
 
 from .conftest import FunctionTool, MemoryCache, Provider, make_spec
 
@@ -27,7 +27,7 @@ def registered(extension, tool, **registry_kwargs):
 def invoker(registry, *, events=None, **kwargs):
     return SynchronousToolInvoker(
         registry,
-        account_id=7,
+        account_id=kwargs.pop("account_id", 7),
         decision_round_id=kwargs.pop("decision_round_id", "round-7"),
         trace_id="trace-7",
         events=events,
@@ -45,6 +45,7 @@ def test_tool_runs_synchronously_in_caller_thread_and_receives_context(
         thread_ids.append(get_ident())
         assert context.account_id == 7
         assert context.call_id == "call-7"
+        assert context.deadline_at.tzinfo is not None
         return ToolResult(ok=True, value=arguments["value"] + 1)
 
     tool = FunctionTool(make_spec(), run)
@@ -59,6 +60,8 @@ def test_tool_runs_synchronously_in_caller_thread_and_receives_context(
         "tool.started",
         "tool.completed",
     ]
+    assert all(event.account_id == 7 for event in events.events)
+    assert all(event.component == extension for event in events.events)
 
 
 def test_capability_and_input_schema_fail_before_invoke(extension, events):
@@ -213,6 +216,58 @@ def test_expired_deadline_fails_before_invoke(extension, events):
     assert events.events[-1].type == "tool.failed"
 
 
+@pytest.mark.parametrize(
+    ("decision_deadline_seconds", "expected_seconds"),
+    [(None, 10), (3, 3)],
+)
+def test_tool_context_receives_earliest_cooperative_deadline(
+    extension,
+    decision_deadline_seconds,
+    expected_seconds,
+):
+    now = datetime(2026, 8, 1, tzinfo=timezone.utc)
+    received = []
+    tool = FunctionTool(
+        make_spec(timeout=10),
+        lambda context, arguments: received.append(context.deadline_at)
+        or ToolResult(ok=True, value=arguments["value"]),
+    )
+    deadline_at = (
+        None
+        if decision_deadline_seconds is None
+        else now + timedelta(seconds=decision_deadline_seconds)
+    )
+
+    result = invoker(
+        registered(extension, tool),
+        deadline_at=deadline_at,
+        clock=lambda: now,
+    ).call("com.example.echo", {"value": 1})
+
+    assert result.ok is True
+    assert received == [now + timedelta(seconds=expected_seconds)]
+
+
+def test_ignored_decision_deadline_is_detected_after_invoke(extension):
+    now = datetime(2026, 8, 1, tzinfo=timezone.utc)
+    current_time = [now]
+
+    def run(context, arguments):
+        current_time[0] = now + timedelta(seconds=4)
+        return ToolResult(ok=True, value=arguments["value"])
+
+    tool = FunctionTool(make_spec(timeout=10), run)
+    result = invoker(
+        registered(extension, tool),
+        deadline_at=now + timedelta(seconds=3),
+        clock=lambda: current_time[0],
+        monotonic_clock=lambda: 1.0,
+    ).call("com.example.echo", {"value": 1})
+
+    assert result.error_code == "TOOL_TIMEOUT"
+    assert result.metadata["timeout_seconds"] == 3.0
+
+
 def test_cache_key_includes_extension_version_arguments_and_round(extension, events):
     cache = MemoryCache()
     tool = FunctionTool(
@@ -225,7 +280,9 @@ def test_cache_key_includes_extension_version_arguments_and_round(extension, eve
     assert first.call("com.example.echo", {"value": 1}).value == 1
     assert first.call("com.example.echo", {"value": 1}).value == 1
     assert len(tool.calls) == 1
-    assert cache.sets[0][0] == "com.example.extension@1.2.3:com.example.echo"
+    assert cache.sets[0][0] == (
+        "account:7:com.example.extension@1.2.3:com.example.echo"
+    )
     assert cache.sets[0][-1] == "round-7"
     assert [event.type for event in events.events] == [
         "tool.started",
@@ -237,6 +294,47 @@ def test_cache_key_includes_extension_version_arguments_and_round(extension, eve
     second_round.call("com.example.echo", {"value": 1})
     first.call("com.example.echo", {"value": 2})
     assert len(tool.calls) == 3
+
+
+def test_cache_is_isolated_by_account_even_when_round_and_arguments_match(extension):
+    cache = MemoryCache()
+    tool = FunctionTool(
+        make_spec(cacheable=True),
+        lambda context, arguments: ToolResult(
+            ok=True,
+            value=context.account_id,
+        ),
+    )
+    registry = registered(
+        extension,
+        tool,
+    )
+
+    first = invoker(registry, cache=cache, account_id=1).call(
+        "com.example.echo", {"value": 1}
+    )
+    second = invoker(registry, cache=cache, account_id=2).call(
+        "com.example.echo", {"value": 1}
+    )
+
+    assert first.value == 1
+    assert second.value == 2
+    assert len(tool.calls) == 2
+
+
+def test_unknown_tool_event_has_account_and_no_component(extension, events):
+    tool = FunctionTool(
+        make_spec(),
+        lambda context, arguments: ToolResult(ok=True, value=arguments["value"]),
+    )
+
+    result = invoker(registered(extension, tool), events=events).call(
+        "com.example.missing", {"value": 1}
+    )
+
+    assert result.error_code == "TOOL_NOT_FOUND"
+    assert events.events[-1].account_id == 7
+    assert events.events[-1].component is None
 
 
 def test_invalid_cached_output_is_treated_as_a_miss(extension):
@@ -306,3 +404,30 @@ def test_events_redact_credentials_without_changing_tool_result(extension, event
     serialized_events = repr(events.events)
     assert "super-secret" not in serialized_events
     assert "[REDACTED]" in serialized_events
+
+
+def test_redactor_handles_common_header_keys_and_url_credentials():
+    value = {
+        "headers": {
+            "X-Api-Key": "header-key",
+            "Authorization": "Bearer header-token",
+        },
+        "access_token": "body-token",
+        "url": "https://alice:password@example.com/path?access_token=url-token&page=2",
+    }
+
+    redacted = redact_tool_value(value)
+
+    serialized = repr(redacted)
+    for secret in (
+        "header-key",
+        "header-token",
+        "body-token",
+        "alice",
+        "password",
+        "url-token",
+    ):
+        assert secret not in serialized
+    assert redacted["headers"]["X-Api-Key"] == "[REDACTED]"
+    assert redacted["access_token"] == "[REDACTED]"
+    assert "page=2" in redacted["url"]

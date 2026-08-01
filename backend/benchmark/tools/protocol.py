@@ -100,6 +100,8 @@ class ToolRuntimeEvent:
     """A redacted lifecycle event emitted by the synchronous invoker."""
 
     type: str
+    account_id: int
+    component: ExtensionRef | None
     tool_name: str
     tool_version: str
     trace_id: str
@@ -119,6 +121,10 @@ class ToolRuntimeEvent:
             raise ValueError("unsupported Tool runtime event type")
         if self.occurred_at.tzinfo is None or self.occurred_at.utcoffset() is None:
             raise ValueError("occurred_at must be timezone-aware")
+        if not isinstance(self.account_id, int) or self.account_id <= 0:
+            raise ValueError("account_id must be a positive integer")
+        if self.component is not None and not isinstance(self.component, ExtensionRef):
+            raise TypeError("component must be ExtensionRef or None")
         for name in (
             "tool_name",
             "tool_version",

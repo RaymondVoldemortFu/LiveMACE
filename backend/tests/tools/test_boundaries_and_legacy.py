@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+from datetime import datetime, timezone
 from pathlib import Path
 import subprocess
 import sys
@@ -80,7 +81,14 @@ def test_legacy_adapter_preserves_callable_result_without_changing_old_registry(
         ),
     )
     provider = LegacyToolProviderAdapter((adapter,))
-    context = ToolContext(1, "round", "trace", "call", frozenset())
+    context = ToolContext(
+        1,
+        "round",
+        "trace",
+        "call",
+        frozenset(),
+        datetime(2026, 8, 1, tzinfo=timezone.utc),
+    )
 
     assert provider.list_tools() == (adapter,)
     assert adapter.invoke(context, {"value": 7}).value == {"value": 7}

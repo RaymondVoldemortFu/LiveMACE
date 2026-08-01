@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
 from typing import Mapping
 
@@ -54,6 +55,7 @@ class ToolContext:
     trace_id: str
     call_id: str
     capabilities: frozenset[str]
+    deadline_at: datetime
 
     def __post_init__(self) -> None:
         if not isinstance(self.account_id, int) or self.account_id <= 0:
@@ -62,6 +64,10 @@ class ToolContext:
             _require_non_empty(getattr(self, name), name)
         if not isinstance(self.capabilities, frozenset):
             raise TypeError("capabilities must be frozenset")
+        if not isinstance(self.deadline_at, datetime):
+            raise TypeError("deadline_at must be datetime")
+        if self.deadline_at.tzinfo is None or self.deadline_at.utcoffset() is None:
+            raise ValueError("deadline_at must be timezone-aware")
 
 
 @dataclass(frozen=True)
