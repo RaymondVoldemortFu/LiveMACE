@@ -266,6 +266,15 @@ class SynchronousToolInvoker:
             deadline_at=effective_deadline_at,
         )
         cached = self._get_cached(entry, normalized)
+        if self._clock() >= effective_deadline_at:
+            result = ToolResult(
+                ok=False,
+                error_code="TOOL_DEADLINE_EXCEEDED",
+                error_message="Tool deadline exceeded during cache lookup",
+                retryable=True,
+            )
+            self._emit_result("tool.failed", entry, call_id, normalized, result)
+            return result
         if cached is not None:
             self._emit_result("tool.cache_hit", entry, call_id, normalized, cached)
             return cached

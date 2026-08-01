@@ -223,6 +223,18 @@ class SynchronousTradeCommandGateway:
         command_json = _encode_command(command)
         try:
             with self.uow_factory() as uow:
+                account = uow.accounts.get_for_update(command.account_id)
+                if account is None:
+                    uow.rollback()
+                    return TradeCommandResult(
+                        False,
+                        False,
+                        "ACCOUNT_NOT_FOUND",
+                        f"Account {command.account_id} not found",
+                        None,
+                        None,
+                        command,
+                    )
                 existing = uow.trade_command_receipts.get(
                     command.account_id,
                     command.idempotency_key,

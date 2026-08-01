@@ -70,6 +70,12 @@ def test_freeze_blocks_registration_and_allows_concurrent_reads(extension, echo_
     assert names == ["com.example.echo"] * 100
 
 
+@pytest.mark.parametrize("timeout", [float("nan"), float("inf"), float("-inf"), True])
+def test_tool_spec_rejects_non_finite_or_boolean_timeout(timeout):
+    with pytest.raises(ValueError, match="positive finite"):
+        make_spec(timeout=timeout)
+
+
 @pytest.mark.parametrize(
     ("spec", "code"),
     [

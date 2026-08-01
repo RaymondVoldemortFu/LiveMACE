@@ -5,11 +5,16 @@ from __future__ import annotations
 from contextlib import contextmanager
 from threading import RLock
 from typing import Any, Iterator, Mapping
+from uuid import uuid4
 
 from benchmark.contracts import JsonValue
 from benchmark.providers import HealthStatus, SandboxLease, SandboxPort
 from benchmark.providers.errors import ProviderError
-from benchmark.providers.runtime import provider_failure, require_sync_result
+from benchmark.providers.runtime import (
+    provider_failure,
+    require_sync_result,
+    run_health_probe,
+)
 
 
 class ContainerServiceSandboxAdapter(SandboxPort):
@@ -20,7 +25,7 @@ class ContainerServiceSandboxAdapter(SandboxPort):
 
     def __init__(self, container_service: Any) -> None:
         self._container_service = container_service
-        self._released: set[tuple[int, str]] = set()
+        self._released: set[str] = set()
         self._lock = RLock()
 
     def lease(self, account_id: int) -> SandboxLease:
@@ -43,14 +48,24 @@ class ContainerServiceSandboxAdapter(SandboxPort):
                 retryable=True,
                 provider_id=self.id,
             )
-        return SandboxLease(account_id=account_id, container_id=str(container_id))
+        return SandboxLease(
+            account_id=account_id,
+            container_id=str(container_id),
+            metadata={"lease_id": f"sandbox-lease-{uuid4().hex}"},
+        )
 
     def release(self, lease: SandboxLease) -> None:
         if not isinstance(lease, SandboxLease):
             raise TypeError("lease must be SandboxLease")
-        key = (lease.account_id, lease.container_id)
+        lease_id = lease.metadata.get("lease_id")
+        if not isinstance(lease_id, str) or not lease_id:
+            raise ProviderError(
+                "Sandbox lease has no valid lease identity",
+                code="SANDBOX_LEASE_ID_INVALID",
+                provider_id=self.id,
+            )
         with self._lock:
-            if key in self._released:
+            if lease_id in self._released:
                 return
             release = getattr(self._container_service, "release_container", None)
             if not callable(release):
@@ -71,7 +86,7 @@ class ContainerServiceSandboxAdapter(SandboxPort):
                 raise
             except Exception as exc:
                 raise provider_failure(self.id, "release", exc, retryable=True) from exc
-            self._released.add(key)
+            self._released.add(lease_id)
 
     @contextmanager
     def managed_lease(self, account_id: int) -> Iterator[SandboxLease]:
@@ -82,7 +97,15 @@ class ContainerServiceSandboxAdapter(SandboxPort):
             self.release(lease)
 
     def healthcheck(self) -> HealthStatus:
-        return HealthStatus("ok", self.id)
+        def probe(timeout_seconds: float) -> bool | None:
+            del timeout_seconds
+            client = getattr(self._container_service, "client", None)
+            ping = getattr(client, "ping", None)
+            if not callable(ping):
+                return False if client is None else None
+            return bool(ping())
+
+        return run_health_probe(self.id, probe)
 
 
 __all__ = ["ContainerServiceSandboxAdapter"]

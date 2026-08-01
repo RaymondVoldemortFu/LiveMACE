@@ -20,10 +20,13 @@
 - 同 key、不同命令抛 `TRADE_IDEMPOTENCY_KEY_REUSED`；
 - 执行异常时金融写入和 PENDING receipt 一起回滚，可安全重试；
 - 并发 Gateway/worker 由数据库唯一约束协调，不依赖单进程缓存保证正确性。
+- Gateway 在 receipt 查询/claim 和金融读取之前获取账户行锁；同账户不同 idempotency key 按账户串行，MySQL integration test 验证第二个 executor 必须等待第一个事务提交。
 
 `execute_trade_tool()` 不再生成随机 key；调用方必须提供 `idempotency_key`，或同时提供 `decision_round_id` 与 `tool_call_id`。缺失时返回 `IDEMPOTENCY_KEY_REQUIRED`，避免伪幂等。
 
 Legacy Agent 过渡链路由编排层把 `decision_round_id` 显式传入 Agent，Agent 的统一 tool-dispatch 再把供应商返回的 `tool_call_id` 注入 `execute_trade_tool()`，形成 `{decision_round_id}:{tool_call_id}`。这些字段不出现在 LLM tool schema 中；模型若自行提交 `idempotency_key`、`decision_round_id` 或 `tool_call_id`，调用会以 `TOOL_RUNTIME_ARGUMENT_FORBIDDEN` 显式失败，不能覆盖运行时身份。M06 的 `core.execute_trade` 将直接从 `ToolContext` 取得同一组可信元数据。
+
+所有 sizing value 在任何 Decimal 比较和 legacy clamp 前必须为有限数；NaN、正负 Infinity 与溢出为 Infinity 的指数输入统一以 `SIZING_VALUE_INVALID` 拒绝，不能退化为全仓开仓或全部平仓。
 
 ## 内部订单接口
 

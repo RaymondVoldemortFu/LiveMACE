@@ -16,7 +16,11 @@ from benchmark.providers import (
     PriceResult,
     ProviderError,
 )
-from benchmark.providers.runtime import provider_failure, require_sync_result
+from benchmark.providers.runtime import (
+    provider_failure,
+    require_sync_result,
+    run_health_probe,
+)
 from services.time_source import now_utc
 
 
@@ -55,7 +59,7 @@ class _FunctionMarketDataAdapter(MarketDataPort):
             decimal_value = Decimal(str(value))
             if not decimal_value.is_finite() or decimal_value <= 0:
                 return PriceResult(
-                    decimal_value,
+                    None,
                     now_utc(),
                     self.id,
                     Freshness.UNAVAILABLE,
@@ -160,7 +164,18 @@ class _FunctionMarketDataAdapter(MarketDataPort):
         )
 
     def healthcheck(self) -> HealthStatus:
-        return HealthStatus("ok", self.id)
+        probe_symbol = "BTC" if self._supported_market is Market.CRYPTO else "AAPL"
+
+        def probe(timeout_seconds: float) -> bool:
+            del timeout_seconds
+            raw = self._status_loader(probe_symbol)
+            return bool(
+                isinstance(raw, Mapping)
+                and isinstance(raw.get("is_trading"), bool)
+                and not raw.get("error")
+            )
+
+        return run_health_probe(self.id, probe)
 
 
 class HyperliquidMarketDataAdapter(_FunctionMarketDataAdapter):

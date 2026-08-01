@@ -45,11 +45,15 @@ class ToolRegistry:
 - Tool registry 不保存 DB session/account 的 closure。
 - `core.execute_trade` 未授权时不可见且不可调用。
 
-`timeout_seconds` 在同步 v1 SPI 中定义为合作式 deadline：Invoker 将 Tool 自身
+`ToolContext.deadline_at` 是带默认值的向后兼容字段。`timeout_seconds` 在同步 v1
+SPI 中定义为合作式 deadline：Invoker 将 Tool 自身
 timeout 与决策 deadline 中较早者写入 `ToolContext.deadline_at`，Provider 负责把
 剩余时间传给自身的网络、数据库或子进程调用。Runtime 不创建后台线程，也不承诺
 抢占或终止不遵守契约的第三方 Python 代码；返回后的 elapsed/deadline 检查用于产生
 稳定超时结果并暴露契约违规。
+
+Tool cache 使用有限的 Redis connect/read socket timeout；cache lookup 返回后再次
+检查有效 deadline，过期结果不得作为 cache hit 返回。
 
 ## 前置与并行
 

@@ -9,7 +9,11 @@ from sqlalchemy.orm import Session
 
 from benchmark.contracts import JsonValue, Market
 from benchmark.providers import HealthStatus, MemoryRecord, MemoryStorePort, ProviderError
-from benchmark.providers.runtime import provider_failure, require_sync_result
+from benchmark.providers.runtime import (
+    provider_failure,
+    require_sync_result,
+    run_health_probe,
+)
 
 
 class LegacyMemoryStoreAdapter(MemoryStorePort):
@@ -158,7 +162,23 @@ class LegacyMemoryStoreAdapter(MemoryStorePort):
             raise provider_failure(self.id, "delete_all", exc) from exc
 
     def healthcheck(self) -> HealthStatus:
-        return HealthStatus("ok", self.id)
+        def probe(timeout_seconds: float) -> bool | None:
+            healthcheck = getattr(self._store, "healthcheck", None)
+            if callable(healthcheck):
+                result = healthcheck(timeout_seconds=timeout_seconds)
+                if isinstance(result, HealthStatus):
+                    return result.status == "ok"
+                return result
+            readiness_fields = [
+                name
+                for name in ("model", "client", "collection", "index")
+                if hasattr(self._store, name)
+            ]
+            if not readiness_fields:
+                return None
+            return all(getattr(self._store, name) is not None for name in readiness_fields)
+
+        return run_health_probe(self.id, probe)
 
 
 def _market_value(market: Market | str) -> str:

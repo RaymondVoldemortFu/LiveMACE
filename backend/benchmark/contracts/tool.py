@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
+import math
 from typing import Mapping
 
 from .common import JsonValue, _freeze_mapping, _require_non_empty
@@ -38,8 +39,13 @@ class ToolSpec:
         object.__setattr__(self, "output_schema", _freeze_mapping(self.output_schema, "output_schema"))
         if not isinstance(self.side_effect, SideEffect):
             raise TypeError("side_effect must be SideEffect")
-        if not isinstance(self.timeout_seconds, (int, float)) or self.timeout_seconds <= 0:
-            raise ValueError("timeout_seconds must be positive")
+        if (
+            not isinstance(self.timeout_seconds, (int, float))
+            or isinstance(self.timeout_seconds, bool)
+            or not math.isfinite(float(self.timeout_seconds))
+            or self.timeout_seconds <= 0
+        ):
+            raise ValueError("timeout_seconds must be a positive finite number")
         if not isinstance(self.cacheable, bool):
             raise TypeError("cacheable must be bool")
         if not isinstance(self.required_capabilities, tuple):
@@ -55,7 +61,7 @@ class ToolContext:
     trace_id: str
     call_id: str
     capabilities: frozenset[str]
-    deadline_at: datetime
+    deadline_at: datetime | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.account_id, int) or self.account_id <= 0:
@@ -64,9 +70,11 @@ class ToolContext:
             _require_non_empty(getattr(self, name), name)
         if not isinstance(self.capabilities, frozenset):
             raise TypeError("capabilities must be frozenset")
-        if not isinstance(self.deadline_at, datetime):
-            raise TypeError("deadline_at must be datetime")
-        if self.deadline_at.tzinfo is None or self.deadline_at.utcoffset() is None:
+        if self.deadline_at is not None and not isinstance(self.deadline_at, datetime):
+            raise TypeError("deadline_at must be datetime or None")
+        if self.deadline_at is not None and (
+            self.deadline_at.tzinfo is None or self.deadline_at.utcoffset() is None
+        ):
             raise ValueError("deadline_at must be timezone-aware")
 
 

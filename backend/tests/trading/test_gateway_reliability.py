@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
+import json
 from threading import Event, Lock
 
 import pytest
@@ -104,6 +105,72 @@ def test_success_commits_business_write_and_receipt_once(session_factory):
         assert float(session.query(Account).filter(Account.id == 1).one().current_cash) == 9000
         receipt = session.query(TradeCommandReceipt).one()
         assert receipt.status == "COMPLETED"
+
+
+def test_account_is_locked_before_trade_executor_runs(session_factory, monkeypatch):
+    from benchmark.persistence.sqlalchemy_repositories import (
+        SqlAlchemyAccountRepository,
+    )
+
+    events = []
+    original = SqlAlchemyAccountRepository.get_for_update
+
+    def locked(repository, account_id):
+        events.append("account_locked")
+        return original(repository, account_id)
+
+    def executor(session, command):
+        events.append("executor_started")
+        return {"executed": True, "order_id": 10}
+
+    monkeypatch.setattr(SqlAlchemyAccountRepository, "get_for_update", locked)
+
+    result = _gateway(session_factory, executor).execute(_command())
+
+    assert result.accepted is True
+    assert events == ["account_locked", "executor_started"]
+
+
+def test_missing_account_is_rejected_before_receipt_claim(session_factory):
+    calls = []
+
+    result = _gateway(
+        session_factory,
+        lambda session, command: calls.append(command) or {"executed": True},
+    ).execute(_command(account_id=999, key="missing-account"))
+
+    assert result.accepted is False
+    assert result.reject_code == "ACCOUNT_NOT_FOUND"
+    assert calls == []
+    with session_factory() as session:
+        assert session.query(TradeCommandReceipt).count() == 0
+
+
+@pytest.mark.parametrize("value", ["NaN", "Infinity", "-Infinity", "1e999"])
+def test_non_finite_sizing_is_rejected_before_executor(session_factory, value):
+    calls = []
+    gateway = _gateway(
+        session_factory,
+        lambda session, command: calls.append(command) or {"executed": True},
+    )
+
+    with pytest.raises(TradeGatewayError) as caught:
+        gateway.execute(
+            _command(
+                key=f"non-finite:{value}",
+                sizing_mode="usd",
+                sizing_value=Decimal(str(json.loads(value))),
+            )
+        )
+
+    assert caught.value.code == "SIZING_VALUE_INVALID"
+    assert calls == []
+    with session_factory() as session:
+        account = session.query(Account).filter(Account.id == 1).one()
+        assert float(account.current_cash) == 10000
+        assert session.query(Order).count() == 0
+        assert session.query(Trade).count() == 0
+        assert session.query(Position).count() == 0
 
 
 def test_unexpected_failure_rolls_back_and_is_not_recorded(session_factory):

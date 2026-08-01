@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 import copy
+import math
 from typing import Any
 
 from jsonschema import Draft202012Validator, SchemaError, validators
@@ -54,7 +55,9 @@ def validate_tool_spec(
             code="TOOL_NAME_INVALID",
             details={"tool_name": spec.name},
         ) from exc
-    if float(spec.timeout_seconds) > MAX_TOOL_TIMEOUT_SECONDS:
+    if not math.isfinite(float(spec.timeout_seconds)) or float(
+        spec.timeout_seconds
+    ) > MAX_TOOL_TIMEOUT_SECONDS:
         raise ComponentConfigError(
             f"Tool timeout may not exceed {MAX_TOOL_TIMEOUT_SECONDS:g} seconds",
             code="TOOL_TIMEOUT_INVALID",

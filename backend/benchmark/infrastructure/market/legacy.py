@@ -16,7 +16,11 @@ from benchmark.providers import (
     PriceResult,
     ProviderError,
 )
-from benchmark.providers.runtime import provider_failure, require_sync_result
+from benchmark.providers.runtime import (
+    provider_failure,
+    require_sync_result,
+    run_health_probe,
+)
 
 
 class LegacyMarketDataAdapter(MarketDataPort):
@@ -41,9 +45,20 @@ class LegacyMarketDataAdapter(MarketDataPort):
                     )
                 )
             )
-            freshness = Freshness.FRESH if value > 0 else Freshness.UNAVAILABLE
-            error = None if value > 0 else "price is not positive"
-            return PriceResult(value=value, as_of=now_utc(), source=self.id, freshness=freshness, error=error)
+            if not value.is_finite() or value <= 0:
+                return PriceResult(
+                    value=None,
+                    as_of=now_utc(),
+                    source=self.id,
+                    freshness=Freshness.UNAVAILABLE,
+                    error="price is not positive or finite",
+                )
+            return PriceResult(
+                value=value,
+                as_of=now_utc(),
+                source=self.id,
+                freshness=Freshness.FRESH,
+            )
         except (KeyboardInterrupt, SystemExit, GeneratorExit):
             raise
         except ProviderError:
@@ -123,7 +138,18 @@ class LegacyMarketDataAdapter(MarketDataPort):
         )
 
     def healthcheck(self) -> HealthStatus:
-        return HealthStatus(status="ok", provider_id=self.id)
+        def probe(timeout_seconds: float) -> bool:
+            del timeout_seconds
+            from services import market_data
+
+            raw = market_data.get_market_status("BTC", Market.CRYPTO.value)
+            return bool(
+                isinstance(raw, Mapping)
+                and isinstance(raw.get("is_trading"), bool)
+                and not raw.get("error")
+            )
+
+        return run_health_probe(self.id, probe)
 
 
 def create_default_market_data_port() -> MarketDataPort:

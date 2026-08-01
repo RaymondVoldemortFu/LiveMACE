@@ -100,6 +100,8 @@ Runtime 不抢占不遵守该合作式契约的第三方 Python 代码。只读/
   的 denied 事件 component 为 `None`。常见 credential/header 字段与 URL userinfo
   在进入事件前脱敏，Agent 收到的业务结果不被修改。
 - cache 运行期读写故障降级为 miss，不伪造成功结果。
+- Redis cache 配置有限 connect/read socket timeout；lookup 结束后重新检查 decision
+  deadline，已经过期的 cache value 不产生 `tool.cache_hit`。
 
 ## Legacy 边界
 

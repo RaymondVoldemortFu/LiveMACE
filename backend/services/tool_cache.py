@@ -66,6 +66,8 @@ class RedisToolCache:
             self._client = redis.Redis.from_url(
                 ToolCacheConfig.redis_url,
                 decode_responses=True,
+                socket_timeout=ToolCacheConfig.socket_timeout_seconds,
+                socket_connect_timeout=ToolCacheConfig.socket_connect_timeout_seconds,
             )
             self._client.ping()
             logger.info(f"Redis tool cache connected: {ToolCacheConfig.redis_url}")
@@ -230,4 +232,3 @@ class RedisToolCache:
 
 
 tool_cache = RedisToolCache()
-

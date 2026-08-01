@@ -94,6 +94,12 @@ def test_legacy_adapter_preserves_callable_result_without_changing_old_registry(
     assert adapter.invoke(context, {"value": 7}).value == {"value": 7}
 
 
+def test_tool_context_keeps_v1_constructor_compatibility():
+    context = ToolContext(1, "round", "trace", "call", frozenset())
+
+    assert context.deadline_at is None
+
+
 def test_legacy_registry_is_an_explicit_public_tool_invoker_bridge():
     registry = LegacyToolRegistry()
     calls = []

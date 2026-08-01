@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -20,6 +21,7 @@ from benchmark.providers import (
     MarketDataPort,
     MemoryStorePort,
     ProviderError,
+    PriceResult,
     SandboxPort,
 )
 from benchmark.testing import (
@@ -187,6 +189,75 @@ def test_market_adapter_status_validation_and_error_mapping():
     assert "secret" not in str(caught.value)
 
 
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_market_adapter_never_exposes_non_finite_price(value):
+    adapter = _FunctionMarketDataAdapter(
+        provider_id="fake.market.non-finite",
+        price_loader=lambda symbol: value,
+        kline_loader=lambda *args: [],
+        status_loader=lambda symbol: {"is_trading": True},
+        supported_market=Market.CRYPTO,
+    )
+
+    result = adapter.get_price("BTC", Market.CRYPTO)
+
+    assert result.value is None
+    assert result.freshness is Freshness.UNAVAILABLE
+
+
+def test_price_result_rejects_non_finite_value():
+    with pytest.raises(ValueError, match="finite"):
+        PriceResult(
+            Decimal("NaN"),
+            None,
+            "fake.market",
+            Freshness.UNAVAILABLE,
+            "bad price",
+        )
+
+
+def test_market_healthcheck_probes_status_loader():
+    calls = []
+    healthy = _FunctionMarketDataAdapter(
+        provider_id="fake.market.healthy",
+        price_loader=lambda symbol: 1,
+        kline_loader=lambda *args: [],
+        status_loader=lambda symbol: calls.append(symbol) or {"is_trading": False},
+        supported_market=Market.US,
+    )
+    broken = _FunctionMarketDataAdapter(
+        provider_id="fake.market.broken-health",
+        price_loader=lambda symbol: 1,
+        kline_loader=lambda *args: [],
+        status_loader=lambda symbol: (_ for _ in ()).throw(RuntimeError("down")),
+        supported_market=Market.CRYPTO,
+    )
+
+    assert healthy.healthcheck().status == "ok"
+    assert calls == ["AAPL"]
+    assert broken.healthcheck().status == "unavailable"
+
+
+def test_memory_and_sandbox_healthchecks_do_not_report_unprobed_ok():
+    memory = LegacyMemoryStoreAdapter(
+        SimpleNamespace(
+            search=lambda **kwargs: [],
+            add=lambda **kwargs: "id",
+            clear_account_memories=lambda **kwargs: 0,
+        )
+    )
+    sandbox = ContainerServiceSandboxAdapter(
+        SimpleNamespace(
+            client=None,
+            lease_container=lambda account_id: "container",
+            release_container=lambda account_id: None,
+        )
+    )
+
+    assert memory.healthcheck().status == "degraded"
+    assert sandbox.healthcheck().status == "unavailable"
+
+
 @pytest.mark.parametrize(
     ("module_name", "adapter_name", "market"),
     [
@@ -275,6 +346,26 @@ def test_sandbox_managed_lease_releases_once_even_on_error():
             raise RuntimeError("boom")
     adapter.release(lease)
     assert released == [9]
+
+
+def test_sandbox_reused_container_has_a_new_releasable_lease_identity():
+    released = []
+    service = SimpleNamespace(
+        lease_container=lambda account_id: "reused-container",
+        release_container=lambda account_id: released.append(account_id),
+    )
+    adapter = ContainerServiceSandboxAdapter(service)
+
+    first = adapter.lease(9)
+    adapter.release(first)
+    second = adapter.lease(9)
+    adapter.release(second)
+    adapter.release(first)
+    adapter.release(second)
+
+    assert first.container_id == second.container_id
+    assert first.metadata["lease_id"] != second.metadata["lease_id"]
+    assert released == [9, 9]
 
 
 def test_reusable_fakes_implement_every_public_port():

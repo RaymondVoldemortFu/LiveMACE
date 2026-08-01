@@ -36,11 +36,13 @@ def _parse_float_loose(value: Any) -> Optional[float]:
         m = re.search(r"-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?", value.strip())
         if m:
             try:
-                return float(m.group(0))
+                parsed = float(m.group(0))
+                return parsed if math.isfinite(parsed) else None
             except ValueError:
                 return None
     try:
-        return float(value)
+        parsed = float(value)
+        return parsed if math.isfinite(parsed) else None
     except (TypeError, ValueError):
         return None
 
@@ -518,6 +520,10 @@ def _calc_open_size(
     usd_amount: Optional[float],
 ) -> tuple[float, float]:
     available_cash = float(account.current_cash)
+    if not math.isfinite(available_cash):
+        raise ValueError("account cash must be finite")
+    if not math.isfinite(float(price)) or float(price) <= 0:
+        raise ValueError("price must be finite and positive")
     if available_cash <= 0:
         return 0.0, 0.0
 
@@ -525,9 +531,13 @@ def _calc_open_size(
         notional = available_cash
     elif size_mode == "usd":
         amt = float(usd_amount or 0.0)
+        if not math.isfinite(amt):
+            raise ValueError("usd_amount must be finite")
         notional = max(0.0, min(amt, available_cash))
     else:
         portion = float(target_portion_of_balance if target_portion_of_balance is not None else 0.0)
+        if not math.isfinite(portion):
+            raise ValueError("target_portion_of_balance must be finite")
         portion = max(0.0, min(portion, 1.0))
         notional = available_cash * portion
 
@@ -555,19 +565,32 @@ def _calc_close_size(
         position_qty = float(position.quantity)
     else:
         position_qty = float(position.available_quantity)
+    if not math.isfinite(position_qty):
+        raise ValueError("position quantity must be finite")
+    if not math.isfinite(float(price)) or float(price) <= 0:
+        raise ValueError("price must be finite and positive")
     if position_qty <= 0:
         return 0.0, 0.0
 
     if size_mode in {"close_all", "all_in"}:
         qty = position_qty
     elif size_mode == "usd":
-        amt = max(0.0, float(usd_amount or 0.0))
+        amt = float(usd_amount or 0.0)
+        if not math.isfinite(amt):
+            raise ValueError("usd_amount must be finite")
+        amt = max(0.0, amt)
         qty = amt / price if price > 0 else 0.0
     elif close_ratio is not None:
-        ratio = max(0.0, min(float(close_ratio), 1.0))
+        ratio = float(close_ratio)
+        if not math.isfinite(ratio):
+            raise ValueError("close_ratio must be finite")
+        ratio = max(0.0, min(ratio, 1.0))
         qty = position_qty * ratio
     else:
-        ratio = max(0.0, min(float(target_portion_of_balance or 0.0), 1.0))
+        ratio = float(target_portion_of_balance or 0.0)
+        if not math.isfinite(ratio):
+            raise ValueError("target_portion_of_balance must be finite")
+        ratio = max(0.0, min(ratio, 1.0))
         qty = position_qty * ratio
 
     qty = min(qty, position_qty)

@@ -31,6 +31,8 @@ class PriceResult:
     def __post_init__(self) -> None:
         if self.value is not None and not isinstance(self.value, Decimal):
             raise TypeError("value must be Decimal or None")
+        if self.value is not None and not self.value.is_finite():
+            raise ValueError("value must be finite or None")
         if self.as_of is not None:
             _require_aware(self.as_of, "as_of")
         _require_non_empty(self.source, "source")

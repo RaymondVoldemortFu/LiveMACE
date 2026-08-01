@@ -268,6 +268,45 @@ def test_ignored_decision_deadline_is_detected_after_invoke(extension):
     assert result.metadata["timeout_seconds"] == 3.0
 
 
+def test_cache_result_is_not_returned_after_decision_deadline(extension):
+    now = datetime(2026, 8, 1, tzinfo=timezone.utc)
+    current_time = [now]
+
+    class SlowCache(MemoryCache):
+        def get(self, namespace, args, *, round_id=None):
+            value = super().get(namespace, args, round_id=round_id)
+            current_time[0] = now + timedelta(seconds=2)
+            return value
+
+    cache = SlowCache()
+    tool = FunctionTool(
+        make_spec(cacheable=True),
+        lambda context, arguments: ToolResult(ok=True, value=arguments["value"]),
+    )
+    registry = registered(extension, tool)
+    warm = invoker(registry, cache=cache)
+    assert warm.call("com.example.echo", {"value": 1}).ok is True
+
+    current_time[0] = now
+    events = []
+
+    class Sink:
+        def emit(self, event):
+            events.append(event)
+
+    result = invoker(
+        registry,
+        cache=cache,
+        events=Sink(),
+        deadline_at=now + timedelta(seconds=1),
+        clock=lambda: current_time[0],
+    ).call("com.example.echo", {"value": 1})
+
+    assert result.error_code == "TOOL_DEADLINE_EXCEEDED"
+    assert [event.type for event in events] == ["tool.failed"]
+    assert len(tool.calls) == 1
+
+
 def test_cache_key_includes_extension_version_arguments_and_round(extension, events):
     cache = MemoryCache()
     tool = FunctionTool(

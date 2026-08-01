@@ -164,6 +164,7 @@ class ToolContext:
     trace_id: str
     call_id: str
     capabilities: frozenset[str]
+    deadline_at: datetime | None = None  # cooperative deadline; Invoker always supplies it
 
 @dataclass(frozen=True)
 class ToolResult:

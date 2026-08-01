@@ -41,7 +41,12 @@ def normalize_trade_command(command: TradeCommand) -> TradeCommand:
                 f"unsupported sizing mode for {operation}",
                 "SIZING_MODE_INVALID",
             )
-        if command.sizing_value is None or command.sizing_value <= 0:
+        if command.sizing_value is None or not command.sizing_value.is_finite():
+            raise _policy_error(
+                "sizing_value must be finite",
+                "SIZING_VALUE_INVALID",
+            )
+        if command.sizing_value <= 0:
             raise _policy_error(
                 "sizing_value must be positive",
                 "SIZING_VALUE_INVALID",
