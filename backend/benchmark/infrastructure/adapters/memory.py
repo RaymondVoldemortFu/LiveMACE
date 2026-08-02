@@ -39,6 +39,7 @@ class LegacyMemoryStoreAdapter(MemoryStorePort):
             raise ValueError("query must be a non-empty string")
         if not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0:
             raise ValueError("limit must be a positive integer")
+        market_value = _market_value(market)
         try:
             rows = require_sync_result(
                 self._store.search(
@@ -46,7 +47,7 @@ class LegacyMemoryStoreAdapter(MemoryStorePort):
                     query=query,
                     limit=limit,
                     db=self._db,
-                    market=_market_value(market),
+                    market=market_value,
                 ),
                 provider_id=self.id,
                 operation="search",
@@ -110,6 +111,7 @@ class LegacyMemoryStoreAdapter(MemoryStorePort):
     ) -> str:
         if not isinstance(content, str) or not content:
             raise ValueError("content must be a non-empty string")
+        market_value = _market_value(market)
         try:
             result = require_sync_result(
                 self._store.add(
@@ -118,7 +120,7 @@ class LegacyMemoryStoreAdapter(MemoryStorePort):
                     metadata=dict(metadata),
                     trace_id=self._trace_id,
                     db=self._db,
-                    market=_market_value(market),
+                    market=market_value,
                 ),
                 provider_id=self.id,
                 operation="add",
@@ -182,7 +184,9 @@ class LegacyMemoryStoreAdapter(MemoryStorePort):
 
 
 def _market_value(market: Market | str) -> str:
-    return market.value if isinstance(market, Market) else str(market)
+    if not isinstance(market, Market):
+        raise TypeError("market must be Market")
+    return market.value
 
 
 def _as_optional_float(value: object) -> float | None:

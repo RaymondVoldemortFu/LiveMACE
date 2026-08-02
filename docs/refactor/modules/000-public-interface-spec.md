@@ -227,9 +227,25 @@ class LLMClientPort(Protocol):
     def complete(self, request: "LLMRequest") -> "LLMResponse": ...
 
 class MemoryStorePort(Protocol):
-    def search(self, account_id: int, query: str, limit: int) -> Sequence["MemoryRecord"]: ...
-    def add(self, account_id: int, content: str, metadata: Mapping[str, JsonValue]) -> str: ...
-    def delete_all(self, account_id: int) -> int: ...
+    def search(
+        self,
+        account_id: int | str,
+        query: str,
+        limit: int,
+        *,
+        market: Market,
+    ) -> Sequence["MemoryRecord"]: ...
+
+    def add(
+        self,
+        account_id: int | str,
+        content: str,
+        metadata: Mapping[str, JsonValue],
+        *,
+        market: Market,
+    ) -> str: ...
+
+    def delete_all(self, account_id: int | str) -> int: ...
     def healthcheck(self) -> "HealthStatus": ...
 
 class MarketDataPort(Protocol):

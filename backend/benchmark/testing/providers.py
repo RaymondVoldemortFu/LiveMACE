@@ -64,6 +64,7 @@ class FakeMemoryStorePort:
         *,
         market: Market,
     ) -> tuple[MemoryRecord, ...]:
+        _require_market(market)
         records = self._records.get((str(account_id), market), [])
         matching = [item for item in records if query.lower() in item.content.lower()]
         return tuple(matching[:limit])
@@ -76,6 +77,7 @@ class FakeMemoryStorePort:
         *,
         market: Market,
     ) -> str:
+        _require_market(market)
         record_id = f"memory-{uuid4().hex}"
         record = MemoryRecord(
             id=record_id,
@@ -96,6 +98,11 @@ class FakeMemoryStorePort:
 
     def healthcheck(self) -> HealthStatus:
         return HealthStatus("ok", self.id)
+
+
+def _require_market(market: Market) -> None:
+    if not isinstance(market, Market):
+        raise TypeError("market must be Market")
 
 
 class FakeMarketDataPort:

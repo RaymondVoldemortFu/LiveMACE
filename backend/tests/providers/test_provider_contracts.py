@@ -373,6 +373,20 @@ def test_memory_adapter_preserves_account_market_namespace_and_rejects_bad_rows(
     assert caught.value.code == "PROVIDER_RESULT_INVALID"
 
 
+def test_memory_port_requires_explicit_market_enum():
+    adapter = LegacyMemoryStoreAdapter(SimpleNamespace())
+    fake = FakeMemoryStorePort()
+
+    with pytest.raises(TypeError, match="market must be Market"):
+        adapter.search(1, "q", 1, market="CRYPTO")
+    with pytest.raises(TypeError, match="market must be Market"):
+        adapter.add(1, "note", {}, market="US")
+    with pytest.raises(TypeError, match="market must be Market"):
+        fake.search(1, "q", 1, market="CRYPTO")
+    with pytest.raises(TypeError, match="market must be Market"):
+        fake.add(1, "note", {}, market="US")
+
+
 def test_sandbox_managed_lease_releases_once_even_on_error():
     released = []
     service = SimpleNamespace(
