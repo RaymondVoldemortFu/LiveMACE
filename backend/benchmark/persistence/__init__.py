@@ -26,6 +26,7 @@ from benchmark.persistence.repositories import (
     UserRepository,
 )
 from benchmark.persistence.uow import (
+    GuardedSessionAccess,
     SqlAlchemyUnitOfWork,
     UnitOfWork,
     UnitOfWorkFactory,
@@ -45,6 +46,7 @@ __all__ = [
     "UserRepository",
     "UnitOfWork",
     "UnitOfWorkFactory",
+    "GuardedSessionAccess",
     "SqlAlchemyUnitOfWork",
     "default_unit_of_work_factory",
 ]

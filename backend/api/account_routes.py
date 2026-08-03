@@ -2,6 +2,7 @@
 Account and Asset Curve API Routes (Cleaned)
 """
 
+import anyio
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.orm import Session
 from datetime import datetime, timezone, timedelta
@@ -327,10 +328,12 @@ async def create_new_account(payload: dict, db: Session = Depends(get_db)):
         
         logger.info(f"Account created successfully: ID={new_account.id}, name={new_account.name}, enable_rule_aware={new_account.enable_rule_aware}")
 
-        # Reset auto trading job after creating new account
+        # Reset auto trading job after creating new account. The reset runs
+        # synchronous market warmup, so it must execute in a worker thread to
+        # keep the event loop responsive.
         try:
             from services.scheduler import reset_auto_trading_job
-            reset_auto_trading_job()
+            await anyio.to_thread.run_sync(reset_auto_trading_job)
             logger.info("Auto trading job reset successfully after account creation")
         except Exception as e:
             logger.warning(f"Failed to reset auto trading job: {e}")
@@ -423,10 +426,11 @@ async def update_account_settings(account_id: int, payload: dict, db: Session = 
         db.refresh(account)
         logger.info(f"Account {account_id} updated successfully")
         
-        # Reset auto trading job after account update
+        # Reset auto trading job after account update. Runs in a worker
+        # thread because the reset performs synchronous market warmup.
         try:
             from services.scheduler import reset_auto_trading_job
-            reset_auto_trading_job()
+            await anyio.to_thread.run_sync(reset_auto_trading_job)
             logger.info("Auto trading job reset successfully after account update")
         except Exception as e:
             logger.warning(f"Failed to reset auto trading job: {e}")

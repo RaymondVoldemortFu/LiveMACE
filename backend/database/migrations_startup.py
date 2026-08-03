@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Callable, List, Optional
+from typing import Callable, Dict, List, Optional
 
 from sqlalchemy.engine import Connection, Engine
 
@@ -63,10 +63,33 @@ def _mysql_alter(statement: str) -> Callable[[Connection], None]:
     return apply
 
 
-def _never_applied(conn: Connection) -> bool:
-    # MySQL widenings are themselves idempotent; failure (already widened)
-    # is non-fatal, matching the old try/except-warn behavior in main.py.
-    return False
+def _mysql_columns_have_types(
+    table: str, expected: Dict[str, str]
+) -> Callable[[Connection], bool]:
+    """True when every column already has the target MySQL data type.
+
+    Checked through ``information_schema`` so the widening DDL runs only
+    when actually needed: repeating ``ALTER TABLE`` on every startup takes
+    metadata locks and triggers implicit commits even when it is a no-op.
+    """
+
+    def check(conn: Connection) -> bool:
+        from sqlalchemy import text
+
+        rows = conn.execute(
+            text(
+                "SELECT COLUMN_NAME, DATA_TYPE FROM information_schema.COLUMNS "
+                "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :table_name"
+            ),
+            {"table_name": table},
+        )
+        actual = {str(row[0]).lower(): str(row[1]).lower() for row in rows}
+        return all(
+            actual.get(column.lower()) == data_type.lower()
+            for column, data_type in expected.items()
+        )
+
+    return check
 
 
 def _trade_command_receipts_exists(conn: Connection) -> bool:
@@ -110,7 +133,7 @@ STARTUP_MIGRATIONS: List[StartupMigration] = [
     StartupMigration(
         migration_id="202606_ai_decision_reason_text",
         dialect="mysql",
-        is_applied=_never_applied,
+        is_applied=_mysql_columns_have_types("ai_decision_logs", {"reason": "text"}),
         apply=_mysql_alter(
             "ALTER TABLE ai_decision_logs MODIFY COLUMN reason TEXT NOT NULL"
         ),
@@ -119,7 +142,14 @@ STARTUP_MIGRATIONS: List[StartupMigration] = [
     StartupMigration(
         migration_id="202606_agent_traces_longtext",
         dialect="mysql",
-        is_applied=_never_applied,
+        is_applied=_mysql_columns_have_types(
+            "agent_traces",
+            {
+                "content": "longtext",
+                "tool_calls": "longtext",
+                "tool_output": "longtext",
+            },
+        ),
         apply=_mysql_alter(
             "ALTER TABLE agent_traces "
             "MODIFY COLUMN content LONGTEXT NULL, "

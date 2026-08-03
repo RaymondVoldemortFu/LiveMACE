@@ -8,7 +8,10 @@ from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.triggers.date import DateTrigger
 from sqlalchemy.orm import Session
 from typing import Dict, Set, Callable, Optional, List
+import functools
 import logging
+import threading
+import time
 from datetime import date, datetime, timezone, timedelta
 
 from database.connection import SessionLocal
@@ -51,34 +54,120 @@ def plan_first_and_recurring_runs(
     return None, recurring_start + timedelta(seconds=missed_intervals * interval_seconds)
 
 
+class SchedulerNotRunningError(RuntimeError):
+    """Raised when a job is added while the scheduler is not running.
+
+    The scheduler lifecycle is owned by the runtime bootstrap
+    (``benchmark.bootstrap``): only ``start_scheduler()`` may start it.
+    Business entry points must never start the scheduler implicitly.
+    """
+
+
 class TaskScheduler:
     """Unified task scheduler"""
-    
+
+    #: Bounded wait (seconds) for in-flight jobs to drain during shutdown.
+    DEFAULT_SHUTDOWN_TIMEOUT_SECONDS = 10.0
+
     def __init__(self):
         self.scheduler: Optional[BackgroundScheduler] = None
         self._started = False
         self._account_connections: Dict[int, Set] = {}  # track account connections
-        
+        # Cooperative cancellation signal observed by running jobs; set on
+        # shutdown so that jobs stop at their next check point.
+        self._cancel_event = threading.Event()
+        # In-flight job tracking used to provide a quiescence guarantee on
+        # shutdown: every scheduled job runs through _run_tracked_job.
+        self._inflight_condition = threading.Condition()
+        self._inflight_jobs = 0
+
     def start(self):
         """Start the scheduler"""
         if not self._started:
+            self._cancel_event.clear()
             self.scheduler = BackgroundScheduler()
             self.scheduler.start()
             self._started = True
             logger.info("Scheduler started")
     
-    def shutdown(self):
-        """Shutdown the scheduler"""
-        if self.scheduler and self.scheduler.running:
-            # wait=False ensures we don't block shutdown waiting for tasks to finish
-            self.scheduler.shutdown(wait=False)
-            self._started = False
-            logger.info("Scheduler shutdown")
+    def shutdown(self, timeout: Optional[float] = None) -> bool:
+        """Shutdown the scheduler with a quiescence guarantee.
+
+        Signals cooperative cancellation to running jobs, stops future
+        schedules, then waits up to ``timeout`` seconds for in-flight jobs
+        to finish. Returns True when no job is still running; returns False
+        (after logging an error) when running jobs could not be drained in
+        time — callers must not treat that as a clean stop.
+        """
+        if timeout is None:
+            timeout = self.DEFAULT_SHUTDOWN_TIMEOUT_SECONDS
+        if not (self.scheduler and self.scheduler.running):
+            return True
+
+        self._cancel_event.set()
+        self.scheduler.shutdown(wait=False)
+        self._started = False
+
+        deadline = time.monotonic() + max(timeout, 0.0)
+        with self._inflight_condition:
+            while self._inflight_jobs > 0:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                self._inflight_condition.wait(remaining)
+            still_running = self._inflight_jobs
+
+        if still_running:
+            logger.error(
+                "Scheduler shutdown incomplete: %s job(s) still running after %.1fs",
+                still_running,
+                timeout,
+            )
+            return False
+        # Drained cleanly: reset the cooperative cancel signal so job
+        # functions invoked directly afterwards (outside any scheduler run)
+        # are not spuriously cancelled by a stale flag.
+        self._cancel_event.clear()
+        logger.info("Scheduler shutdown")
+        return True
     
     def is_running(self) -> bool:
         """Check if scheduler is running"""
-        return self._started and self.scheduler and self.scheduler.running
-    
+        return bool(self._started and self.scheduler and self.scheduler.running)
+
+    def cancellation_requested(self) -> bool:
+        """True once shutdown has been requested; jobs should stop cooperatively."""
+        return self._cancel_event.is_set()
+
+    def _require_running(self, action: str) -> None:
+        if not self.is_running():
+            raise SchedulerNotRunningError(
+                f"cannot {action}: scheduler is not running "
+                "(scheduler startup is owned by the runtime bootstrap)"
+            )
+
+    def _track_job(self, task_func: Callable) -> Callable:
+        """Wrap a job so shutdown can observe and drain in-flight executions."""
+
+        @functools.wraps(task_func)
+        def _run_tracked_job(*args, **kwargs):
+            if self._cancel_event.is_set():
+                logger.info(
+                    "Skipping job %s: scheduler shutdown requested",
+                    getattr(task_func, "__name__", task_func),
+                )
+                return
+            with self._inflight_condition:
+                self._inflight_jobs += 1
+            try:
+                return task_func(*args, **kwargs)
+            finally:
+                with self._inflight_condition:
+                    self._inflight_jobs -= 1
+                    self._inflight_condition.notify_all()
+
+        return _run_tracked_job
+
     def add_account_snapshot_task(self, account_id: int, interval_seconds: int = 10):
         """
         Add snapshot update task for account
@@ -87,9 +176,8 @@ class TaskScheduler:
             account_id: Account ID
             interval_seconds: Update interval (seconds), default 10 seconds
         """
-        if not self.is_running():
-            self.start()
-            
+        self._require_running("add account snapshot task")
+
         job_id = f"snapshot_account_{account_id}"
         
         # Check if task already exists
@@ -98,7 +186,7 @@ class TaskScheduler:
             return
         
         self.scheduler.add_job(
-            func=self._execute_account_snapshot,
+            func=self._track_job(self._execute_account_snapshot),
             trigger=IntervalTrigger(seconds=interval_seconds),
             args=[account_id],
             id=job_id,
@@ -118,9 +206,8 @@ class TaskScheduler:
         Args:
             interval_seconds: Check interval (seconds), default 5 seconds
         """
-        if not self.is_running():
-            self.start()
-        
+        self._require_running("add margin monitor task")
+
         job_id = "margin_monitor"
         
         # Check if task already exists
@@ -129,7 +216,7 @@ class TaskScheduler:
             return
         
         self.scheduler.add_job(
-            func=self._check_margin_levels,
+            func=self._track_job(self._check_margin_levels),
             trigger=IntervalTrigger(seconds=interval_seconds),
             id=job_id,
             replace_existing=True,
@@ -148,9 +235,8 @@ class TaskScheduler:
         Args:
             interval_seconds: Snapshot interval (seconds), default 3600 (1 hour)
         """
-        if not self.is_running():
-            self.start()
-        
+        self._require_running("add database snapshot task")
+
         job_id = "database_snapshot_all_accounts"
         
         # Check if task already exists
@@ -159,7 +245,7 @@ class TaskScheduler:
             return
         
         self.scheduler.add_job(
-            func=self._create_database_snapshots,
+            func=self._track_job(self._create_database_snapshots),
             trigger=IntervalTrigger(seconds=interval_seconds),
             id=job_id,
             replace_existing=True,
@@ -207,11 +293,10 @@ class TaskScheduler:
             task_id: Task unique identifier
             *args, **kwargs: Parameters passed to task_func
         """
-        if not self.is_running():
-            self.start()
-            
+        self._require_running(f"add interval task {task_id!r}")
+
         self.scheduler.add_job(
-            func=task_func,
+            func=self._track_job(task_func),
             trigger=IntervalTrigger(seconds=interval_seconds, start_date=start_date),
             args=args,
             kwargs=kwargs,
@@ -233,11 +318,10 @@ class TaskScheduler:
         **kwargs,
     ):
         """Add one-off execution task at a fixed datetime."""
-        if not self.is_running():
-            self.start()
+        self._require_running(f"add date task {task_id!r}")
 
         self.scheduler.add_job(
-            func=task_func,
+            func=self._track_job(task_func),
             trigger=DateTrigger(run_date=run_date),
             args=args,
             kwargs=kwargs,
@@ -572,17 +656,42 @@ task_scheduler = TaskScheduler()
 
 # Convenience functions
 def start_scheduler():
-    """Start global scheduler"""
+    """Start global scheduler.
+
+    This is the only sanctioned way to start the global scheduler; it is
+    invoked by the runtime bootstrap's ``scheduler`` task descriptor.
+    """
     task_scheduler.start()
 
 
 def stop_scheduler():
-    """Stop global scheduler"""
-    task_scheduler.shutdown()
+    """Stop global scheduler; fail loudly when jobs could not be drained."""
+    if not task_scheduler.shutdown():
+        raise RuntimeError(
+            "scheduler shutdown incomplete: running jobs did not stop within "
+            "the shutdown timeout"
+        )
+
+
+def shutdown_cancellation_requested() -> bool:
+    """Cooperative cancellation checkpoint for long-running scheduled jobs."""
+    return task_scheduler.cancellation_requested()
 
 
 def add_account_snapshot_job(account_id: int, interval_seconds: int = 10):
-    """Convenience function to add snapshot task for account"""
+    """Add snapshot task for an account if the background runtime is enabled.
+
+    Business entry points (e.g. WebSocket registration) may only request job
+    updates from an already-running scheduler; when background tasks are
+    disabled (NO_BACKGROUND) the request is skipped explicitly.
+    """
+    if not task_scheduler.is_running():
+        logger.info(
+            "Scheduler not running (background tasks disabled); "
+            "skipping snapshot job for account %s",
+            account_id,
+        )
+        return
     task_scheduler.add_account_snapshot_task(account_id, interval_seconds)
 
 
@@ -688,7 +797,20 @@ def _ensure_market_data_ready() -> None:
 
 
 def reset_auto_trading_job():
-    """Reset the auto trading job after account configuration changes"""
+    """Reset the auto trading job after account configuration changes.
+
+    Requires an already-running scheduler: the scheduler lifecycle is owned
+    by the runtime bootstrap, so when background tasks are disabled
+    (NO_BACKGROUND) this request is skipped explicitly instead of implicitly
+    starting the global scheduler.
+    """
+    if not task_scheduler.is_running():
+        logger.info(
+            "Scheduler not running (background tasks disabled); "
+            "skipping auto trading job reset"
+        )
+        return
+
     from services.trading_commands import (
         AI_TRADE_JOB_ID,
         BASELINE_TRADE_JOB_ID,
@@ -747,11 +869,6 @@ def reset_auto_trading_job():
             # Ensure market data is ready before scheduling trading tasks
             # This can take time, so we do it in this background thread
             _ensure_market_data_ready()
-
-            # Ensure scheduler is started
-            if not task_scheduler.is_running():
-                task_scheduler.start()
-                logger.info("Started scheduler for auto trading job reset")
 
             # Remove existing auto trading job if it exists
             if task_scheduler.scheduler and task_scheduler.scheduler.get_job(AI_TRADE_JOB_ID):

@@ -159,9 +159,19 @@ def _load_baseline_accounts(db: Session) -> List[Account]:
     ]
 
 
+def _shutdown_requested() -> bool:
+    """Cooperative cancellation checkpoint (scheduler shutdown in progress)."""
+    from services.scheduler import shutdown_cancellation_requested
+
+    return shutdown_cancellation_requested()
+
+
 def _run_baseline_accounts(db: Session, accounts: List[Account], prices: Dict[str, float]) -> None:
     now = datetime.now(timezone.utc)
     for account in accounts:
+        if _shutdown_requested():
+            logger.info("Scheduler shutdown requested; stopping baseline trading loop early")
+            return
         agent_type = getattr(account, "agent_type", "react") or "react"
         agent_type = str(agent_type).strip().lower()
         if agent_type == "buy_hold":
@@ -220,6 +230,12 @@ def _collect_account_decision(
     Collect agent decision for one account in an isolated DB session.
     This is safe to run in worker threads.
     """
+    if _shutdown_requested():
+        logger.info(
+            "Scheduler shutdown requested; skipping decision collection for account %s",
+            account_id,
+        )
+        return None
     db = SessionLocal()
     try:
         account = get_account(db, account_id)
@@ -356,6 +372,13 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
                 }
                 for fut in as_completed(future_map):
                     account_id = future_map[fut]
+                    if _shutdown_requested():
+                        logger.info(
+                            "Scheduler shutdown requested; cancelling remaining AI decision workers"
+                        )
+                        for pending in future_map:
+                            pending.cancel()
+                        break
                     try:
                         result = fut.result()
                         if result:

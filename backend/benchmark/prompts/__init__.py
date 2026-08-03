@@ -19,7 +19,11 @@ from .protocol import (
 )
 from .registry import PromptRegistry, PromptSourcePriority
 from .renderer import MAX_RENDERED_CHARACTERS
-from .validation import PROMPT_FILE_MAX_BYTES, validate_prompt_directory
+from .validation import (
+    PROMPT_FILE_MAX_BYTES,
+    parse_prompt_directory,
+    validate_prompt_directory,
+)
 
 __all__ = [
     "PromptSpec",
@@ -40,5 +44,6 @@ __all__ = [
     "PROMPT_FILE_MAX_BYTES",
     "MAX_RENDERED_CHARACTERS",
     "load_prompt_directory",
+    "parse_prompt_directory",
     "validate_prompt_directory",
 ]

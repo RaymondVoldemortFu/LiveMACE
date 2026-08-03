@@ -122,6 +122,17 @@ class LegacyMarketDataAdapter(MarketDataPort):
                 provider_id=self.id,
                 details={"operation": "get_market_status"},
             )
+        # An error payload means the market data provider failed; it must not
+        # be reported as a normal closed market, otherwise callers cannot
+        # distinguish a real closure from a provider outage.
+        if raw.get("error") is not None or raw.get("market_status") == "ERROR":
+            raise ProviderError(
+                "Market provider operation failed: get_market_status",
+                code="PROVIDER_OPERATION_FAILED",
+                retryable=True,
+                provider_id=self.id,
+                details={"operation": "get_market_status"},
+            )
         reason = raw.get("reason") or raw.get("message")
         if reason is not None and not isinstance(reason, str):
             raise ProviderError(

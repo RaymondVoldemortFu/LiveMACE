@@ -16,7 +16,12 @@ from sqlalchemy.orm import Session
 
 from benchmark.contracts import Market, TradeCommand, TradeCommandResult, to_jsonable
 from benchmark.contracts.errors import TradeGatewayError
-from benchmark.persistence import UnitOfWork, UnitOfWorkFactory, default_unit_of_work_factory
+from benchmark.persistence import (
+    GuardedSessionAccess,
+    UnitOfWork,
+    UnitOfWorkFactory,
+    default_unit_of_work_factory,
+)
 from benchmark.infrastructure.market.symbols import resolve_symbol_market
 
 from .commands import (
@@ -418,9 +423,11 @@ def _execute_legacy(session: Session, command: TradeCommand) -> Mapping[str, Any
     )
 
 
-def _session_from_uow(uow: UnitOfWork) -> Session:
+def _session_from_uow(uow: UnitOfWork) -> Session | GuardedSessionAccess:
     session = getattr(uow, "session", None)
-    if not isinstance(session, Session):
+    # The UoW hands out a thread-guarded proxy (every access re-checks the
+    # owner thread); the gateway always uses it on that same thread.
+    if not isinstance(session, (Session, GuardedSessionAccess)):
         raise TradeGatewayError(
             "Trade gateway requires a synchronous SQLAlchemy session adapter",
             code="TRADE_UOW_SESSION_UNAVAILABLE",

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import fields, is_dataclass, dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -176,7 +177,13 @@ class DecisionContext:
 def to_jsonable(value: Any) -> JsonValue:
     """Convert public DTO values to a deterministic JSON-compatible structure."""
 
-    if value is None or isinstance(value, (bool, int, float, str)):
+    if isinstance(value, float):
+        # NaN/Infinity are not valid JSON values; letting them through would
+        # break cross-language parsing of DTOs, events and cache entries.
+        if not math.isfinite(value):
+            raise ValueError(f"non-finite float is not a valid JSON value: {value!r}")
+        return value
+    if value is None or isinstance(value, (bool, int, str)):
         return value
     if isinstance(value, Decimal):
         return str(value)

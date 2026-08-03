@@ -386,8 +386,13 @@ class ContainerService:
             self._condition.notify_all()
 
     def _get_or_recover_container(self, account_id: int):
+        # The whole recovery runs inside one ownership critical section (the
+        # condition lock is re-entrant), so a concurrent release cannot
+        # interleave between state inspection and the recovery lease. The
+        # only place the lock can be dropped is lease_container's capacity
+        # wait, which is why the final decision below is taken from the
+        # *live* lease set instead of a snapshot taken before leasing.
         with self._condition:
-            had_existing_lease = bool(self._active_lease_ids.get(account_id))
             container = self.active_containers.get(account_id)
             if container and self._is_container_healthy(container):
                 return container
@@ -396,21 +401,23 @@ class ContainerService:
             # exited/dead containers occupying Docker resources.
             if container:
                 self._remove_container_quietly(container)
+                self.active_containers.pop(account_id, None)
 
-            # Try to recover by leasing a fresh one transparently
-            self.active_containers.pop(account_id, None)
-        recovery_lease_id = (
-            f"internal-recovery-{time.monotonic_ns()}"
-            if had_existing_lease
-            else "legacy-exclusive-lease"
-        )
-        leased_id = self.lease_container(account_id, recovery_lease_id)
-        if not leased_id:
-            return None
-        with self._condition:
-            lease_ids = self._active_lease_ids.get(account_id)
-            if had_existing_lease and lease_ids is not None:
-                lease_ids.discard(recovery_lease_id)
+            # Recover by leasing a fresh container under an internal lease.
+            recovery_lease_id = f"internal-recovery-{time.monotonic_ns()}"
+            leased_id = self.lease_container(account_id, recovery_lease_id)
+            if not leased_id:
+                return None
+
+            lease_ids = self._active_lease_ids[account_id]
+            lease_ids.discard(recovery_lease_id)
+            if not lease_ids:
+                # No external lease survived (either the account never had
+                # one, or the last one was released while waiting for pool
+                # capacity). Hold the container under the legacy exclusive
+                # lease so the invariant "active container => non-empty
+                # lease set" holds and the legacy release path still owns it.
+                lease_ids.add("legacy-exclusive-lease")
             return self.active_containers.get(account_id)
 
     def execute_command(self, account_id: int, cmd: str) -> Tuple[int, str]:

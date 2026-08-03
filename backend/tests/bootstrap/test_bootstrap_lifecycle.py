@@ -214,8 +214,14 @@ def test_auto_trading_setup_failure_propagates_instead_of_becoming_running(
         lambda: (_ for _ in ()).throw(RuntimeError("market unavailable")),
     )
 
-    with pytest.raises(RuntimeError, match="market unavailable"):
-        scheduler.reset_auto_trading_job()
+    # In the bootstrap order the scheduler task is running before
+    # ai_auto_trading starts; reproduce that precondition here.
+    scheduler.task_scheduler.start()
+    try:
+        with pytest.raises(RuntimeError, match="market unavailable"):
+            scheduler.reset_auto_trading_job()
+    finally:
+        assert scheduler.task_scheduler.shutdown()
 
 
 @pytest.mark.slow
@@ -230,6 +236,7 @@ def test_app_import_and_no_background_acceptance(tmp_path):
 import os, sys
 sys.path.insert(0, r'{BACKEND_DIR}')
 os.environ['DATABASE_URL'] = 'sqlite:///{db_path}'
+os.environ['ENABLE_ACCOUNT_CREATION_API'] = 'true'
 os.environ.pop('ALPACA_KEY', None)
 os.environ.pop('ALPACA_SECRET', None)
 
@@ -248,6 +255,19 @@ with TestClient(app) as client:
     assert len(handle.registry.status()) == 0, 'NO_BACKGROUND registered runtime tasks'
     sched = task_scheduler.scheduler
     assert not (sched and sched.running), 'NO_BACKGROUND started the scheduler'
+
+    # Business entry points must not implicitly start the scheduler.
+    resp = client.post('/api/account/', json={{'name': 'nb-entry-test'}})
+    assert resp.status_code == 200, resp.text
+    sched = task_scheduler.scheduler
+    assert not (sched and sched.running), 'account creation started the scheduler'
+
+    from api.ws import manager
+    fake_ws = object()
+    manager.register(7, fake_ws)
+    sched = task_scheduler.scheduler
+    assert not (sched and sched.running), 'WS registration started the scheduler'
+    manager.unregister(7, fake_ws)
 assert os.path.exists('{db_path}'), 'schema bootstrap did not run'
 print('ACCEPTANCE_OK')
 """

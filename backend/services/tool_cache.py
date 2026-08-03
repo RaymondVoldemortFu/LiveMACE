@@ -2,6 +2,7 @@ import contextvars
 import hashlib
 import json
 import logging
+import math
 import uuid
 from contextlib import contextmanager
 from typing import Any, Dict, Iterator, Optional
@@ -9,6 +10,17 @@ from typing import Any, Dict, Iterator, Optional
 from config.tool_cache_config import ToolCacheConfig
 
 logger = logging.getLogger("tool_cache")
+
+
+def _reject_json_constant(name: str) -> float:
+    raise ValueError(f"non-standard JSON constant {name!r} is not allowed")
+
+
+def _parse_finite_float(text: str) -> float:
+    result = float(text)
+    if not math.isfinite(result):
+        raise ValueError(f"non-finite JSON number {text!r} is not allowed")
+    return result
 
 _current_round_id: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
     "tool_cache_round_id",
@@ -81,7 +93,14 @@ class RedisToolCache:
 
     @staticmethod
     def _stable_json(value: Dict[str, Any]) -> str:
-        return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+        return json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+            allow_nan=False,
+        )
 
     def _build_data_key(self, tool_name: str, args: Dict[str, Any], round_id: str) -> str:
         payload = self._stable_json({"tool": tool_name, "args": args, "round_id": round_id})
@@ -125,7 +144,11 @@ class RedisToolCache:
                 if not suppress_miss_log:
                     logger.debug(f"Tool cache miss: tool={tool_name} round={effective_round_id}")
                 return None
-            value = json.loads(raw)
+            value = json.loads(
+                raw,
+                parse_constant=_reject_json_constant,
+                parse_float=_parse_finite_float,
+            )
             self._increment_round_stat(client, effective_round_id, "hit")
             logger.debug(f"Tool cache hit: tool={tool_name} round={effective_round_id}")
             return value
@@ -149,7 +172,7 @@ class RedisToolCache:
         key = self._build_data_key(tool_name, args, effective_round_id)
         index_key = self._build_round_index_key(effective_round_id)
         try:
-            serialized = json.dumps(value, ensure_ascii=False, default=str)
+            serialized = json.dumps(value, ensure_ascii=False, default=str, allow_nan=False)
             ttl = max(1, int(ttl_seconds))
             client.setex(key, ttl, serialized)
             client.sadd(index_key, key)

@@ -208,6 +208,143 @@ def test_invalid_config_schema_is_reported(tmp_path):
     assert {issue.code for issue in report.errors} == {"CONFIG_SCHEMA_INVALID"}
 
 
+def _write_two_prompt_directory_extension(
+    root,
+    *,
+    second_prompt_id="com.example.other",
+    first_profile=None,
+    second_profile=None,
+):
+    def _index_text(prompt_id, profile):
+        lines = [
+            "api_version: 1",
+            "prompts:",
+            f"  - id: {prompt_id}",
+            "    version: 1.0.0",
+            "    file: system.txt",
+        ]
+        if profile is not None:
+            profile_id, profile_version = profile
+            lines += [
+                "profiles:",
+                f"  - id: {profile_id}",
+                f"    version: {profile_version}",
+                "    slots:",
+                "      system:",
+                f"        prompt_id: {prompt_id}",
+            ]
+        return "\n".join(lines) + "\n"
+
+    for name, prompt_id, profile in (
+        ("prompts_a", "com.example.system", first_profile),
+        ("prompts_b", second_prompt_id, second_profile),
+    ):
+        directory = root / name
+        directory.mkdir()
+        (directory / "system.txt").write_text("Static Prompt", encoding="utf-8")
+        (directory / "index.yaml").write_text(
+            _index_text(prompt_id, profile), encoding="utf-8"
+        )
+
+    (root / MANIFEST_FILENAME).write_text(
+        "api_version: 1\n"
+        "id: com.example.extension\n"
+        "version: 1.0.0\n"
+        "name: Example\n"
+        "components:\n"
+        "  prompts:\n"
+        "    - directory: prompts_a\n"
+        "      index: prompts_a/index.yaml\n"
+        "    - directory: prompts_b\n"
+        "      index: prompts_b/index.yaml\n",
+        encoding="utf-8",
+    )
+
+
+def test_distinct_prompt_ids_across_directories_are_valid(tmp_path):
+    _write_two_prompt_directory_extension(tmp_path)
+
+    assert validate_extension_directory(tmp_path).valid is True
+
+
+def test_duplicate_prompt_id_across_directories_is_rejected(tmp_path):
+    _write_two_prompt_directory_extension(
+        tmp_path, second_prompt_id="com.example.system"
+    )
+
+    report = validate_extension_directory(tmp_path)
+
+    assert report.valid is False
+    conflicts = [
+        issue
+        for issue in report.errors
+        if issue.code == "PROMPT_ID_CROSS_DIRECTORY_CONFLICT"
+    ]
+    assert len(conflicts) == 1
+    assert "prompts_a" in conflicts[0].message
+    assert "prompts_b" in conflicts[0].message
+
+
+def test_duplicate_prompt_profile_across_directories_is_rejected(tmp_path):
+    _write_two_prompt_directory_extension(
+        tmp_path,
+        first_profile=("com.example.profile", "1.0.0"),
+        second_profile=("com.example.profile", "1.0.0"),
+    )
+
+    report = validate_extension_directory(tmp_path)
+
+    assert report.valid is False
+    conflicts = [
+        issue
+        for issue in report.errors
+        if issue.code == "PROMPT_PROFILE_CROSS_DIRECTORY_CONFLICT"
+    ]
+    assert len(conflicts) == 1
+    assert "prompts_a" in conflicts[0].message
+    assert "prompts_b" in conflicts[0].message
+
+
+def test_same_profile_id_with_different_versions_is_valid(tmp_path):
+    _write_two_prompt_directory_extension(
+        tmp_path,
+        first_profile=("com.example.profile", "1.0.0"),
+        second_profile=("com.example.profile", "2.0.0"),
+    )
+
+    assert validate_extension_directory(tmp_path).valid is True
+
+
+def test_manifest_symlink_escaping_extension_root_is_rejected(tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    real_manifest = outside / "real-manifest.yaml"
+    real_manifest.write_text(
+        "api_version: 1\n"
+        "id: com.example.extension\n"
+        "version: 1.0.0\n"
+        "name: Example\n",
+        encoding="utf-8",
+    )
+    extension_root = tmp_path / "extension"
+    extension_root.mkdir()
+    (extension_root / MANIFEST_FILENAME).symlink_to(real_manifest)
+
+    report = validate_extension_directory(extension_root)
+
+    assert report.valid is False
+    assert report.errors[0].code == "MANIFEST_PATH_INVALID"
+
+
+def test_manifest_symlink_inside_extension_root_is_allowed(tmp_path):
+    _write_prompt_only_extension(tmp_path)
+    real_manifest = tmp_path / "real-manifest.yaml"
+    (tmp_path / MANIFEST_FILENAME).rename(real_manifest)
+    (tmp_path / MANIFEST_FILENAME).symlink_to(real_manifest)
+
+    assert validate_extension_directory(tmp_path).valid is True
+
+
 def test_manifest_rejects_non_json_yaml_values(tmp_path):
     _write_prompt_only_extension(tmp_path)
     manifest = tmp_path / MANIFEST_FILENAME

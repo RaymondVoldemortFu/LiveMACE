@@ -130,6 +130,31 @@ def test_uow_rejects_cross_thread_use(session_factory):
     assert errors and "thread" in errors[0]
 
 
+def test_session_escape_hatch_cannot_bypass_cross_thread_guard(session_factory):
+    """A session proxy obtained on the owner thread must reject use from
+    any other thread on every operation, not only at property access."""
+    errors = []
+    results = []
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        session_proxy = uow.session  # obtained on the owner thread
+
+        def use_from_other_thread():
+            try:
+                results.append(session_proxy.execute(text("SELECT 1")).scalar())
+            except RuntimeError as exc:
+                errors.append(str(exc))
+
+        thread = threading.Thread(target=use_from_other_thread)
+        thread.start()
+        thread.join()
+
+        # Same-thread use keeps working for legacy call sites.
+        assert session_proxy.execute(text("SELECT 1")).scalar() == 1
+
+    assert results == [], "bare session escaped the cross-thread guard"
+    assert errors and "thread" in errors[0]
+
+
 def test_repository_cannot_bypass_uow_cross_thread_guard(session_factory):
     errors = []
     with SqlAlchemyUnitOfWork(session_factory) as uow:
@@ -249,3 +274,107 @@ def test_fresh_schema_needs_no_sqlite_migrations():
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(bind=engine)
     assert run_startup_migrations(engine) == []
+
+
+class _FakeMySQLConnection:
+    """Answers information_schema column-type queries and records DDL."""
+
+    def __init__(self, column_types):
+        # {table: {column: data_type}}
+        self.column_types = column_types
+        self.executed_ddl = []
+
+    def execute(self, statement, params=None):
+        sql = str(statement)
+        if "information_schema.COLUMNS" in sql:
+            table = params["table_name"]
+            return [
+                (name, data_type)
+                for name, data_type in self.column_types.get(table, {}).items()
+            ]
+        self.executed_ddl.append(sql)
+        return []
+
+
+class _FakeMySQLEngine:
+    def __init__(self, conn):
+        self._conn = conn
+        from types import SimpleNamespace
+
+        self.dialect = SimpleNamespace(name="mysql")
+
+    def begin(self):
+        conn = self._conn
+
+        class _Ctx:
+            def __enter__(self):
+                return conn
+
+            def __exit__(self, *exc):
+                return False
+
+        return _Ctx()
+
+
+def _mysql_migrations():
+    from database.migrations_startup import STARTUP_MIGRATIONS
+
+    return [m for m in STARTUP_MIGRATIONS if m.dialect == "mysql"]
+
+
+def test_mysql_migrations_skip_ddl_when_columns_already_widened():
+    from database.migrations_startup import run_startup_migrations
+
+    conn = _FakeMySQLConnection(
+        {
+            "ai_decision_logs": {"reason": "text"},
+            "agent_traces": {
+                "content": "longtext",
+                "tool_calls": "longtext",
+                "tool_output": "longtext",
+            },
+        }
+    )
+    engine = _FakeMySQLEngine(conn)
+
+    applied = run_startup_migrations(engine, migrations=_mysql_migrations())
+
+    assert applied == []
+    assert conn.executed_ddl == [], "ALTER TABLE ran even though schema is current"
+
+
+def test_mysql_migrations_apply_once_then_second_startup_is_a_noop():
+    from database.migrations_startup import run_startup_migrations
+
+    conn = _FakeMySQLConnection(
+        {
+            "ai_decision_logs": {"reason": "varchar"},
+            "agent_traces": {
+                "content": "text",
+                "tool_calls": "text",
+                "tool_output": "text",
+            },
+        }
+    )
+    engine = _FakeMySQLEngine(conn)
+
+    applied = run_startup_migrations(engine, migrations=_mysql_migrations())
+    assert applied == [
+        "202606_ai_decision_reason_text",
+        "202606_agent_traces_longtext",
+    ]
+    assert any("ALTER TABLE ai_decision_logs" in d for d in conn.executed_ddl)
+    assert any("ALTER TABLE agent_traces" in d for d in conn.executed_ddl)
+
+    # Simulate the widened schema after the first startup: the second
+    # startup must not run any DDL again.
+    conn.column_types["ai_decision_logs"]["reason"] = "text"
+    conn.column_types["agent_traces"] = {
+        "content": "longtext",
+        "tool_calls": "longtext",
+        "tool_output": "longtext",
+    }
+    conn.executed_ddl.clear()
+
+    assert run_startup_migrations(engine, migrations=_mysql_migrations()) == []
+    assert conn.executed_ddl == []

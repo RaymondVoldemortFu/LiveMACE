@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from typing import Any, Mapping
 
 from benchmark.contracts import JsonValue, to_jsonable
@@ -190,8 +191,14 @@ class LegacyLLMClientAdapter(LLMClientPort):
             )
         call_id, name, arguments_text = parser(value)
         try:
-            arguments = json.loads(arguments_text)
-        except (TypeError, json.JSONDecodeError) as exc:
+            # Strict JSON: reject NaN/Infinity literals and non-finite
+            # numbers such as 1e999 instead of silently producing inf.
+            arguments = json.loads(
+                arguments_text,
+                parse_constant=_reject_json_constant,
+                parse_float=_parse_finite_float,
+            )
+        except (TypeError, ValueError) as exc:
             raise ProviderError(
                 "LLM tool-call arguments are not valid JSON",
                 code="LLM_TOOL_ARGUMENTS_INVALID",
@@ -206,6 +213,17 @@ class LegacyLLMClientAdapter(LLMClientPort):
                 details={"tool_name": name},
             )
         return LLMToolCall(id=call_id, name=name, arguments=arguments)
+
+
+def _reject_json_constant(name: str) -> float:
+    raise ValueError(f"non-standard JSON constant {name!r} is not allowed")
+
+
+def _parse_finite_float(text: str) -> float:
+    result = float(text)
+    if not math.isfinite(result):
+        raise ValueError(f"non-finite JSON number {text!r} is not allowed")
+    return result
 
 
 def _llm_failure(provider_id: str, operation: str, exc: Exception) -> ProviderError:

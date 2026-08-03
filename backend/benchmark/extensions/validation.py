@@ -9,7 +9,7 @@ from jsonschema import Draft202012Validator, SchemaError, validators
 
 from benchmark._structured import StructuredDataError, load_structured_file
 from benchmark.contracts import ValidationIssue, ValidationReport
-from benchmark.prompts import validate_prompt_directory
+from benchmark.prompts import parse_prompt_directory
 
 from .manifest import MANIFEST_FILENAME, ExtensionManifest, _parse_manifest
 from .paths import resolve_extension_path
@@ -79,6 +79,12 @@ def validate_manifest(
             )
         )
 
+    # Prompt ids and profile (id, version) keys must be unique across *all*
+    # declared Prompt directories: they end up in one flat registry, where a
+    # same-priority conflict would only surface at extension load time.
+    # id -> (declaring manifest entry, declared directory)
+    seen_prompt_ids: dict[str, tuple[str, str]] = {}
+    seen_profile_keys: dict[tuple[str, str], tuple[str, str]] = {}
     for position, prompt in enumerate(manifest.components.prompts):
         prefix = f"components.prompts.{position}"
         try:
@@ -101,7 +107,7 @@ def validate_manifest(
                 _issue(f"{prefix}.index", str(exc), "PROMPT_INDEX_PATH_INVALID")
             )
             continue
-        prompt_report = validate_prompt_directory(prompt_root, index_path)
+        directory_data, prompt_errors = parse_prompt_directory(prompt_root, index_path)
         errors.extend(
             ValidationIssue(
                 path=f"{prefix}.{issue.path}" if issue.path else prefix,
@@ -109,8 +115,38 @@ def validate_manifest(
                 validator=issue.validator,
                 code=issue.code,
             )
-            for issue in prompt_report.errors
+            for issue in prompt_errors
         )
+        if directory_data is None:
+            continue
+        for prompt_file in directory_data.prompts:
+            first_entry, first_directory = seen_prompt_ids.setdefault(
+                prompt_file.spec.id, (prefix, prompt.directory)
+            )
+            if first_entry != prefix:
+                errors.append(
+                    _issue(
+                        f"{prefix}.directory",
+                        f"Prompt id {prompt_file.spec.id!r} is declared by both "
+                        f"{first_directory!r} and {prompt.directory!r}",
+                        "PROMPT_ID_CROSS_DIRECTORY_CONFLICT",
+                    )
+                )
+        for profile in directory_data.profiles:
+            key = (profile.id, profile.version)
+            first_entry, first_directory = seen_profile_keys.setdefault(
+                key, (prefix, prompt.directory)
+            )
+            if first_entry != prefix:
+                errors.append(
+                    _issue(
+                        f"{prefix}.directory",
+                        f"Prompt profile {profile.id!r} version {profile.version!r} "
+                        f"is declared by both {first_directory!r} and "
+                        f"{prompt.directory!r}",
+                        "PROMPT_PROFILE_CROSS_DIRECTORY_CONFLICT",
+                    )
+                )
 
     return ValidationReport(valid=not errors, errors=tuple(errors))
 
@@ -125,7 +161,18 @@ def validate_extension_directory(root: Path) -> ValidationReport:
             valid=False,
             errors=(_issue("root", str(exc), "EXTENSION_ROOT_INVALID"),),
         )
-    manifest_path = extension_root / MANIFEST_FILENAME
+    try:
+        # Same controlled resolution as every other extension resource: a
+        # manifest that is a symlink escaping the extension root is rejected
+        # instead of being read from outside the package.
+        manifest_path = resolve_extension_path(
+            extension_root, MANIFEST_FILENAME, must_exist=False
+        )
+    except (OSError, ValueError) as exc:
+        return ValidationReport(
+            valid=False,
+            errors=(_issue("manifest", str(exc), "MANIFEST_PATH_INVALID"),),
+        )
     manifest, parse_errors = _parse_manifest(manifest_path)
     if manifest is None:
         return ValidationReport(valid=False, errors=parse_errors)

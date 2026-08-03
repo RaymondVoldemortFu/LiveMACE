@@ -110,7 +110,7 @@ class SqlAlchemyUnitOfWork:
             SqlAlchemyUserRepository,
         )
 
-        guarded_session = _GuardedSessionAccess(self._active_session)
+        guarded_session = GuardedSessionAccess(self._active_session)
         self.accounts = SqlAlchemyAccountRepository(guarded_session)
         self.positions = SqlAlchemyPositionRepository(guarded_session)
         self.orders = SqlAlchemyOrderRepository(guarded_session)
@@ -150,13 +150,19 @@ class SqlAlchemyUnitOfWork:
         self._active_session().rollback()
 
     @property
-    def session(self) -> Session:
+    def session(self) -> "GuardedSessionAccess":
         """Escape hatch for legacy call sites during migration.
 
         New code goes through the repository attributes; direct session
-        use should shrink to zero as call sites migrate.
+        use should shrink to zero as call sites migrate. The returned
+        proxy re-checks the owner thread on *every* attribute access, so
+        holding on to it cannot bypass the cross-thread guard the way a
+        bare ``Session`` reference could.
         """
-        return self._active_session()
+        # Validate context and calling thread eagerly, matching the old
+        # behavior of raising at property access time.
+        self._active_session()
+        return GuardedSessionAccess(self._active_session)
 
 
 def default_unit_of_work_factory(**session_kwargs: Any) -> UnitOfWorkFactory:
@@ -174,7 +180,7 @@ def default_unit_of_work_factory(**session_kwargs: Any) -> UnitOfWorkFactory:
     return _factory
 
 
-class _GuardedSessionAccess:
+class GuardedSessionAccess:
     """Resolve every repository Session access through the UoW guard."""
 
     def __init__(self, provider: Callable[[], Session]) -> None:
