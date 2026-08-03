@@ -98,14 +98,31 @@ class TaskScheduler:
         to finish. Returns True when no job is still running; returns False
         (after logging an error) when running jobs could not be drained in
         time — callers must not treat that as a clean stop.
+
+        The cancel signal stays set after shutdown (whether it drained or
+        not) and is only reset by the next ``start()``: jobs that APScheduler
+        already submitted but that begin running after the drain check must
+        still observe the signal and skip, otherwise "clean shutdown" would
+        be a lie. Repeated calls keep honouring jobs that are still running
+        from a previous timed-out shutdown instead of reporting success just
+        because the underlying scheduler object already stopped.
         """
         if timeout is None:
             timeout = self.DEFAULT_SHUTDOWN_TIMEOUT_SECONDS
-        if not (self.scheduler and self.scheduler.running):
-            return True
 
-        self._cancel_event.set()
-        self.scheduler.shutdown(wait=False)
+        with self._inflight_condition:
+            if not self._started and self._inflight_jobs == 0:
+                # Never started (or already drained by a previous shutdown):
+                # nothing to cancel or wait for.
+                return True
+            # Set the cancel signal inside the same critical section that
+            # jobs use for their check-and-register step, so a job either
+            # registered before this point (and is awaited below) or is
+            # guaranteed to observe the signal and skip.
+            self._cancel_event.set()
+
+        if self.scheduler and self.scheduler.running:
+            self.scheduler.shutdown(wait=False)
         self._started = False
 
         deadline = time.monotonic() + max(timeout, 0.0)
@@ -124,10 +141,6 @@ class TaskScheduler:
                 timeout,
             )
             return False
-        # Drained cleanly: reset the cooperative cancel signal so job
-        # functions invoked directly afterwards (outside any scheduler run)
-        # are not spuriously cancelled by a stale flag.
-        self._cancel_event.clear()
         logger.info("Scheduler shutdown")
         return True
     
@@ -151,13 +164,17 @@ class TaskScheduler:
 
         @functools.wraps(task_func)
         def _run_tracked_job(*args, **kwargs):
-            if self._cancel_event.is_set():
-                logger.info(
-                    "Skipping job %s: scheduler shutdown requested",
-                    getattr(task_func, "__name__", task_func),
-                )
-                return
+            # Cancel check and in-flight registration must be atomic with
+            # shutdown's cancel signal: otherwise a job could pass the check,
+            # pause before registering, and keep running after shutdown
+            # reported a clean (zero in-flight) stop.
             with self._inflight_condition:
+                if self._cancel_event.is_set():
+                    logger.info(
+                        "Skipping job %s: scheduler shutdown requested",
+                        getattr(task_func, "__name__", task_func),
+                    )
+                    return
                 self._inflight_jobs += 1
             try:
                 return task_func(*args, **kwargs)

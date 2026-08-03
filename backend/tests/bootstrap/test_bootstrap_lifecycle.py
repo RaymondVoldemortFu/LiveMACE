@@ -206,6 +206,7 @@ def test_auto_trading_setup_failure_propagates_instead_of_becoming_running(
     monkeypatch,
 ):
     from services import scheduler
+    from services.scheduler import TaskScheduler
 
     monkeypatch.setenv("AI_TRADE_FIRST_EXECUTION_TIME", "2026-08-02T08:00:00+08:00")
     monkeypatch.setattr(
@@ -213,15 +214,20 @@ def test_auto_trading_setup_failure_propagates_instead_of_becoming_running(
         "_ensure_market_data_ready",
         lambda: (_ for _ in ()).throw(RuntimeError("market unavailable")),
     )
+    # Use an isolated scheduler instance: shutting one down leaves its cancel
+    # signal set until the next start(), and the global singleton must not
+    # leak that state into other tests.
+    fresh = TaskScheduler()
+    monkeypatch.setattr(scheduler, "task_scheduler", fresh)
 
     # In the bootstrap order the scheduler task is running before
     # ai_auto_trading starts; reproduce that precondition here.
-    scheduler.task_scheduler.start()
+    fresh.start()
     try:
         with pytest.raises(RuntimeError, match="market unavailable"):
             scheduler.reset_auto_trading_job()
     finally:
-        assert scheduler.task_scheduler.shutdown()
+        assert fresh.shutdown()
 
 
 @pytest.mark.slow

@@ -180,6 +180,102 @@ def test_jobs_skip_execution_after_cancellation_requested():
     assert calls == []
 
 
+def test_second_shutdown_does_not_lie_while_job_still_running():
+    """A timed-out shutdown must stay False on retry until jobs actually drain.
+
+    Regression for the review finding: after the first shutdown timed out,
+    a second call used to return True immediately because the underlying
+    APScheduler object had already stopped, even with jobs still running.
+    """
+    ts = TaskScheduler()
+    ts.start()
+    started = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+
+    def job():
+        started.set()
+        release.wait(30)
+        finished.set()
+
+    try:
+        _run_immediate_job(ts, job, "sticky_blocking_job")
+        assert started.wait(10), "job never started"
+
+        assert ts.shutdown(timeout=0.1) is False
+        # Job is still blocked: retrying must keep reporting failure.
+        assert ts.shutdown(timeout=0.1) is False
+    finally:
+        release.set()
+
+    assert finished.wait(10), "job never finished after release"
+    # Once the job drained, shutdown may finally report a clean stop.
+    assert ts.shutdown(timeout=5) is True
+
+
+def test_late_job_start_after_clean_shutdown_is_skipped():
+    """Jobs submitted before shutdown but starting after the drain check
+    must observe the (still set) cancel signal and skip, otherwise the
+    'clean shutdown' result would be a lie."""
+    ts = TaskScheduler()
+    ts.start()
+    calls = []
+    wrapped = ts._track_job(lambda: calls.append(1))
+
+    assert ts.shutdown(timeout=5) is True
+    # Simulate APScheduler firing a job that was already submitted to the
+    # executor before shutdown stopped it.
+    wrapped()
+
+    assert calls == []
+    # A restart resets the signal and jobs run again.
+    ts.start()
+    try:
+        wrapped()
+        assert calls == [1]
+    finally:
+        assert ts.shutdown(timeout=5) is True
+
+
+def test_shutdown_never_reports_clean_while_a_job_body_runs_after_return():
+    """Race exerciser for the atomic check-and-register contract.
+
+    Many wrappers fire concurrently with shutdown; whenever shutdown
+    reports a clean stop, no job body may begin execution after that
+    moment.
+    """
+    for _ in range(20):
+        ts = TaskScheduler()
+        ts.start()
+        body_started_at: list[float] = []
+        lock = threading.Lock()
+
+        def task():
+            with lock:
+                body_started_at.append(time.monotonic())
+
+        wrapped = ts._track_job(task)
+        barrier = threading.Barrier(9)
+
+        def fire():
+            barrier.wait(5)
+            wrapped()
+
+        threads = [threading.Thread(target=fire) for _ in range(8)]
+        for t in threads:
+            t.start()
+
+        barrier.wait(5)
+        clean = ts.shutdown(timeout=5)
+        returned_at = time.monotonic()
+        for t in threads:
+            t.join(5)
+
+        assert clean is True, "drain must succeed within the bound"
+        late = [ts_ for ts_ in body_started_at if ts_ > returned_at]
+        assert not late, "a job body started after shutdown reported clean"
+
+
 # ---------------------------------------------------------------------------
 # Async account routes must not block the event loop
 # ---------------------------------------------------------------------------

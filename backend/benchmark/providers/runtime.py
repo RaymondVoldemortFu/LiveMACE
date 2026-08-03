@@ -49,6 +49,13 @@ def provider_failure(
     )
 
 
+# Single-flight guard: at most one live probe worker per provider. A probe
+# that outlived its timeout keeps its slot until it actually finishes, so
+# periodic polling of a hung dependency cannot accumulate daemon threads.
+_probe_registry_lock = threading.Lock()
+_active_probes: dict[str, threading.Event] = {}
+
+
 def run_health_probe(
     provider_id: str,
     probe: Callable[[float], bool | None],
@@ -61,8 +68,9 @@ def run_health_probe(
     passed to the dependency *and* enforced by running the probe in a
     controlled daemon worker with a bounded wait: a probe that blocks past
     the timeout yields ``unavailable`` immediately instead of hanging the
-    healthcheck. The abandoned worker thread cannot be preempted, but being
-    a daemon it never blocks process shutdown.
+    healthcheck. The abandoned worker thread cannot be preempted, but probes
+    are single-flight per provider: while a previous worker is still running,
+    no new thread is created and the provider is reported ``unavailable``.
     """
 
     outcome: dict[str, object] = {}
@@ -76,12 +84,24 @@ def run_health_probe(
         finally:
             done.set()
 
-    worker = threading.Thread(
-        target=_invoke_probe,
-        name=f"healthcheck-{provider_id}",
-        daemon=True,
-    )
-    worker.start()
+    with _probe_registry_lock:
+        previous = _active_probes.get(provider_id)
+        if previous is not None and not previous.is_set():
+            # The previous probe is still blocked past its own timeout; a
+            # hung probe is itself evidence the dependency is unhealthy.
+            return HealthStatus(
+                "unavailable",
+                provider_id,
+                "Provider health probe is still running from a previous check",
+                {"timeout_seconds": timeout_seconds, "probe_in_flight": True},
+            )
+        _active_probes[provider_id] = done
+        worker = threading.Thread(
+            target=_invoke_probe,
+            name=f"healthcheck-{provider_id}",
+            daemon=True,
+        )
+        worker.start()
 
     if not done.wait(timeout_seconds):
         return HealthStatus(

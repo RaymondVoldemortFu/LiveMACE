@@ -16,6 +16,7 @@ Contract enforced at runtime:
 
 from __future__ import annotations
 
+import functools
 import threading
 from typing import Any, Callable, Optional, Protocol, runtime_checkable
 
@@ -181,10 +182,29 @@ def default_unit_of_work_factory(**session_kwargs: Any) -> UnitOfWorkFactory:
 
 
 class GuardedSessionAccess:
-    """Resolve every repository Session access through the UoW guard."""
+    """Resolve every repository Session access through the UoW guard.
+
+    Callable attributes (``execute``, ``query``, ...) are not handed out as
+    bare bound methods: they are wrapped so the owner-thread/context check
+    re-runs at *call* time. Otherwise a thread could capture
+    ``uow.session.execute`` and invoke it later from another thread,
+    bypassing the guard entirely.
+    """
 
     def __init__(self, provider: Callable[[], Session]) -> None:
         self._provider = provider
 
     def __getattr__(self, name: str) -> Any:
-        return getattr(self._provider(), name)
+        provider = self._provider
+        attribute = getattr(provider(), name)
+        if not callable(attribute):
+            return attribute
+
+        @functools.wraps(attribute)
+        def _guarded_call(*args: Any, **kwargs: Any) -> Any:
+            # Re-resolve through the provider so the owner-thread and
+            # open-context checks run on every invocation, not only when
+            # the attribute was first looked up.
+            return getattr(provider(), name)(*args, **kwargs)
+
+        return _guarded_call

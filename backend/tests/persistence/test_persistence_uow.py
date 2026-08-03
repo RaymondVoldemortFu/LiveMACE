@@ -155,6 +155,36 @@ def test_session_escape_hatch_cannot_bypass_cross_thread_guard(session_factory):
     assert errors and "thread" in errors[0]
 
 
+def test_captured_bound_method_cannot_bypass_cross_thread_guard(session_factory):
+    """Capturing a callable off the proxy on the owner thread must not
+    yield a bare Session bound method: the owner-thread check re-runs at
+    call time (code-review P2 follow-up)."""
+    errors = []
+    results = []
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        escaped_execute = uow.session.execute  # captured on the owner thread
+
+        def call_from_other_thread():
+            try:
+                results.append(escaped_execute(text("SELECT 1")).scalar())
+            except RuntimeError as exc:
+                errors.append(str(exc))
+
+        thread = threading.Thread(target=call_from_other_thread)
+        thread.start()
+        thread.join()
+
+        # The captured callable still works on the owner thread.
+        assert escaped_execute(text("SELECT 1")).scalar() == 1
+
+    assert results == [], "captured bound method escaped the cross-thread guard"
+    assert errors and "thread" in errors[0]
+
+    # After the UoW context closed, the captured callable must fail too.
+    with pytest.raises(RuntimeError):
+        escaped_execute(text("SELECT 1"))
+
+
 def test_repository_cannot_bypass_uow_cross_thread_guard(session_factory):
     errors = []
     with SqlAlchemyUnitOfWork(session_factory) as uow:
