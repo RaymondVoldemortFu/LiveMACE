@@ -9,6 +9,13 @@ from benchmark.contracts.errors import ProviderError as ContractProviderError
 
 
 class ProviderError(ContractProviderError):
+    """Provider adapter error that mirrors retryable/provider_id into details.
+
+    The base contract class carries the attributes; this subclass additionally
+    embeds them in ``details`` so serialized payloads (to_dict/trace) keep the
+    fields without callers repeating them.
+    """
+
     def __init__(
         self,
         message: str,
@@ -21,9 +28,13 @@ class ProviderError(ContractProviderError):
         safe_details = {"retryable": retryable, "provider_id": provider_id}
         if details:
             safe_details.update(details)
-        super().__init__(message, code=code, details=safe_details)
-        self.retryable = retryable
-        self.provider_id = provider_id
+        super().__init__(
+            message,
+            code=code,
+            details=safe_details,
+            retryable=retryable,
+            provider_id=provider_id,
+        )
 
 
 __all__ = ["ProviderError"]

@@ -34,6 +34,42 @@ from benchmark.testing import (
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 
 
+def test_contract_provider_error_carries_retryable_and_provider_id():
+    from benchmark.contracts import ProviderError as ContractProviderError
+
+    default_error = ContractProviderError("boom")
+    assert default_error.code == "PROVIDER_ERROR"
+    assert default_error.retryable is False
+    assert default_error.provider_id == "unknown"
+
+    explicit = ContractProviderError(
+        "boom",
+        code="LLM_TIMEOUT",
+        retryable=True,
+        provider_id="fake.llm",
+    )
+    assert explicit.retryable is True
+    assert explicit.provider_id == "fake.llm"
+
+    with pytest.raises(TypeError):
+        ContractProviderError("boom", retryable="yes")
+    with pytest.raises(ValueError):
+        ContractProviderError("boom", provider_id="  ")
+
+
+def test_providers_error_subclass_mirrors_fields_into_details():
+    caught = ProviderError(
+        "boom",
+        code="PROVIDER_OPERATION_FAILED",
+        retryable=True,
+        provider_id="fake.market",
+    )
+    assert caught.retryable is True
+    assert caught.provider_id == "fake.market"
+    assert caught.details["retryable"] is True
+    assert caught.details["provider_id"] == "fake.market"
+
+
 class FakeLegacyLLM:
     model = "model-1"
 

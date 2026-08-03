@@ -65,7 +65,26 @@ class PromptRenderError(BenchmarkError):
 
 
 class ProviderError(BenchmarkError):
+    """Provider failures uniformly expose code/message/retryable/provider_id."""
+
     default_code = "PROVIDER_ERROR"
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str | None = None,
+        details: Mapping[str, JsonValue] | None = None,
+        retryable: bool = False,
+        provider_id: str = "unknown",
+    ) -> None:
+        super().__init__(message, code=code, details=details)
+        if not isinstance(retryable, bool):
+            raise TypeError("retryable must be bool")
+        if not isinstance(provider_id, str) or not provider_id.strip():
+            raise ValueError("provider_id must be a non-empty string")
+        self.retryable = retryable
+        self.provider_id = provider_id
 
 
 class TradeGatewayError(BenchmarkError):
