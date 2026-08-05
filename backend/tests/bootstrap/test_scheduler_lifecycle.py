@@ -24,7 +24,11 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from services import scheduler
-from services.scheduler import SchedulerNotRunningError, TaskScheduler
+from services.scheduler import (
+    SchedulerBusyError,
+    SchedulerNotRunningError,
+    TaskScheduler,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -211,6 +215,48 @@ def test_second_shutdown_does_not_lie_while_job_still_running():
     assert finished.wait(10), "job never finished after release"
     # Once the job drained, shutdown may finally report a clean stop.
     assert ts.shutdown(timeout=5) is True
+
+
+def test_start_rejected_while_previous_generation_still_inflight():
+    """Incomplete shutdown must not clear cancel or overlap a new scheduler."""
+    ts = TaskScheduler()
+    ts.start()
+    started = threading.Event()
+    release = threading.Event()
+    cancel_samples = []
+
+    def job():
+        started.set()
+        while not release.is_set():
+            cancel_samples.append(ts.cancellation_requested())
+            time.sleep(0.02)
+
+    try:
+        threading.Thread(target=ts._track_job(job), daemon=True).start()
+        assert started.wait(10), "job never started"
+        assert ts.shutdown(timeout=0.15) is False
+        assert ts.cancellation_requested()
+        assert ts._inflight_jobs > 0
+
+        with pytest.raises(SchedulerBusyError, match="in-flight"):
+            ts.start()
+
+        assert ts.cancellation_requested(), "cancel must stay set until drain"
+        assert not ts.is_running()
+        before = len(cancel_samples)
+        time.sleep(0.12)
+        after_reject = cancel_samples[before:]
+        assert after_reject and all(after_reject), (
+            "old job must keep observing cancel=True after rejected start"
+        )
+    finally:
+        release.set()
+
+    assert ts.shutdown(timeout=5) is True
+    ts.start()
+    assert ts.is_running()
+    assert not ts.cancellation_requested()
+    ts.shutdown(timeout=5)
 
 
 def test_late_job_start_after_clean_shutdown_is_skipped():

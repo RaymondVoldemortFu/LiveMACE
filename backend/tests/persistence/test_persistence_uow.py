@@ -185,6 +185,38 @@ def test_captured_bound_method_cannot_bypass_cross_thread_guard(session_factory)
         escaped_execute(text("SELECT 1"))
 
 
+def test_session_connection_cannot_bypass_cross_thread_guard(session_factory):
+    """Connection/Engine objects returned by the session proxy must stay guarded."""
+    errors = []
+    results = []
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        connection = uow.session.connection()
+        bind = uow.session.get_bind()
+
+        def use_connection_from_other_thread():
+            try:
+                results.append(connection.execute(text("SELECT 1")).scalar())
+            except RuntimeError as exc:
+                errors.append(str(exc))
+
+        def use_bind_from_other_thread():
+            try:
+                with bind.connect() as conn:
+                    results.append(conn.execute(text("SELECT 1")).scalar())
+            except RuntimeError as exc:
+                errors.append(str(exc))
+
+        for target in (use_connection_from_other_thread, use_bind_from_other_thread):
+            thread = threading.Thread(target=target)
+            thread.start()
+            thread.join()
+
+        assert connection.execute(text("SELECT 1")).scalar() == 1
+
+    assert results == [], "session-returned DB object escaped the cross-thread guard"
+    assert len(errors) == 2 and all("thread" in item for item in errors)
+
+
 def test_repository_cannot_bypass_uow_cross_thread_guard(session_factory):
     errors = []
     with SqlAlchemyUnitOfWork(session_factory) as uow:

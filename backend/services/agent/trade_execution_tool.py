@@ -92,7 +92,7 @@ def execute_trade_tool(
     from decimal import Decimal
 
     from benchmark.application.trading import get_default_trade_gateway
-    from benchmark.contracts import Market, TradeCommand
+    from benchmark.contracts import Market, TradeCommand, to_jsonable
 
     normalized_size_mode = (size_mode or "portion").strip().lower()
     sizing_value = None
@@ -157,7 +157,13 @@ def execute_trade_tool(
                     code="TRADE_CALLER_SESSION_REFRESH_FAILED",
                     details={"error_type": type(exc).__name__},
                 ) from exc
-        result = dict(gateway_result.raw_result)
+        # DTO raw_result is a deep-frozen JsonValue snapshot (lists → tuples).
+        # Materialize back to mutable JSON-native containers for the legacy
+        # agent-tool return shape (e.g. closed_orders: []).
+        materialized = to_jsonable(gateway_result.raw_result)
+        if not isinstance(materialized, dict):
+            raise TypeError("TradeCommandResult.raw_result must be a JSON object")
+        result = materialized
         if gateway_result.accepted:
             result.setdefault("executed", gateway_result.executed)
             result.setdefault("operation", gateway_result.normalized_command.operation)

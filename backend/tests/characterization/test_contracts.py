@@ -155,6 +155,34 @@ def test_agent_tool_prompt_and_trade_contract_shapes():
     assert command_result.normalized_command is command
 
 
+def test_trade_command_result_raw_result_is_deep_frozen_json_snapshot():
+    nested = {"items": [1, {"x": 2}], "ok": True}
+    command = TradeCommand(
+        account_id=1,
+        operation="hold",
+        market=Market.CRYPTO,
+        symbol="",
+        direction=None,
+        sizing_mode=None,
+        sizing_value=None,
+        leverage=1,
+        reason="test",
+        idempotency_key="round-1:call-1",
+    )
+    result = TradeCommandResult(True, True, None, None, None, None, command, nested)
+
+    nested["items"].append(3)
+    nested["items"][1]["x"] = 99
+    # Nested mapping is frozen (tuple for lists, MappingProxy for dicts).
+    assert result.raw_result["items"] == (1, {"x": 2})
+    with pytest.raises(TypeError):
+        result.raw_result["items"][1]["x"] = 3
+    with pytest.raises(TypeError):
+        TradeCommandResult(
+            True, True, None, None, None, None, command, {"bad": object()}
+        )
+
+
 def test_public_error_serialization_is_stable_and_read_only():
     error = AgentRuntimeError("agent failed", details={"trace_id": "trace-1"})
     assert error.to_dict() == {
@@ -164,3 +192,20 @@ def test_public_error_serialization_is_stable_and_read_only():
     }
     with pytest.raises(TypeError):
         error.details["secret"] = "value"
+
+    from benchmark.contracts import ProviderError
+
+    provider_error = ProviderError(
+        "provider failed",
+        code="LLM_TIMEOUT",
+        retryable=True,
+        provider_id="fake.llm",
+        details={"operation": "complete"},
+    )
+    assert provider_error.to_dict() == {
+        "code": "LLM_TIMEOUT",
+        "message": "provider failed",
+        "retryable": True,
+        "provider_id": "fake.llm",
+        "details": {"operation": "complete"},
+    }

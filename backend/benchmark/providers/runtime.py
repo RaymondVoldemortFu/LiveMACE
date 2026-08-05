@@ -7,8 +7,9 @@ from inspect import isawaitable
 from typing import Callable
 from typing import TypeVar
 
+from benchmark.contracts.errors import ProviderError
+
 from .health import HEALTHCHECK_TIMEOUT_SECONDS, HealthStatus
-from .errors import ProviderError
 
 T = TypeVar("T")
 
@@ -38,6 +39,8 @@ def provider_failure(
 ) -> ProviderError:
     """Create a stable error without copying provider messages or credentials."""
 
+    # Canonical class only: never rewrite an already-normalized ProviderError
+    # (including instances imported via benchmark.contracts).
     if isinstance(exc, ProviderError):
         return exc
     return ProviderError(

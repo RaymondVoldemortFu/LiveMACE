@@ -43,7 +43,8 @@ def test_default_adapter_raises_sanitized_error_for_provider_failure(monkeypatch
         adapter.get_market_status("BTC", Market.CRYPTO)
 
     assert caught.value.code == "PROVIDER_OPERATION_FAILED"
-    assert caught.value.to_dict()["details"]["retryable"] is True
+    assert caught.value.retryable is True
+    assert caught.value.to_dict()["retryable"] is True
     # Provider messages must not leak through the stable error.
     assert "secret-endpoint" not in str(caught.value)
 

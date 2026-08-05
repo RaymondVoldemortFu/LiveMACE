@@ -63,6 +63,16 @@ class SchedulerNotRunningError(RuntimeError):
     """
 
 
+class SchedulerBusyError(RuntimeError):
+    """Raised when ``start()`` is attempted while a prior generation still has jobs.
+
+    After an incomplete shutdown the cancel signal must stay set and a new
+    scheduler must not be created until every previously tracked job exits;
+    otherwise old jobs would observe a cleared cancel flag and overlap with
+    the new generation.
+    """
+
+
 class TaskScheduler:
     """Unified task scheduler"""
 
@@ -82,8 +92,24 @@ class TaskScheduler:
         self._inflight_jobs = 0
 
     def start(self):
-        """Start the scheduler"""
-        if not self._started:
+        """Start the scheduler.
+
+        Refuses to clear the cancel signal or create a new APScheduler while
+        any job from a previous generation is still in flight. Callers must
+        finish draining (retry ``shutdown``) before restarting.
+        """
+        with self._inflight_condition:
+            if self._started:
+                return
+            if self._inflight_jobs > 0:
+                raise SchedulerBusyError(
+                    "cannot start scheduler: previous generation still has "
+                    f"{self._inflight_jobs} in-flight job(s); drain via "
+                    "shutdown() before restarting"
+                )
+            # Clear cancel only after the quiescence check above, under the
+            # same condition jobs use to register, so a drained generation
+            # cannot race a new start.
             self._cancel_event.clear()
             self.scheduler = BackgroundScheduler()
             self.scheduler.start()
@@ -100,12 +126,14 @@ class TaskScheduler:
         time — callers must not treat that as a clean stop.
 
         The cancel signal stays set after shutdown (whether it drained or
-        not) and is only reset by the next ``start()``: jobs that APScheduler
-        already submitted but that begin running after the drain check must
-        still observe the signal and skip, otherwise "clean shutdown" would
-        be a lie. Repeated calls keep honouring jobs that are still running
-        from a previous timed-out shutdown instead of reporting success just
-        because the underlying scheduler object already stopped.
+        not) and is only reset by the next successful ``start()``: jobs that
+        APScheduler already submitted but that begin running after the drain
+        check must still observe the signal and skip, otherwise "clean
+        shutdown" would be a lie. ``start()`` itself refuses to clear the
+        signal while ``_inflight_jobs > 0``. Repeated calls keep honouring
+        jobs that are still running from a previous timed-out shutdown
+        instead of reporting success just because the underlying scheduler
+        object already stopped.
         """
         if timeout is None:
             timeout = self.DEFAULT_SHUTDOWN_TIMEOUT_SECONDS
@@ -120,10 +148,14 @@ class TaskScheduler:
             # registered before this point (and is awaited below) or is
             # guaranteed to observe the signal and skip.
             self._cancel_event.set()
+            # Mark stopped under the same lock so start() cannot observe
+            # `_started is False` and clear cancel while we still expect to
+            # drain this generation.
+            self._started = False
+            scheduler = self.scheduler
 
-        if self.scheduler and self.scheduler.running:
-            self.scheduler.shutdown(wait=False)
-        self._started = False
+        if scheduler is not None and scheduler.running:
+            scheduler.shutdown(wait=False)
 
         deadline = time.monotonic() + max(timeout, 0.0)
         with self._inflight_condition:

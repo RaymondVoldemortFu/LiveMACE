@@ -20,7 +20,10 @@ import functools
 import threading
 from typing import Any, Callable, Optional, Protocol, runtime_checkable
 
+from sqlalchemy.engine import Connection, Engine
+from sqlalchemy.engine import Transaction as EngineTransaction
 from sqlalchemy.orm import Session
+from sqlalchemy.orm import SessionTransaction
 
 from benchmark.persistence.repositories import (
     AccountRepository,
@@ -156,9 +159,9 @@ class SqlAlchemyUnitOfWork:
 
         New code goes through the repository attributes; direct session
         use should shrink to zero as call sites migrate. The returned
-        proxy re-checks the owner thread on *every* attribute access, so
-        holding on to it cannot bypass the cross-thread guard the way a
-        bare ``Session`` reference could.
+        proxy re-checks the owner thread on *every* attribute access and
+        wraps Connection/Transaction/Engine results so holding them cannot
+        bypass the cross-thread guard.
         """
         # Validate context and calling thread eagerly, matching the old
         # behavior of raising at property access time.
@@ -181,14 +184,65 @@ def default_unit_of_work_factory(**session_kwargs: Any) -> UnitOfWorkFactory:
     return _factory
 
 
+def _guard_db_result(owner_check: Callable[[], Any], value: Any) -> Any:
+    """Wrap SQLAlchemy connection-layer objects that can execute SQL."""
+
+    if isinstance(
+        value,
+        (Connection, Engine, EngineTransaction, SessionTransaction),
+    ):
+        return _ThreadGuardedDbProxy(owner_check, value)
+    return value
+
+
+class _ThreadGuardedDbProxy:
+    """Proxy Connection/Engine/Transaction so every use re-checks the UoW owner."""
+
+    __slots__ = ("_owner_check", "_target")
+
+    def __init__(self, owner_check: Callable[[], Any], target: Any) -> None:
+        object.__setattr__(self, "_owner_check", owner_check)
+        object.__setattr__(self, "_target", target)
+
+    def __repr__(self) -> str:
+        return f"_ThreadGuardedDbProxy({self._target!r})"
+
+    def __getattr__(self, name: str) -> Any:
+        self._owner_check()
+        attribute = getattr(self._target, name)
+        if not callable(attribute):
+            return _guard_db_result(self._owner_check, attribute)
+
+        @functools.wraps(attribute)
+        def _guarded_call(*args: Any, **kwargs: Any) -> Any:
+            self._owner_check()
+            return _guard_db_result(
+                self._owner_check, attribute(*args, **kwargs)
+            )
+
+        return _guarded_call
+
+    def __enter__(self) -> Any:
+        self._owner_check()
+        entered = self._target.__enter__()
+        # begin()/begin_nested() typically return self; keep the proxy.
+        if entered is self._target:
+            return self
+        return _guard_db_result(self._owner_check, entered)
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> Any:
+        self._owner_check()
+        return self._target.__exit__(exc_type, exc, tb)
+
+
 class GuardedSessionAccess:
     """Resolve every repository Session access through the UoW guard.
 
     Callable attributes (``execute``, ``query``, ...) are not handed out as
     bare bound methods: they are wrapped so the owner-thread/context check
-    re-runs at *call* time. Otherwise a thread could capture
-    ``uow.session.execute`` and invoke it later from another thread,
-    bypassing the guard entirely.
+    re-runs at *call* time. Connection/Transaction/Engine results are wrapped
+    so a thread cannot capture ``uow.session.connection()`` and use it from
+    another thread.
     """
 
     def __init__(self, provider: Callable[[], Session]) -> None:
@@ -198,13 +252,15 @@ class GuardedSessionAccess:
         provider = self._provider
         attribute = getattr(provider(), name)
         if not callable(attribute):
-            return attribute
+            return _guard_db_result(provider, attribute)
 
         @functools.wraps(attribute)
         def _guarded_call(*args: Any, **kwargs: Any) -> Any:
             # Re-resolve through the provider so the owner-thread and
             # open-context checks run on every invocation, not only when
             # the attribute was first looked up.
-            return getattr(provider(), name)(*args, **kwargs)
+            return _guard_db_result(
+                provider, getattr(provider(), name)(*args, **kwargs)
+            )
 
         return _guarded_call

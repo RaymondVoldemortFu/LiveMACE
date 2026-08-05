@@ -232,7 +232,9 @@ Prompt 文件使用 UTF-8，模板引擎 v1 只支持命名变量，不执行任
 
 Prompt override 以完整 `prompt_id` 替换；不支持按字符串位置 patch。相同 id 的优先级依次为：账户显式 profile > 外部启用扩展 > 内置扩展（对应 `PromptSourcePriority` 的 `ACCOUNT > EXTERNAL > BUILTIN`）。
 
-冲突判定粒度为 `(prompt_id, version, priority)`：同一三元组重复注册导致 catalog invalid（`PROMPT_VERSION_PRIORITY_CONFLICT`），不静默覆盖。同一 `prompt_id` 在同一优先级下允许多个 version 共存；解析时先取最高优先级，再取该优先级内最高 SemVer 版本。
+冲突判定粒度为 `(prompt_id, version, priority)`：同一三元组重复注册导致 catalog invalid（`PROMPT_VERSION_PRIORITY_CONFLICT`），不静默覆盖。同一 `prompt_id` 在同一优先级下允许多个 version 共存（来自**不同** PromptProvider / 不同扩展）；解析时先取最高优先级，再取该优先级内最高 SemVer 版本。
+
+单个 `PromptProvider` 以及单个 Prompt directory 对同一 `prompt_id` 仅允许暴露一个 version（`PROMPT_PROVIDER_ID_CONFLICT`）；同 ID 的多版本必须由不同 provider 分别注册。`PromptProvider.render` 仅接收 `prompt_id`：版本选择由 registry 在调用前完成，并路由到持有该 version 的 provider 实例。
 
 配套公开 DTO：`PromptSelection`、`PromptProfileDescriptor`（`benchmark.contracts`）。`PromptRegistry.render` 支持 keyword-only 可选参数 `version: str | None = None` 用于钉住特定版本。
 
@@ -332,7 +334,7 @@ class TradeCommandResult:
     order_id: int | None
     trade_id: int | None
     normalized_command: TradeCommand
-    raw_result: Mapping[str, Any] = field(default_factory=dict)  # 底层执行器原始结果快照，只读
+    raw_result: Mapping[str, JsonValue] = field(default_factory=dict)  # 底层执行器原始结果快照；构造期 to_jsonable + 递归冻结
 
 class TradeCommandGateway(Protocol):
     def execute(self, command: TradeCommand) -> TradeCommandResult: ...

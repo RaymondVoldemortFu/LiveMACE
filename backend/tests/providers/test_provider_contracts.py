@@ -57,17 +57,42 @@ def test_contract_provider_error_carries_retryable_and_provider_id():
         ContractProviderError("boom", provider_id="  ")
 
 
-def test_providers_error_subclass_mirrors_fields_into_details():
+def test_canonical_provider_error_serializes_retryable_and_provider_id():
+    from benchmark.contracts import ProviderError as ContractProviderError
+    from benchmark.providers.runtime import provider_failure
+
+    assert ProviderError is ContractProviderError
+
     caught = ProviderError(
         "boom",
         code="PROVIDER_OPERATION_FAILED",
         retryable=True,
         provider_id="fake.market",
+        details={"operation": "get_price"},
     )
     assert caught.retryable is True
     assert caught.provider_id == "fake.market"
-    assert caught.details["retryable"] is True
-    assert caught.details["provider_id"] == "fake.market"
+    assert "retryable" not in caught.details
+    assert "provider_id" not in caught.details
+    assert caught.to_dict() == {
+        "code": "PROVIDER_OPERATION_FAILED",
+        "message": "boom",
+        "retryable": True,
+        "provider_id": "fake.market",
+        "details": {"operation": "get_price"},
+    }
+
+    with pytest.raises(ValueError, match="reserved"):
+        ProviderError("boom", details={"retryable": False})
+
+    # contracts.ProviderError must not be rewritten by provider_failure.
+    original = ContractProviderError(
+        "timeout",
+        code="LLM_TIMEOUT",
+        retryable=True,
+        provider_id="fake.llm",
+    )
+    assert provider_failure("other", "complete", original, retryable=False) is original
 
 
 class FakeLegacyLLM:
