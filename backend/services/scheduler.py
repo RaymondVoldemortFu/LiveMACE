@@ -90,6 +90,10 @@ class TaskScheduler:
         # shutdown: every scheduled job runs through _run_tracked_job.
         self._inflight_condition = threading.Condition()
         self._inflight_jobs = 0
+        # Bumped on every successful start(). Wrappers capture the generation
+        # at registration time so jobs already submitted to an old executor
+        # cannot run after a clean shutdown + restart clears the cancel flag.
+        self._generation = 0
 
     def start(self):
         """Start the scheduler.
@@ -97,6 +101,11 @@ class TaskScheduler:
         Refuses to clear the cancel signal or create a new APScheduler while
         any job from a previous generation is still in flight. Callers must
         finish draining (retry ``shutdown``) before restarting.
+
+        Each successful start advances ``_generation``. Job wrappers created
+        under a prior generation are treated as stale even if cancel was
+        cleared, covering APScheduler callbacks that were submitted before
+        shutdown but only begin running after the next start.
         """
         with self._inflight_condition:
             if self._started:
@@ -109,7 +118,10 @@ class TaskScheduler:
                 )
             # Clear cancel only after the quiescence check above, under the
             # same condition jobs use to register, so a drained generation
-            # cannot race a new start.
+            # cannot race a new start. Advance generation in the same
+            # critical section so stale wrappers cannot observe a cleared
+            # cancel belonging to their own generation.
+            self._generation += 1
             self._cancel_event.clear()
             self.scheduler = BackgroundScheduler()
             self.scheduler.start()
@@ -130,10 +142,11 @@ class TaskScheduler:
         APScheduler already submitted but that begin running after the drain
         check must still observe the signal and skip, otherwise "clean
         shutdown" would be a lie. ``start()`` itself refuses to clear the
-        signal while ``_inflight_jobs > 0``. Repeated calls keep honouring
-        jobs that are still running from a previous timed-out shutdown
-        instead of reporting success just because the underlying scheduler
-        object already stopped.
+        signal while ``_inflight_jobs > 0``. The next successful ``start()``
+        also advances ``_generation`` so stale executor callbacks cannot run
+        after a restart. Repeated calls keep honouring jobs that are still
+        running from a previous timed-out shutdown instead of reporting
+        success just because the underlying scheduler object already stopped.
         """
         if timeout is None:
             timeout = self.DEFAULT_SHUTDOWN_TIMEOUT_SECONDS
@@ -192,18 +205,30 @@ class TaskScheduler:
             )
 
     def _track_job(self, task_func: Callable) -> Callable:
-        """Wrap a job so shutdown can observe and drain in-flight executions."""
+        """Wrap a job so shutdown can observe and drain in-flight executions.
+
+        The wrapper captures the scheduler generation at registration time.
+        After a later ``start()`` advances the generation, callbacks that were
+        already sitting in an old executor still skip even if cancel was
+        cleared for the new generation.
+        """
+        with self._inflight_condition:
+            job_generation = self._generation
 
         @functools.wraps(task_func)
         def _run_tracked_job(*args, **kwargs):
-            # Cancel check and in-flight registration must be atomic with
-            # shutdown's cancel signal: otherwise a job could pass the check,
-            # pause before registering, and keep running after shutdown
-            # reported a clean (zero in-flight) stop.
+            # Cancel / generation check and in-flight registration must be
+            # atomic with shutdown and start: otherwise a job could pass the
+            # check, pause before registering, and keep running after
+            # shutdown reported a clean (zero in-flight) stop — or run under
+            # a newer generation after restart cleared cancel.
             with self._inflight_condition:
-                if self._cancel_event.is_set():
+                if (
+                    self._cancel_event.is_set()
+                    or job_generation != self._generation
+                ):
                     logger.info(
-                        "Skipping job %s: scheduler shutdown requested",
+                        "Skipping job %s: scheduler shutdown requested or stale generation",
                         getattr(task_func, "__name__", task_func),
                     )
                     return

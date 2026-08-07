@@ -217,6 +217,61 @@ def test_session_connection_cannot_bypass_cross_thread_guard(session_factory):
     assert len(errors) == 2 and all("thread" in item for item in errors)
 
 
+def test_session_query_and_result_cannot_bypass_guards(session_factory):
+    """Query/Result objects must stay bound to the owner thread and UoW lifetime."""
+    account_id = _seed_account(session_factory)
+    errors = []
+    results = []
+
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        query = uow.session.query(Account).filter(Account.id == account_id)
+        result = uow.session.execute(text("SELECT 1 AS value"))
+        escaped_session = query.session
+        result_iter = iter(result)
+
+        def use_query_from_other_thread():
+            try:
+                results.append(query.all())
+            except RuntimeError as exc:
+                errors.append(str(exc))
+
+        def use_result_from_other_thread():
+            try:
+                results.append(next(result_iter))
+            except RuntimeError as exc:
+                errors.append(str(exc))
+
+        def use_query_session_from_other_thread():
+            try:
+                results.append(escaped_session.execute(text("SELECT 1")).scalar())
+            except RuntimeError as exc:
+                errors.append(str(exc))
+
+        for target in (
+            use_query_from_other_thread,
+            use_result_from_other_thread,
+            use_query_session_from_other_thread,
+        ):
+            thread = threading.Thread(target=target)
+            thread.start()
+            thread.join()
+
+        # Same-thread chained Query use while the UoW is open remains valid.
+        assert query.filter(Account.id == account_id).one().id == account_id
+        # Fresh result after the iterator was only rejected cross-thread.
+        assert uow.session.execute(text("SELECT 1 AS value")).scalar_one() == 1
+
+    assert results == [], "Query/Result/session escaped the cross-thread guard"
+    assert len(errors) == 3 and all("thread" in item for item in errors)
+
+    with pytest.raises(RuntimeError):
+        query.all()
+    with pytest.raises(RuntimeError):
+        next(result_iter)
+    with pytest.raises(RuntimeError):
+        escaped_session.execute(text("SELECT 1"))
+
+
 def test_repository_cannot_bypass_uow_cross_thread_guard(session_factory):
     errors = []
     with SqlAlchemyUnitOfWork(session_factory) as uow:

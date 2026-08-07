@@ -274,13 +274,52 @@ def test_late_job_start_after_clean_shutdown_is_skipped():
     wrapped()
 
     assert calls == []
-    # A restart resets the signal and jobs run again.
+    # A restart clears cancel but advances generation: the old wrapper must
+    # still skip. Only wrappers registered under the new generation may run.
     ts.start()
     try:
         wrapped()
+        assert calls == []
+        fresh = ts._track_job(lambda: calls.append(1))
+        fresh()
         assert calls == [1]
     finally:
         assert ts.shutdown(timeout=5) is True
+
+
+def test_stale_submitted_job_skipped_after_clean_shutdown_and_restart():
+    """Submitted-but-not-started old jobs must not run after restart.
+
+    Regression: clean shutdown saw inflight=0, start() cleared cancel, then
+    an executor callback from the previous generation entered _track_job and
+    ran overlapping the new scheduler.
+    """
+    ts = TaskScheduler()
+    ts.start()
+    body_ran = []
+    release_enter = threading.Event()
+    entered = threading.Event()
+
+    stale = ts._track_job(lambda: body_ran.append(1))
+
+    def delayed_executor_callback():
+        entered.set()
+        release_enter.wait(10)
+        stale()
+
+    worker = threading.Thread(target=delayed_executor_callback, daemon=True)
+    worker.start()
+    assert entered.wait(5), "delayed callback never armed"
+    assert ts._inflight_jobs == 0
+
+    assert ts.shutdown(timeout=5) is True
+    ts.start()
+    assert not ts.cancellation_requested()
+    release_enter.set()
+    worker.join(5)
+
+    assert body_ran == [], "stale generation job ran after restart"
+    assert ts.shutdown(timeout=5) is True
 
 
 def test_shutdown_never_reports_clean_while_a_job_body_runs_after_return():

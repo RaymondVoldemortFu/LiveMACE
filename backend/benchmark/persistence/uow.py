@@ -20,9 +20,10 @@ import functools
 import threading
 from typing import Any, Callable, Optional, Protocol, runtime_checkable
 
-from sqlalchemy.engine import Connection, Engine
+from sqlalchemy.engine import Connection, Engine, Result
 from sqlalchemy.engine import Transaction as EngineTransaction
-from sqlalchemy.orm import Session
+from sqlalchemy.engine.result import FilterResult
+from sqlalchemy.orm import Query, Session
 from sqlalchemy.orm import SessionTransaction
 
 from benchmark.persistence.repositories import (
@@ -185,18 +186,46 @@ def default_unit_of_work_factory(**session_kwargs: Any) -> UnitOfWorkFactory:
 
 
 def _guard_db_result(owner_check: Callable[[], Any], value: Any) -> Any:
-    """Wrap SQLAlchemy connection-layer objects that can execute SQL."""
+    """Wrap SQLAlchemy objects that can execute or defer SQL."""
 
+    if isinstance(value, Session):
+        # Query.session / similar escapes must not hand out a bare Session.
+        return GuardedSessionAccess(owner_check)
     if isinstance(
         value,
-        (Connection, Engine, EngineTransaction, SessionTransaction),
+        (
+            Connection,
+            Engine,
+            EngineTransaction,
+            SessionTransaction,
+            Query,
+            Result,
+            FilterResult,
+        ),
     ):
         return _ThreadGuardedDbProxy(owner_check, value)
     return value
 
 
+class _GuardedIterator:
+    """Iterator that re-checks the UoW owner on every ``next``."""
+
+    __slots__ = ("_owner_check", "_iterator")
+
+    def __init__(self, owner_check: Callable[[], Any], iterator: Any) -> None:
+        self._owner_check = owner_check
+        self._iterator = iterator
+
+    def __iter__(self) -> "_GuardedIterator":
+        return self
+
+    def __next__(self) -> Any:
+        self._owner_check()
+        return _guard_db_result(self._owner_check, next(self._iterator))
+
+
 class _ThreadGuardedDbProxy:
-    """Proxy Connection/Engine/Transaction so every use re-checks the UoW owner."""
+    """Proxy DB objects so every use re-checks the UoW owner and lifecycle."""
 
     __slots__ = ("_owner_check", "_target")
 
@@ -222,6 +251,26 @@ class _ThreadGuardedDbProxy:
 
         return _guarded_call
 
+    def __iter__(self):
+        self._owner_check()
+        return _GuardedIterator(self._owner_check, iter(self._target))
+
+    def __next__(self):
+        self._owner_check()
+        return _guard_db_result(self._owner_check, next(self._target))
+
+    def __bool__(self) -> bool:
+        self._owner_check()
+        return bool(self._target)
+
+    def __len__(self) -> int:
+        self._owner_check()
+        return len(self._target)
+
+    def __getitem__(self, key: Any) -> Any:
+        self._owner_check()
+        return _guard_db_result(self._owner_check, self._target[key])
+
     def __enter__(self) -> Any:
         self._owner_check()
         entered = self._target.__enter__()
@@ -240,9 +289,9 @@ class GuardedSessionAccess:
 
     Callable attributes (``execute``, ``query``, ...) are not handed out as
     bare bound methods: they are wrapped so the owner-thread/context check
-    re-runs at *call* time. Connection/Transaction/Engine results are wrapped
-    so a thread cannot capture ``uow.session.connection()`` and use it from
-    another thread.
+    re-runs at *call* time. Connection/Transaction/Engine/Query/Result
+    results are wrapped so a thread cannot capture them and use them from
+    another thread or after the UoW closes.
     """
 
     def __init__(self, provider: Callable[[], Session]) -> None:
