@@ -94,6 +94,11 @@ class TaskScheduler:
         # at registration time so jobs already submitted to an old executor
         # cannot run after a clean shutdown + restart clears the cancel flag.
         self._generation = 0
+        # Per-task registration tokens: remove/replace bumps the active token so
+        # already-queued wrappers for that task_id become stale within the same
+        # scheduler generation (e.g. reset_auto_trading_job).
+        self._job_tokens: Dict[str, int] = {}
+        self._job_token_seq = 0
 
     def start(self):
         """Start the scheduler.
@@ -122,6 +127,7 @@ class TaskScheduler:
             # critical section so stale wrappers cannot observe a cleared
             # cancel belonging to their own generation.
             self._generation += 1
+            self._job_tokens.clear()
             self._cancel_event.clear()
             self.scheduler = BackgroundScheduler()
             self.scheduler.start()
@@ -204,31 +210,41 @@ class TaskScheduler:
                 "(scheduler startup is owned by the runtime bootstrap)"
             )
 
-    def _track_job(self, task_func: Callable) -> Callable:
-        """Wrap a job so shutdown can observe and drain in-flight executions.
-
-        The wrapper captures the scheduler generation at registration time.
-        After a later ``start()`` advances the generation, callbacks that were
-        already sitting in an old executor still skip even if cancel was
-        cleared for the new generation.
-        """
+    def _invalidate_job(self, task_id: str) -> None:
+        """Drop the active registration token for ``task_id`` (remove/replace)."""
         with self._inflight_condition:
+            self._job_tokens.pop(task_id, None)
+
+    def _track_job(self, task_func: Callable, task_id: str) -> Callable:
+        """Wrap a job so shutdown/remove can observe and invalidate executions.
+
+        The wrapper captures the scheduler generation and a per-task
+        registration token. After a later ``start()`` advances the generation,
+        or ``remove``/``replace`` invalidates the token, callbacks that were
+        already sitting in an executor still skip.
+        """
+        if not isinstance(task_id, str) or not task_id:
+            raise ValueError("task_id must be a non-empty string")
+
+        with self._inflight_condition:
+            self._job_token_seq += 1
+            job_token = self._job_token_seq
+            self._job_tokens[task_id] = job_token
             job_generation = self._generation
 
         @functools.wraps(task_func)
         def _run_tracked_job(*args, **kwargs):
-            # Cancel / generation check and in-flight registration must be
-            # atomic with shutdown and start: otherwise a job could pass the
-            # check, pause before registering, and keep running after
-            # shutdown reported a clean (zero in-flight) stop — or run under
-            # a newer generation after restart cleared cancel.
+            # Cancel / generation / token check and in-flight registration
+            # must be atomic with shutdown, start, and remove/replace.
             with self._inflight_condition:
                 if (
                     self._cancel_event.is_set()
                     or job_generation != self._generation
+                    or self._job_tokens.get(task_id) != job_token
                 ):
                     logger.info(
-                        "Skipping job %s: scheduler shutdown requested or stale generation",
+                        "Skipping job %s (%s): cancelled, stale generation, or replaced",
+                        task_id,
                         getattr(task_func, "__name__", task_func),
                     )
                     return
@@ -260,7 +276,7 @@ class TaskScheduler:
             return
         
         self.scheduler.add_job(
-            func=self._track_job(self._execute_account_snapshot),
+            func=self._track_job(self._execute_account_snapshot, job_id),
             trigger=IntervalTrigger(seconds=interval_seconds),
             args=[account_id],
             id=job_id,
@@ -290,7 +306,7 @@ class TaskScheduler:
             return
         
         self.scheduler.add_job(
-            func=self._track_job(self._check_margin_levels),
+            func=self._track_job(self._check_margin_levels, job_id),
             trigger=IntervalTrigger(seconds=interval_seconds),
             id=job_id,
             replace_existing=True,
@@ -319,7 +335,7 @@ class TaskScheduler:
             return
         
         self.scheduler.add_job(
-            func=self._track_job(self._create_database_snapshots),
+            func=self._track_job(self._create_database_snapshots, job_id),
             trigger=IntervalTrigger(seconds=interval_seconds),
             id=job_id,
             replace_existing=True,
@@ -337,11 +353,11 @@ class TaskScheduler:
         Args:
             account_id: Account ID
         """
+        job_id = f"snapshot_account_{account_id}"
+        self._invalidate_job(job_id)
         if not self.scheduler:
             return
-            
-        job_id = f"snapshot_account_{account_id}"
-        
+
         try:
             self.scheduler.remove_job(job_id)
             logger.info(f"Removed snapshot task for account {account_id}")
@@ -370,7 +386,7 @@ class TaskScheduler:
         self._require_running(f"add interval task {task_id!r}")
 
         self.scheduler.add_job(
-            func=self._track_job(task_func),
+            func=self._track_job(task_func, task_id),
             trigger=IntervalTrigger(seconds=interval_seconds, start_date=start_date),
             args=args,
             kwargs=kwargs,
@@ -395,7 +411,7 @@ class TaskScheduler:
         self._require_running(f"add date task {task_id!r}")
 
         self.scheduler.add_job(
-            func=self._track_job(task_func),
+            func=self._track_job(task_func, task_id),
             trigger=DateTrigger(run_date=run_date),
             args=args,
             kwargs=kwargs,
@@ -415,6 +431,7 @@ class TaskScheduler:
         Args:
             task_id: Task ID
         """
+        self._invalidate_job(task_id)
         if not self.scheduler:
             return
             

@@ -178,7 +178,7 @@ def test_jobs_skip_execution_after_cancellation_requested():
     calls = []
     ts._cancel_event.set()
 
-    wrapped = ts._track_job(lambda: calls.append(1))
+    wrapped = ts._track_job(lambda: calls.append(1), "cancel_skip")
     wrapped()
 
     assert calls == []
@@ -232,7 +232,9 @@ def test_start_rejected_while_previous_generation_still_inflight():
             time.sleep(0.02)
 
     try:
-        threading.Thread(target=ts._track_job(job), daemon=True).start()
+        threading.Thread(
+            target=ts._track_job(job, "busy_generation_job"), daemon=True
+        ).start()
         assert started.wait(10), "job never started"
         assert ts.shutdown(timeout=0.15) is False
         assert ts.cancellation_requested()
@@ -266,7 +268,7 @@ def test_late_job_start_after_clean_shutdown_is_skipped():
     ts = TaskScheduler()
     ts.start()
     calls = []
-    wrapped = ts._track_job(lambda: calls.append(1))
+    wrapped = ts._track_job(lambda: calls.append(1), "late_job")
 
     assert ts.shutdown(timeout=5) is True
     # Simulate APScheduler firing a job that was already submitted to the
@@ -280,7 +282,7 @@ def test_late_job_start_after_clean_shutdown_is_skipped():
     try:
         wrapped()
         assert calls == []
-        fresh = ts._track_job(lambda: calls.append(1))
+        fresh = ts._track_job(lambda: calls.append(1), "late_job")
         fresh()
         assert calls == [1]
     finally:
@@ -300,7 +302,7 @@ def test_stale_submitted_job_skipped_after_clean_shutdown_and_restart():
     release_enter = threading.Event()
     entered = threading.Event()
 
-    stale = ts._track_job(lambda: body_ran.append(1))
+    stale = ts._track_job(lambda: body_ran.append(1), "stale_submitted")
 
     def delayed_executor_callback():
         entered.set()
@@ -322,6 +324,41 @@ def test_stale_submitted_job_skipped_after_clean_shutdown_and_restart():
     assert ts.shutdown(timeout=5) is True
 
 
+def test_remove_or_replace_invalidates_queued_wrapper_same_generation():
+    """Queued wrappers must not run after remove/re-add in the same generation.
+
+    Regression: reset_auto_trading_job removes and rebuilds trade tasks; an
+    already-submitted callback from the old registration must not execute
+    the previous configuration alongside the new one.
+    """
+    ts = TaskScheduler()
+    ts.start()
+    calls = []
+    hold = threading.Event()
+    armed = threading.Event()
+
+    old = ts._track_job(lambda: calls.append("old"), "trade_job")
+
+    def queued():
+        armed.set()
+        hold.wait(10)
+        old()
+
+    worker = threading.Thread(target=queued, daemon=True)
+    worker.start()
+    assert armed.wait(5)
+
+    ts.remove_task("trade_job")
+    new = ts._track_job(lambda: calls.append("new"), "trade_job")
+    hold.set()
+    worker.join(5)
+    new()
+
+    assert calls == ["new"], f"stale replaced job still ran: {calls}"
+    assert ts._generation == 1
+    assert ts.shutdown(timeout=5) is True
+
+
 def test_shutdown_never_reports_clean_while_a_job_body_runs_after_return():
     """Race exerciser for the atomic check-and-register contract.
 
@@ -339,7 +376,7 @@ def test_shutdown_never_reports_clean_while_a_job_body_runs_after_return():
             with lock:
                 body_started_at.append(time.monotonic())
 
-        wrapped = ts._track_job(task)
+        wrapped = ts._track_job(task, f"race_job_{_}")
         barrier = threading.Barrier(9)
 
         def fire():

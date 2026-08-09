@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import functools
 import threading
+import types
+from collections.abc import Iterator, Mapping, Sequence
 from typing import Any, Callable, Optional, Protocol, runtime_checkable
 
 from sqlalchemy.engine import Connection, Engine, Result
@@ -37,6 +39,26 @@ from benchmark.persistence.repositories import (
     TradeRepository,
     TradeCommandReceiptRepository,
     UserRepository,
+)
+
+
+# Attributes that escape to DBAPI cursors / driver connections. Never expose
+# them through the session proxy; callers must use guarded Session APIs.
+_DBAPI_ESCAPE_ATTRS = frozenset(
+    {
+        "cursor",
+        "raw_connection",
+        "dbapi_connection",
+        "driver_connection",
+    }
+)
+
+_DBAPI_CONNECTION_ATTRS = frozenset(
+    {
+        "connection",
+        "dbapi_connection",
+        "driver_connection",
+    }
 )
 
 
@@ -161,8 +183,9 @@ class SqlAlchemyUnitOfWork:
         New code goes through the repository attributes; direct session
         use should shrink to zero as call sites migrate. The returned
         proxy re-checks the owner thread on *every* attribute access and
-        wraps Connection/Transaction/Engine results so holding them cannot
-        bypass the cross-thread guard.
+        wraps Connection/Transaction/Engine/Query/Result results so holding
+        them cannot bypass the cross-thread guard. DBAPI handles and bare
+        generators are refused or re-wrapped.
         """
         # Validate context and calling thread eagerly, matching the old
         # behavior of raising at property access time.
@@ -185,9 +208,82 @@ def default_unit_of_work_factory(**session_kwargs: Any) -> UnitOfWorkFactory:
     return _factory
 
 
+def _is_dbapi_handle(value: Any) -> bool:
+    """True for driver cursors / DBAPI connections that must not escape."""
+
+    if value is None or isinstance(
+        value,
+        (
+            Session,
+            Connection,
+            Engine,
+            EngineTransaction,
+            SessionTransaction,
+            Query,
+            Result,
+            FilterResult,
+            GuardedSessionAccess,
+            _ThreadGuardedDbProxy,
+            _GuardedIterator,
+        ),
+    ):
+        return False
+    module = type(value).__module__ or ""
+    name = type(value).__name__
+    if module.startswith("sqlalchemy."):
+        # Pool fairy wrappers still speak raw SQL once handed out.
+        if "pool" in module and "Connection" in name:
+            return True
+        return False
+    if name in {"Cursor", "Connection", "PooledConnection"}:
+        return True
+    if module.split(".", 1)[0] in {
+        "sqlite3",
+        "pymysql",
+        "MySQLdb",
+        "psycopg2",
+        "psycopg",
+        "oracledb",
+        "cx_Oracle",
+        "pyodbc",
+    }:
+        return True
+    return False
+
+
+def _is_deferred_iterator(value: Any) -> bool:
+    if isinstance(value, types.GeneratorType):
+        return True
+    if isinstance(value, _GuardedIterator):
+        return False
+    if not isinstance(value, Iterator):
+        return False
+    # Sequences/mappings are snapshots, not live DB handles.
+    if isinstance(value, (str, bytes, bytearray, Mapping, Sequence)):
+        return False
+    if isinstance(
+        value,
+        (Result, FilterResult, Query, Connection, Engine, Session),
+    ):
+        return False
+    return True
+
+
+def _refuse_dbapi(name: str) -> None:
+    raise RuntimeError(
+        f"UnitOfWork session proxy refuses to expose {name!r}; "
+        "DBAPI handles bypass thread and lifecycle guards"
+    )
+
+
 def _guard_db_result(owner_check: Callable[[], Any], value: Any) -> Any:
     """Wrap SQLAlchemy objects that can execute or defer SQL."""
 
+    if _is_dbapi_handle(value):
+        raise RuntimeError(
+            "UnitOfWork session proxy refuses to expose DBAPI handles; "
+            "they bypass thread and lifecycle guards"
+        )
     if isinstance(value, Session):
         # Query.session / similar escapes must not hand out a bare Session.
         return GuardedSessionAccess(owner_check)
@@ -204,6 +300,8 @@ def _guard_db_result(owner_check: Callable[[], Any], value: Any) -> Any:
         ),
     ):
         return _ThreadGuardedDbProxy(owner_check, value)
+    if _is_deferred_iterator(value):
+        return _GuardedIterator(owner_check, value)
     return value
 
 
@@ -238,13 +336,26 @@ class _ThreadGuardedDbProxy:
 
     def __getattr__(self, name: str) -> Any:
         self._owner_check()
+        if name in _DBAPI_ESCAPE_ATTRS:
+            _refuse_dbapi(name)
         attribute = getattr(self._target, name)
+        if name in _DBAPI_CONNECTION_ATTRS and not callable(attribute):
+            # Connection.connection / similar properties yield DBAPI handles.
+            if _is_dbapi_handle(attribute):
+                _refuse_dbapi(name)
+            return _guard_db_result(self._owner_check, attribute)
         if not callable(attribute):
             return _guard_db_result(self._owner_check, attribute)
 
         @functools.wraps(attribute)
         def _guarded_call(*args: Any, **kwargs: Any) -> Any:
             self._owner_check()
+            if name in _DBAPI_ESCAPE_ATTRS or name in _DBAPI_CONNECTION_ATTRS:
+                # Engine.raw_connection() / Connection.connection() style.
+                result = attribute(*args, **kwargs)
+                if _is_dbapi_handle(result):
+                    _refuse_dbapi(name)
+                return _guard_db_result(self._owner_check, result)
             return _guard_db_result(
                 self._owner_check, attribute(*args, **kwargs)
             )
@@ -291,13 +402,16 @@ class GuardedSessionAccess:
     bare bound methods: they are wrapped so the owner-thread/context check
     re-runs at *call* time. Connection/Transaction/Engine/Query/Result
     results are wrapped so a thread cannot capture them and use them from
-    another thread or after the UoW closes.
+    another thread or after the UoW closes. DBAPI handles are refused.
     """
 
     def __init__(self, provider: Callable[[], Session]) -> None:
         self._provider = provider
 
     def __getattr__(self, name: str) -> Any:
+        if name in _DBAPI_ESCAPE_ATTRS:
+            self._provider()
+            _refuse_dbapi(name)
         provider = self._provider
         attribute = getattr(provider(), name)
         if not callable(attribute):

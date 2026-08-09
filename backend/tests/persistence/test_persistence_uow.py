@@ -272,6 +272,53 @@ def test_session_query_and_result_cannot_bypass_guards(session_factory):
         escaped_session.execute(text("SELECT 1"))
 
 
+def test_session_refuses_dbapi_handles_and_partitions_generators(session_factory):
+    """partitions()/cursor/raw_connection must not escape the UoW guards."""
+    account_id = _seed_account(session_factory)
+
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.session.execute(
+            text("UPDATE accounts SET name = name WHERE id = :id"),
+            {"id": account_id},
+        )
+        result = uow.session.execute(text("SELECT id FROM accounts ORDER BY id"))
+        with pytest.raises(RuntimeError, match="DBAPI|cursor|refuses"):
+            _ = result.cursor
+
+        bind = uow.session.get_bind()
+        with pytest.raises(RuntimeError, match="DBAPI|raw_connection|refuses"):
+            bind.raw_connection()
+
+        conn = uow.session.connection()
+        with pytest.raises(RuntimeError, match="DBAPI|connection|refuses"):
+            _ = conn.connection
+
+        partitions = result.partitions(size=1)
+
+    # Generator captured while open must not survive UoW exit.
+    with pytest.raises(RuntimeError):
+        list(partitions)
+
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        result = uow.session.execute(text("SELECT id FROM accounts ORDER BY id"))
+        partitions = result.partitions(size=1)
+        errors = []
+        rows = []
+
+        def iterate_elsewhere():
+            try:
+                rows.append([list(part) for part in partitions])
+            except RuntimeError as exc:
+                errors.append(str(exc))
+
+        thread = threading.Thread(target=iterate_elsewhere)
+        thread.start()
+        thread.join()
+
+        assert rows == []
+        assert errors and ("thread" in errors[0] or "UnitOfWork" in errors[0])
+
+
 def test_repository_cannot_bypass_uow_cross_thread_guard(session_factory):
     errors = []
     with SqlAlchemyUnitOfWork(session_factory) as uow:
