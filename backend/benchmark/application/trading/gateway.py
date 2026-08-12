@@ -11,17 +11,15 @@ from threading import Condition, Lock
 from typing import Any, Protocol
 from typing import runtime_checkable
 
-from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
-
 from benchmark.contracts import Market, TradeCommand, TradeCommandResult, to_jsonable
 from benchmark.contracts.errors import TradeGatewayError
 from benchmark.persistence import (
-    GuardedSessionAccess,
     UnitOfWork,
     UnitOfWorkFactory,
+    PersistenceConflictError,
     default_unit_of_work_factory,
 )
+from benchmark.persistence.trade_transactions import TradeTransactionOperations
 from benchmark.infrastructure.market.symbols import resolve_symbol_market
 
 from .commands import (
@@ -37,7 +35,7 @@ from .policy import normalize_trade_command
 class TradeExecutor(Protocol):
     def __call__(
         self,
-        session: Session,
+        transaction: TradeTransactionOperations,
         command: TradeCommand,
     ) -> Mapping[str, Any]: ...
 
@@ -90,7 +88,6 @@ class SynchronousTradeCommandGateway:
             raise TypeError("command must be CreateOrderCommand")
         try:
             with self.uow_factory() as uow:
-                session = _session_from_uow(uow)
                 account = uow.accounts.get_for_update(command.account_id)
                 if account is None:
                     uow.rollback()
@@ -99,12 +96,9 @@ class SynchronousTradeCommandGateway:
                         reject_code="ACCOUNT_NOT_FOUND",
                         reject_message=f"Account {command.account_id} not found",
                     )
-                from services.order_matching import create_order
-
                 resolved = resolve_symbol_market(command.symbol, command.market)
 
-                order = create_order(
-                    db=session,
+                order = uow.trade_operations.create_order(
                     account=account,
                     symbol=resolved.symbol,
                     name=resolved.symbol,
@@ -117,14 +111,7 @@ class SynchronousTradeCommandGateway:
                 )
                 trade_id = None
                 if command.order_type == "MARKET":
-                    from services.order_matching import check_and_execute_order
-
-                    executed = check_and_execute_order(
-                        session,
-                        order,
-                        manage_transaction=False,
-                        raise_on_error=True,
-                    )
+                    executed = uow.trade_operations.execute_order(order)
                     if not executed:
                         raise TradeGatewayError(
                             "MARKET order was not executed",
@@ -162,7 +149,6 @@ class SynchronousTradeCommandGateway:
             raise TypeError("command must be CancelOrderCommand")
         try:
             with self.uow_factory() as uow:
-                session = _session_from_uow(uow)
                 account = uow.accounts.get_for_update(command.account_id)
                 if account is None:
                     uow.rollback()
@@ -179,14 +165,8 @@ class SynchronousTradeCommandGateway:
                         reject_code="ORDER_NOT_FOUND",
                         reject_message="Order not found for account",
                     )
-                from services.order_matching import cancel_order
-
-                cancelled = cancel_order(
-                    session,
-                    order,
-                    reason=command.reason,
-                    manage_transaction=False,
-                    raise_on_error=True,
+                cancelled = uow.trade_operations.cancel_order(
+                    order, reason=command.reason
                 )
                 if not cancelled:
                     uow.rollback()
@@ -234,22 +214,14 @@ class SynchronousTradeCommandGateway:
 
     def _process_pending_for_account(self, account_id: int) -> ProcessingResult:
         with self.uow_factory() as uow:
-            session = _session_from_uow(uow)
             account = uow.accounts.get_for_update(account_id)
             if account is None:
                 uow.rollback()
                 return ProcessingResult(processed=0, executed=0)
             pending = tuple(uow.orders.list_pending_for_update(account_id))
-            from services.order_matching import check_and_execute_order
-
             executed = 0
             for order in pending:
-                if check_and_execute_order(
-                    session,
-                    order,
-                    manage_transaction=False,
-                    raise_on_error=True,
-                ):
+                if uow.trade_operations.execute_order(order):
                     executed += 1
             uow.commit()
             return ProcessingResult(processed=len(pending), executed=executed)
@@ -282,13 +254,12 @@ class SynchronousTradeCommandGateway:
                         command.idempotency_key,
                         command_json,
                     )
-                except IntegrityError:
+                except PersistenceConflictError:
                     uow.rollback()
                     return self._load_committed_receipt(command, command_json)
 
-                session = _session_from_uow(uow)
-                with session.begin_nested() as business_transaction:
-                    result = self._execute_once(session, command)
+                with uow.trade_operations.savepoint() as business_transaction:
+                    result = self._execute_once(uow.trade_operations, command)
                     if not result.accepted:
                         business_transaction.rollback()
                 result_json = _encode_result(result)
@@ -326,12 +297,17 @@ class SynchronousTradeCommandGateway:
 
     def _execute_once(
         self,
-        session: Session,
+        transaction: TradeTransactionOperations,
         command: TradeCommand,
     ) -> TradeCommandResult:
-        executor = self.executor or _execute_legacy
         try:
-            raw = executor(session, command)
+            if self.executor is None:
+                # The one legacy Session callback is invoked only inside the
+                # infrastructure adapter. Application executors receive the
+                # narrow transaction port itself.
+                raw = transaction.run_legacy_executor(_execute_legacy, command)
+            else:
+                raw = self.executor(transaction, command)
         except ValueError as exc:
             message = str(exc)
             return TradeCommandResult(
@@ -386,7 +362,7 @@ class SynchronousTradeCommandGateway:
         )
 
 
-def _execute_legacy(session: Session, command: TradeCommand) -> Mapping[str, Any]:
+def _execute_legacy(session: Any, command: TradeCommand) -> Mapping[str, Any]:
     from services.agent.trade_execution_tool import _execute_trade_tool_legacy
 
     return _execute_trade_tool_legacy(
@@ -421,19 +397,6 @@ def _execute_legacy(session: Session, command: TradeCommand) -> Mapping[str, Any
         manage_transaction=False,
         raise_on_error=True,
     )
-
-
-def _session_from_uow(uow: UnitOfWork) -> Session | GuardedSessionAccess:
-    session = getattr(uow, "session", None)
-    # The UoW hands out a thread-guarded proxy (every access re-checks the
-    # owner thread); the gateway always uses it on that same thread.
-    if not isinstance(session, (Session, GuardedSessionAccess)):
-        raise TradeGatewayError(
-            "Trade gateway requires a synchronous SQLAlchemy session adapter",
-            code="TRADE_UOW_SESSION_UNAVAILABLE",
-        )
-    return session
-
 
 def _encode_command(command: TradeCommand) -> str:
     return json.dumps(

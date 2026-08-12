@@ -3,6 +3,8 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 import json
+from contextlib import contextmanager
+from dataclasses import dataclass
 from threading import Event, Lock
 
 import pytest
@@ -64,9 +66,16 @@ def session_factory(tmp_path):
 
 
 def _gateway(session_factory, executor=None):
+    application_executor = None
+    if executor is not None:
+        application_executor = (
+            lambda transaction, command: transaction.run_legacy_executor(
+                executor, command
+            )
+        )
     return SynchronousTradeCommandGateway(
         lambda: SqlAlchemyUnitOfWork(session_factory),
-        executor=executor,
+        executor=application_executor,
     )
 
 
@@ -85,6 +94,110 @@ def _command(key="round-1:call-1", **changes):
     }
     values.update(changes)
     return TradeCommand(**values)
+
+
+@dataclass
+class _FakeReceipt:
+    account_id: int
+    idempotency_key: str
+    command_json: str
+    status: str = "PENDING"
+    result_json: str | None = None
+    completed_at: object | None = None
+
+
+class _FakeSavepoint:
+    def __init__(self):
+        self.rolled_back = False
+
+    def rollback(self):
+        self.rolled_back = True
+
+
+class _FakeTradeOperations:
+    def __init__(self):
+        self.savepoints = []
+
+    @contextmanager
+    def savepoint(self):
+        savepoint = _FakeSavepoint()
+        self.savepoints.append(savepoint)
+        yield savepoint
+
+    def run_legacy_executor(self, executor, command):
+        return executor(self, command)
+
+
+class _FakeAccounts:
+    def get_for_update(self, account_id):
+        return object() if account_id == 1 else None
+
+
+class _FakeReceipts:
+    def __init__(self, store):
+        self.store = store
+
+    def get(self, account_id, key):
+        return self.store.get((account_id, key))
+
+    def claim(self, account_id, key, command_json):
+        receipt = _FakeReceipt(account_id, key, command_json)
+        self.store[(account_id, key)] = receipt
+        return receipt
+
+    def complete(self, receipt, result_json, completed_at):
+        receipt.status = "COMPLETED"
+        receipt.result_json = result_json
+        receipt.completed_at = completed_at
+        return receipt
+
+
+class _FakeUnitOfWork:
+    def __init__(self, store):
+        self.accounts = _FakeAccounts()
+        self.trade_command_receipts = _FakeReceipts(store)
+        self.trade_operations = _FakeTradeOperations()
+        self.committed = False
+        self.rolled_back = False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if exc_type is not None or not self.committed:
+            self.rolled_back = True
+
+    def commit(self):
+        self.committed = True
+
+    def rollback(self):
+        self.rolled_back = True
+
+
+def test_gateway_application_port_runs_with_fake_uow_without_sqlalchemy():
+    receipts = {}
+    units = []
+
+    def factory():
+        unit = _FakeUnitOfWork(receipts)
+        units.append(unit)
+        return unit
+
+    transaction_seen = []
+
+    def executor(transaction, command):
+        transaction_seen.append(transaction)
+        return {"executed": True, "order_id": 7}
+
+    result = SynchronousTradeCommandGateway(factory, executor=executor).execute(
+        _command(key="fake-port")
+    )
+
+    assert result.accepted is True
+    assert result.order_id == 7
+    assert units[0].committed is True
+    assert transaction_seen == [units[0].trade_operations]
+    assert receipts[(1, "fake-port")].status == "COMPLETED"
 
 
 def test_success_commits_business_write_and_receipt_once(session_factory):

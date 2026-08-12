@@ -91,10 +91,16 @@ def test_different_idempotency_keys_are_serialized_by_account_row_lock():
 
     try:
         first_gateway = SynchronousTradeCommandGateway(
-            lambda: SqlAlchemyUnitOfWork(factory), executor=executor
+            lambda: SqlAlchemyUnitOfWork(factory),
+            executor=lambda transaction, trade_command: (
+                transaction.run_legacy_executor(executor, trade_command)
+            ),
         )
         second_gateway = SynchronousTradeCommandGateway(
-            lambda: SqlAlchemyUnitOfWork(factory), executor=executor
+            lambda: SqlAlchemyUnitOfWork(factory),
+            executor=lambda transaction, trade_command: (
+                transaction.run_legacy_executor(executor, trade_command)
+            ),
         )
         with ThreadPoolExecutor(max_workers=2) as pool:
             first = pool.submit(first_gateway.execute, command(f"{suffix}:first"))

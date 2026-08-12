@@ -42,7 +42,8 @@ class TaskDescriptor:
 class TaskState(str, Enum):
     REGISTERED = "registered"
     RUNNING = "running"
-    FAILED = "failed"
+    START_FAILED = "start_failed"
+    STOP_FAILED = "stop_failed"
     STOPPED = "stopped"
     SKIPPED = "skipped"
 
@@ -77,6 +78,16 @@ class TaskRegistry:
         started (see ``runtime.bootstrap_runtime``).
         """
         with self._lock:
+            stop_failed = [
+                record.descriptor.task_id
+                for record in self._records.values()
+                if record.state == TaskState.STOP_FAILED
+            ]
+            if stop_failed:
+                raise RuntimeError(
+                    "runtime tasks have not completed shutdown: "
+                    f"{stop_failed!r}; retry stop_all() before start_all()"
+                )
             for record in self._records.values():
                 if record.state == TaskState.RUNNING:
                     continue
@@ -104,7 +115,7 @@ class TaskRegistry:
                 try:
                     descriptor.start()
                 except Exception as exc:
-                    record.state = TaskState.FAILED
+                    record.state = TaskState.START_FAILED
                     record.error = str(exc)
                     if descriptor.required:
                         logger.error(
@@ -123,20 +134,43 @@ class TaskRegistry:
                     logger.info("runtime task started: %s", descriptor.task_id)
 
     def stop_all(self) -> Dict[str, Optional[str]]:
-        """Stop running tasks in reverse start order (idempotent).
+        """Stop tasks in reverse order without dismantling failed dependents.
 
         Returns ``{task_id: error_or_None}``; stop failures are recorded
-        and logged, never silently dropped.
+        and remain eligible for every later retry until stop succeeds. A task
+        is deferred while any direct dependent remains RUNNING/STOP_FAILED;
+        this rule naturally preserves the complete transitive dependency chain.
         """
         results: Dict[str, Optional[str]] = {}
         with self._lock:
-            running = sorted(
-                (r for r in self._records.values() if r.state == TaskState.RUNNING),
+            stoppable = sorted(
+                (
+                    r
+                    for r in self._records.values()
+                    if r.state in (TaskState.RUNNING, TaskState.STOP_FAILED)
+                ),
                 key=lambda r: r.start_index,
                 reverse=True,
             )
-            for record in running:
+            for record in stoppable:
                 descriptor = record.descriptor
+                active_dependents = [
+                    dependent.descriptor.task_id
+                    for dependent in self._records.values()
+                    if descriptor.task_id in dependent.descriptor.dependencies
+                    and dependent.state in (TaskState.RUNNING, TaskState.STOP_FAILED)
+                ]
+                if active_dependents:
+                    results[descriptor.task_id] = (
+                        "stop deferred; active dependents: "
+                        + ", ".join(sorted(active_dependents))
+                    )
+                    logger.warning(
+                        "runtime task %s stop deferred; active dependents: %s",
+                        descriptor.task_id,
+                        active_dependents,
+                    )
+                    continue
                 if descriptor.stop is None:
                     record.state = TaskState.STOPPED
                     results[descriptor.task_id] = None
@@ -144,7 +178,7 @@ class TaskRegistry:
                 try:
                     descriptor.stop()
                 except Exception as exc:
-                    record.state = TaskState.FAILED
+                    record.state = TaskState.STOP_FAILED
                     record.error = str(exc)
                     results[descriptor.task_id] = str(exc)
                     logger.error("runtime task %s failed to stop: %s", descriptor.task_id, exc)
@@ -163,10 +197,12 @@ class TaskRegistry:
         with self._lock:
             out: Dict[str, str] = {}
             for task_id, record in self._records.items():
-                if record.state == TaskState.FAILED:
+                if record.state == TaskState.START_FAILED:
                     out[task_id] = (
                         "required_failed" if record.descriptor.required else "degraded"
                     )
+                elif record.state == TaskState.STOP_FAILED:
+                    out[task_id] = "stop_failed"
                 else:
                     out[task_id] = record.state.value
             return out
@@ -174,7 +210,8 @@ class TaskRegistry:
     def is_ready(self) -> bool:
         with self._lock:
             return not any(
-                r.state == TaskState.FAILED and r.descriptor.required
+                r.state in (TaskState.START_FAILED, TaskState.STOP_FAILED)
+                and r.descriptor.required
                 for r in self._records.values()
             )
 

@@ -39,6 +39,20 @@ async def shutdown_runtime(handle: RuntimeHandle) -> None
 - FULL 启动的 job id、interval、first execution 与 M00 fixture 一致。
 - 重复 bootstrap/shutdown 无重复 job、悬挂线程或 container lease。
 
+## 实现约束：Scheduler Runtime
+
+- APScheduler 仅作为执行引擎；应用以不可变 JobSpec 和 job family 作为调度事实来源。
+- 每个 job registration 同时记录唯一 owner（standalone 或一个 family）、lifetime（one-shot/recurring）和执行终态；所有安装、删除与 reconcile 必须经过同一所有权检查。
+- one-shot occurrence 一经 callback admission 即标记 consumed；相同 job id/run_date 的 reconcile 是幂等声明，失败恢复不得重新执行已消费 occurrence，新 run_date 才是新任务。
+- start、shutdown、job reconcile、remove 与 callback admission 使用同一个 RLock/Condition 状态机；不得再引入并列 token/registry 锁。
+- 逻辑任务组（特别是 AI/baseline first-run 与 recurring jobs）必须通过一次 reconcile 更新；失败恢复完整旧组，禁止混合配置继续运行。
+- 每次 generation 创建独立 cancellation event；旧 callback 永远不能观察到被清除的旧 event。
+- shutdown 必须先阻止新 callback，再等待已进入 job body 的调用。超时或 stop callback 失败必须传播至 lifespan 调用方，不能只记日志。
+- Runtime registry 必须区分 START_FAILED 与可重试的 STOP_FAILED；任何 STOP_FAILED 清零前禁止 start，重复 shutdown 必须继续调用 stop。
+- APScheduler 的 STOPPED/running 只表示 callback admission 已关闭，不代表 executor、job store 与 shutdown event 已清理；adapter 必须逐阶段记录完成度，异常重试从首个未完成资源继续，全部完成前不得清空应用 registration 或报告成功。
+- Runtime 停止必须遵守 dependency graph：dependent 仍为 RUNNING/STOP_FAILED 时，其 dependency 保持运行并返回 deferred failure；dependent 重试成功后才可在同一逆序 pass 中继续停止依赖，且该规则必须传递保护整条依赖链。
+- APScheduler 3.x 的 DateTrigger 自动删除与 JobStore shutdown 竞态必须在 scheduler adapter 内收口；不得在业务任务或测试中吞掉后台线程异常。
+
 ## 前置与并行
 
 前置 M00。可早期独立实施；与 M13 集成 extension catalog 的调用点时只依赖其 facade。

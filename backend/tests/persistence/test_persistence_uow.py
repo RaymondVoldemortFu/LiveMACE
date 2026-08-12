@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import QueuePool
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 if str(BACKEND_DIR) not in sys.path:
@@ -41,8 +42,7 @@ def session_factory():
 def _seed_account(session_factory) -> int:
     with SqlAlchemyUnitOfWork(session_factory) as uow:
         user = User(username="u1", is_active="true")
-        uow.session.add(user)
-        uow.session.flush()
+        uow.users.add(user)
         account = Account(
             user_id=user.id,
             version="v1",
@@ -53,7 +53,7 @@ def _seed_account(session_factory) -> int:
             frozen_cash=0.0,
             is_active="true",
         )
-        uow.session.add(account)
+        uow.accounts.add(account)
         uow.commit()
         return account.id
 
@@ -95,7 +95,6 @@ def test_business_rejection_rollback_discards_changes(session_factory):
     with SqlAlchemyUnitOfWork(session_factory) as uow:
         uow.accounts.update_cash(account_id, current_cash=1.0)
         uow.rollback()  # business-level rejection, no exception
-        uow.commit()
     with SqlAlchemyUnitOfWork(session_factory) as uow:
         assert float(uow.accounts.get(account_id).current_cash) == 10000.0
 
@@ -130,193 +129,43 @@ def test_uow_rejects_cross_thread_use(session_factory):
     assert errors and "thread" in errors[0]
 
 
-def test_session_escape_hatch_cannot_bypass_cross_thread_guard(session_factory):
-    """A session proxy obtained on the owner thread must reject use from
-    any other thread on every operation, not only at property access."""
-    errors = []
-    results = []
+def test_uow_does_not_expose_sqlalchemy_session_object_graph(session_factory):
     with SqlAlchemyUnitOfWork(session_factory) as uow:
-        session_proxy = uow.session  # obtained on the owner thread
-
-        def use_from_other_thread():
-            try:
-                results.append(session_proxy.execute(text("SELECT 1")).scalar())
-            except RuntimeError as exc:
-                errors.append(str(exc))
-
-        thread = threading.Thread(target=use_from_other_thread)
-        thread.start()
-        thread.join()
-
-        # Same-thread use keeps working for legacy call sites.
-        assert session_proxy.execute(text("SELECT 1")).scalar() == 1
-
-    assert results == [], "bare session escaped the cross-thread guard"
-    assert errors and "thread" in errors[0]
+        assert not hasattr(uow, "session")
+        assert not hasattr(uow, "engine")
+        assert not hasattr(uow, "connection")
 
 
-def test_captured_bound_method_cannot_bypass_cross_thread_guard(session_factory):
-    """Capturing a callable off the proxy on the owner thread must not
-    yield a bare Session bound method: the owner-thread check re-runs at
-    call time (code-review P2 follow-up)."""
-    errors = []
-    results = []
-    with SqlAlchemyUnitOfWork(session_factory) as uow:
-        escaped_execute = uow.session.execute  # captured on the owner thread
-
-        def call_from_other_thread():
-            try:
-                results.append(escaped_execute(text("SELECT 1")).scalar())
-            except RuntimeError as exc:
-                errors.append(str(exc))
-
-        thread = threading.Thread(target=call_from_other_thread)
-        thread.start()
-        thread.join()
-
-        # The captured callable still works on the owner thread.
-        assert escaped_execute(text("SELECT 1")).scalar() == 1
-
-    assert results == [], "captured bound method escaped the cross-thread guard"
-    assert errors and "thread" in errors[0]
-
-    # After the UoW context closed, the captured callable must fail too.
-    with pytest.raises(RuntimeError):
-        escaped_execute(text("SELECT 1"))
-
-
-def test_session_connection_cannot_bypass_cross_thread_guard(session_factory):
-    """Connection/Engine objects returned by the session proxy must stay guarded."""
-    errors = []
-    results = []
-    with SqlAlchemyUnitOfWork(session_factory) as uow:
-        connection = uow.session.connection()
-        bind = uow.session.get_bind()
-
-        def use_connection_from_other_thread():
-            try:
-                results.append(connection.execute(text("SELECT 1")).scalar())
-            except RuntimeError as exc:
-                errors.append(str(exc))
-
-        def use_bind_from_other_thread():
-            try:
-                with bind.connect() as conn:
-                    results.append(conn.execute(text("SELECT 1")).scalar())
-            except RuntimeError as exc:
-                errors.append(str(exc))
-
-        for target in (use_connection_from_other_thread, use_bind_from_other_thread):
-            thread = threading.Thread(target=target)
-            thread.start()
-            thread.join()
-
-        assert connection.execute(text("SELECT 1")).scalar() == 1
-
-    assert results == [], "session-returned DB object escaped the cross-thread guard"
-    assert len(errors) == 2 and all("thread" in item for item in errors)
-
-
-def test_session_query_and_result_cannot_bypass_guards(session_factory):
-    """Query/Result objects must stay bound to the owner thread and UoW lifetime."""
+def test_repository_method_captured_in_owner_thread_rechecks_lifecycle(session_factory):
     account_id = _seed_account(session_factory)
-    errors = []
-    results = []
-
     with SqlAlchemyUnitOfWork(session_factory) as uow:
-        query = uow.session.query(Account).filter(Account.id == account_id)
-        result = uow.session.execute(text("SELECT 1 AS value"))
-        escaped_session = query.session
-        result_iter = iter(result)
-
-        def use_query_from_other_thread():
-            try:
-                results.append(query.all())
-            except RuntimeError as exc:
-                errors.append(str(exc))
-
-        def use_result_from_other_thread():
-            try:
-                results.append(next(result_iter))
-            except RuntimeError as exc:
-                errors.append(str(exc))
-
-        def use_query_session_from_other_thread():
-            try:
-                results.append(escaped_session.execute(text("SELECT 1")).scalar())
-            except RuntimeError as exc:
-                errors.append(str(exc))
-
-        for target in (
-            use_query_from_other_thread,
-            use_result_from_other_thread,
-            use_query_session_from_other_thread,
-        ):
-            thread = threading.Thread(target=target)
-            thread.start()
-            thread.join()
-
-        # Same-thread chained Query use while the UoW is open remains valid.
-        assert query.filter(Account.id == account_id).one().id == account_id
-        # Fresh result after the iterator was only rejected cross-thread.
-        assert uow.session.execute(text("SELECT 1 AS value")).scalar_one() == 1
-
-    assert results == [], "Query/Result/session escaped the cross-thread guard"
-    assert len(errors) == 3 and all("thread" in item for item in errors)
-
-    with pytest.raises(RuntimeError):
-        query.all()
-    with pytest.raises(RuntimeError):
-        next(result_iter)
-    with pytest.raises(RuntimeError):
-        escaped_session.execute(text("SELECT 1"))
+        get_account = uow.accounts.get
+        assert get_account(account_id).id == account_id
+    with pytest.raises(RuntimeError, match="active transaction"):
+        get_account(account_id)
 
 
-def test_session_refuses_dbapi_handles_and_partitions_generators(session_factory):
-    """partitions()/cursor/raw_connection must not escape the UoW guards."""
+def test_commit_and_rollback_end_the_only_transaction(session_factory):
     account_id = _seed_account(session_factory)
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.accounts.update_cash(account_id, current_cash=9000)
+        uow.commit()
+        with pytest.raises(RuntimeError, match="active transaction"):
+            uow.accounts.get(account_id)
 
     with SqlAlchemyUnitOfWork(session_factory) as uow:
-        uow.session.execute(
-            text("UPDATE accounts SET name = name WHERE id = :id"),
-            {"id": account_id},
-        )
-        result = uow.session.execute(text("SELECT id FROM accounts ORDER BY id"))
-        with pytest.raises(RuntimeError, match="DBAPI|cursor|refuses"):
-            _ = result.cursor
+        uow.accounts.update_cash(account_id, current_cash=1)
+        uow.rollback()
+        with pytest.raises(RuntimeError, match="active transaction"):
+            uow.accounts.get(account_id)
 
-        bind = uow.session.get_bind()
-        with pytest.raises(RuntimeError, match="DBAPI|raw_connection|refuses"):
-            bind.raw_connection()
 
-        conn = uow.session.connection()
-        with pytest.raises(RuntimeError, match="DBAPI|connection|refuses"):
-            _ = conn.connection
-
-        partitions = result.partitions(size=1)
-
-    # Generator captured while open must not survive UoW exit.
-    with pytest.raises(RuntimeError):
-        list(partitions)
-
+def test_normal_exit_without_commit_explicitly_rolls_back(session_factory):
+    account_id = _seed_account(session_factory)
     with SqlAlchemyUnitOfWork(session_factory) as uow:
-        result = uow.session.execute(text("SELECT id FROM accounts ORDER BY id"))
-        partitions = result.partitions(size=1)
-        errors = []
-        rows = []
-
-        def iterate_elsewhere():
-            try:
-                rows.append([list(part) for part in partitions])
-            except RuntimeError as exc:
-                errors.append(str(exc))
-
-        thread = threading.Thread(target=iterate_elsewhere)
-        thread.start()
-        thread.join()
-
-        assert rows == []
-        assert errors and ("thread" in errors[0] or "UnitOfWork" in errors[0])
+        uow.accounts.update_cash(account_id, current_cash=1)
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        assert float(uow.accounts.get(account_id).current_cash) == 10000.0
 
 
 def test_repository_cannot_bypass_uow_cross_thread_guard(session_factory):
@@ -346,7 +195,30 @@ def test_factory_yields_independent_units(session_factory):
     a = SqlAlchemyUnitOfWork(session_factory)
     b = SqlAlchemyUnitOfWork(session_factory)
     with a, b:
-        assert a.session is not b.session
+        assert a is not b
+        assert a.accounts is not b.accounts
+        assert not hasattr(a, "session")
+        assert not hasattr(b, "session")
+
+
+def test_uow_exit_returns_checked_out_connection_to_pool(tmp_path):
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'uow-pool.db'}",
+        poolclass=QueuePool,
+        pool_size=1,
+        max_overflow=0,
+    )
+    Base.metadata.create_all(bind=engine)
+    factory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    baseline = engine.pool.checkedout()
+
+    with SqlAlchemyUnitOfWork(factory) as uow:
+        # Force checkout; constructing a Session alone is lazy.
+        assert uow.users.get_by_username("missing") is None
+        assert engine.pool.checkedout() == baseline + 1
+
+    assert engine.pool.checkedout() == baseline
+    engine.dispose()
 
 
 def test_account_repository_mutations_are_uow_controlled(session_factory):

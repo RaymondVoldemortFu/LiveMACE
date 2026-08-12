@@ -84,10 +84,15 @@ def _gateway(executor, store=None):
     kwargs = {}
     if store is not None:
         kwargs["_store"] = store
+    application_executor = (
+        lambda transaction, command: transaction.run_legacy_executor(
+            executor, command
+        )
+    )
     return (
         SynchronousTradeCommandGateway(
             lambda: SqlAlchemyUnitOfWork(session_factory),
-            executor=executor,
+            executor=application_executor,
             **kwargs,
         ),
         session_factory,
@@ -220,7 +225,9 @@ def test_m11_durable_receipt_is_reused_between_gateway_instances():
     first_gateway, session_factory = _gateway(fake_legacy)
     second_gateway = SynchronousTradeCommandGateway(
         lambda: SqlAlchemyUnitOfWork(session_factory),
-        executor=fake_legacy,
+        executor=lambda transaction, command: transaction.run_legacy_executor(
+            fake_legacy, command
+        ),
     )
     command = TradeCommand(1, "open", Market.CRYPTO, "BTC", "long", "portion", Decimal("0.2"), 1, "test", "shared-key")
 

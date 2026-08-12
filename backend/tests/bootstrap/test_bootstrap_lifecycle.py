@@ -12,6 +12,8 @@ if str(BACKEND_DIR) not in sys.path:
 
 from benchmark.bootstrap.runtime import (
     BootstrapContext,
+    RuntimeShutdownError,
+    RuntimeHandle,
     StartupMode,
     bootstrap_runtime_sync,
     shutdown_runtime_sync,
@@ -80,6 +82,145 @@ def test_stop_all_reverse_order_and_reports_stop_failures():
     assert stops == [("stop", "c"), ("stop", "a")]  # reverse start order
     assert results["b"] == "stop failed"
     assert results["a"] is None and results["c"] is None
+    assert registry.status()["b"] == TaskState.STOP_FAILED
+
+
+def test_stop_failure_is_retried_until_shutdown_succeeds():
+    calls = []
+
+    def stop():
+        calls.append("stop")
+        if len(calls) == 1:
+            raise RuntimeError("not drained")
+
+    registry = TaskRegistry()
+    registry.register(TaskDescriptor("scheduler", start=lambda: None, stop=stop))
+    registry.start_all()
+
+    first = registry.stop_all()
+    assert first == {"scheduler": "not drained"}
+    assert registry.status()["scheduler"] == TaskState.STOP_FAILED
+    assert registry.health()["scheduler"] == "stop_failed"
+    assert not registry.is_ready()
+
+    second = registry.stop_all()
+    assert second == {"scheduler": None}
+    assert calls == ["stop", "stop"]
+    assert registry.status()["scheduler"] == TaskState.STOPPED
+
+
+def test_start_preflight_rejects_stop_failed_state_without_partial_restart():
+    starts = []
+    registry = TaskRegistry()
+    registry.register(
+        TaskDescriptor(
+            "first",
+            start=lambda: starts.append("first"),
+            stop=lambda: None,
+        )
+    )
+    registry.register(
+        TaskDescriptor(
+            "second",
+            start=lambda: starts.append("second"),
+            stop=lambda: (_ for _ in ()).throw(RuntimeError("not drained")),
+        )
+    )
+    registry.start_all()
+    assert registry.stop_all()["second"] == "not drained"
+    starts.clear()
+
+    with pytest.raises(RuntimeError, match="not completed shutdown"):
+        registry.start_all()
+
+    assert starts == []
+    assert registry.status() == {
+        "first": TaskState.STOPPED,
+        "second": TaskState.STOP_FAILED,
+    }
+
+
+def test_runtime_shutdown_retries_a_previous_stop_failure():
+    calls = []
+
+    def stop():
+        calls.append("stop")
+        if len(calls) == 1:
+            raise RuntimeError("not drained")
+
+    handle = bootstrap_runtime_sync(
+        BootstrapContext(
+            mode=StartupMode.FULL,
+            task_descriptors=[TaskDescriptor("scheduler", lambda: None, stop)],
+            **_stage_recorder([]),
+        )
+    )
+    with pytest.raises(RuntimeShutdownError) as caught:
+        shutdown_runtime_sync(handle)
+    assert caught.value.failures == {"scheduler": "not drained"}
+
+    shutdown_runtime_sync(handle)
+    assert calls == ["stop", "stop"]
+    assert handle.registry.status()["scheduler"] == TaskState.STOPPED
+
+
+def test_stop_failure_preserves_dependency_until_dependent_retry_succeeds():
+    log = []
+    dependent_attempts = []
+
+    def stop_dependent():
+        dependent_attempts.append(1)
+        log.append("stop:dependent")
+        if len(dependent_attempts) == 1:
+            raise RuntimeError("dependent busy")
+
+    registry = TaskRegistry()
+    registry.register(
+        TaskDescriptor(
+            "scheduler",
+            start=lambda: None,
+            stop=lambda: log.append("stop:scheduler"),
+        )
+    )
+    registry.register(
+        TaskDescriptor(
+            "market_tasks",
+            start=lambda: None,
+            stop=lambda: log.append("stop:market_tasks"),
+            dependencies=("scheduler",),
+        )
+    )
+    registry.register(
+        TaskDescriptor(
+            "ai_auto_trading",
+            start=lambda: None,
+            stop=stop_dependent,
+            dependencies=("scheduler", "market_tasks"),
+        )
+    )
+    registry.start_all()
+
+    handle = RuntimeHandle(StartupMode.FULL, registry)
+    with pytest.raises(RuntimeShutdownError) as caught:
+        shutdown_runtime_sync(handle)
+    assert caught.value.failures["ai_auto_trading"] == "dependent busy"
+    assert caught.value.failures["market_tasks"].startswith("stop deferred")
+    assert caught.value.failures["scheduler"].startswith("stop deferred")
+    assert log == ["stop:dependent"]
+    assert registry.status() == {
+        "scheduler": TaskState.RUNNING,
+        "market_tasks": TaskState.RUNNING,
+        "ai_auto_trading": TaskState.STOP_FAILED,
+    }
+
+    shutdown_runtime_sync(handle)
+    assert log == [
+        "stop:dependent",
+        "stop:dependent",
+        "stop:market_tasks",
+        "stop:scheduler",
+    ]
+    assert set(registry.status().values()) == {TaskState.STOPPED}
 
 
 def test_required_failure_raises_and_marks_not_ready():
@@ -90,7 +231,7 @@ def test_required_failure_raises_and_marks_not_ready():
     with pytest.raises(RuntimeError, match="boom start failed"):
         registry.start_all()
     status = registry.status()
-    assert status["boom"] == TaskState.FAILED
+    assert status["boom"] == TaskState.START_FAILED
     assert status["never"] == TaskState.REGISTERED
     assert not registry.is_ready()
     assert registry.health()["boom"] == "required_failed"
@@ -157,6 +298,35 @@ def test_full_starts_tasks_and_shutdown_stops_them():
     assert [e for e in log if e[0] == "start"] == [("start", "t1"), ("start", "t2")]
     shutdown_runtime_sync(handle)
     assert [e for e in log if e[0] == "stop"] == [("stop", "t2"), ("stop", "t1")]
+
+
+def test_scheduler_stop_failure_propagates_through_runtime_shutdown(monkeypatch):
+    from services import scheduler
+
+    class FailingScheduler:
+        def shutdown(self):
+            return False
+
+    monkeypatch.setattr(scheduler, "task_scheduler", FailingScheduler())
+    handle = bootstrap_runtime_sync(
+        BootstrapContext(
+            mode=StartupMode.FULL,
+            task_descriptors=[
+                TaskDescriptor("scheduler", start=lambda: None, stop=scheduler.stop_scheduler)
+            ],
+            **_stage_recorder([]),
+        )
+    )
+
+    with pytest.raises(RuntimeShutdownError) as caught:
+        shutdown_runtime_sync(handle)
+
+    assert caught.value.failures == {
+        "scheduler": (
+            "scheduler shutdown incomplete: running jobs did not stop within "
+            "the shutdown timeout"
+        )
+    }
 
 
 def test_partial_start_failure_stops_started_tasks_only():

@@ -40,6 +40,12 @@ def process_pending(command: ProcessPendingOrders) -> ProcessingResult
 - 重复 idempotency key 不产生第二笔订单或成交。
 - Gateway 是 application 层唯一可以同时协调账户、持仓、订单、成交写入的入口。
 
+## 实现约束：事务适配
+
+- Gateway 不读取 `uow.session`，不 import SQLAlchemy Session，也不把 Session 传给 application callback；持久化唯一键冲突通过 persistence port error 翻译，不向 application 泄漏 SQLAlchemy 异常。
+- 过渡期 legacy order/leverage 计算只能位于 infrastructure transaction adapter；adapter 使用 UoW 拥有的同一事务，且不得 commit/rollback。
+- 最终交易计算按 plan/apply 分离：planner 不访问数据库，ledger writer 只通过 repository 应用变更；receipt 与 ledger 仍由外层 UoW 一次提交。
+
 ## 前置与并行
 
 前置 M00、M01；可与 Agent/Tool/Prompt runtime 并行。M06、M10、M21 依赖。

@@ -13,7 +13,7 @@ import asyncio
 import sys
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -25,10 +25,12 @@ if str(BACKEND_DIR) not in sys.path:
 
 from services import scheduler
 from services.scheduler import (
+    JobSpec,
     SchedulerBusyError,
     SchedulerNotRunningError,
     TaskScheduler,
 )
+from apscheduler.triggers.interval import IntervalTrigger
 
 
 # ---------------------------------------------------------------------------
@@ -217,6 +219,69 @@ def test_second_shutdown_does_not_lie_while_job_still_running():
     assert ts.shutdown(timeout=5) is True
 
 
+def test_shutdown_retries_unfinished_apscheduler_cleanup(monkeypatch):
+    ts = TaskScheduler()
+    ts.start()
+    ts.add_interval_task(lambda: None, 3600, "preserved_until_clean")
+    assert ts.scheduler is not None
+    concrete = ts.scheduler
+    jobstore = concrete._jobstores["default"]
+    original_shutdown = jobstore.shutdown
+    attempts = []
+
+    def fail_once():
+        attempts.append("jobstore")
+        if len(attempts) == 1:
+            raise RuntimeError("jobstore cleanup failed")
+        return original_shutdown()
+
+    monkeypatch.setattr(jobstore, "shutdown", fail_once)
+    with pytest.raises(RuntimeError, match="jobstore cleanup failed"):
+        ts.shutdown(timeout=1)
+
+    assert concrete.running is False
+    assert concrete.shutdown_complete is False
+    assert ts._state == scheduler.SchedulerState.FAILED
+    assert "preserved_until_clean" in ts._registrations
+
+    assert ts.shutdown(timeout=1) is True
+    assert attempts == ["jobstore", "jobstore"]
+    assert concrete.shutdown_complete is True
+    assert ts._state == scheduler.SchedulerState.STOPPED
+    assert ts._registrations == {}
+
+
+def test_shutdown_retry_resumes_after_completed_cleanup_phase(monkeypatch):
+    ts = TaskScheduler()
+    ts.start()
+    concrete = ts.scheduler
+    executor = concrete._executors["default"]
+    jobstore = concrete._jobstores["default"]
+    executor_calls = []
+    jobstore_calls = []
+    original_executor_shutdown = executor.shutdown
+    original_jobstore_shutdown = jobstore.shutdown
+
+    def track_executor(wait=True):
+        executor_calls.append(wait)
+        return original_executor_shutdown(wait)
+
+    def fail_jobstore_once():
+        jobstore_calls.append(1)
+        if len(jobstore_calls) == 1:
+            raise RuntimeError("late cleanup failure")
+        return original_jobstore_shutdown()
+
+    monkeypatch.setattr(executor, "shutdown", track_executor)
+    monkeypatch.setattr(jobstore, "shutdown", fail_jobstore_once)
+
+    with pytest.raises(RuntimeError, match="late cleanup failure"):
+        ts.shutdown(timeout=1)
+    assert ts.shutdown(timeout=1) is True
+    assert executor_calls == [False], "completed executor cleanup was repeated"
+    assert jobstore_calls == [1, 1]
+
+
 def test_start_rejected_while_previous_generation_still_inflight():
     """Incomplete shutdown must not clear cancel or overlap a new scheduler."""
     ts = TaskScheduler()
@@ -356,6 +421,304 @@ def test_remove_or_replace_invalidates_queued_wrapper_same_generation():
 
     assert calls == ["new"], f"stale replaced job still ran: {calls}"
     assert ts._generation == 1
+    assert ts.shutdown(timeout=5) is True
+
+
+def test_concurrent_install_keeps_token_aligned_with_scheduler_job():
+    """Token publish must stay aligned with the wrapper APScheduler installs.
+
+    Regression: publishing the token before add_job allowed concurrent
+    reset_auto_trading_job callers to leave a live job whose token no longer
+    matched, so every trigger skipped forever.
+    """
+    ts = TaskScheduler()
+    ts.start()
+    errors = []
+
+    def body_a():
+        return "A"
+
+    def body_b():
+        return "B"
+
+    def raced(fn):
+        try:
+            for _ in range(30):
+                ts.add_interval_task(fn, 3600, "race_job")
+                job = ts.scheduler.get_job("race_job")
+                assert job is not None
+                assert job.func() in {"A", "B"}
+        except Exception as exc:
+            errors.append(exc)
+
+    t1 = threading.Thread(target=raced, args=(body_a,))
+    t2 = threading.Thread(target=raced, args=(body_b,))
+    t1.start()
+    t2.start()
+    t1.join(15)
+    t2.join(15)
+
+    assert errors == [], errors
+    job = ts.scheduler.get_job("race_job")
+    assert job is not None
+    assert job.func() in {"A", "B"}
+    assert ts.shutdown(timeout=5) is True
+
+
+def test_add_competing_with_shutdown_is_serialized_by_lifecycle_state(monkeypatch):
+    ts = TaskScheduler()
+    ts.start()
+    assert ts.scheduler is not None
+    entered_add = threading.Event()
+    release_add = threading.Event()
+    add_finished = threading.Event()
+    shutdown_finished = threading.Event()
+    errors = []
+    original_add = ts.scheduler.add_job
+
+    def blocked_add(**kwargs):
+        entered_add.set()
+        assert release_add.wait(5)
+        return original_add(**kwargs)
+
+    monkeypatch.setattr(ts.scheduler, "add_job", blocked_add)
+
+    def add():
+        try:
+            ts.add_interval_task(lambda: None, 3600, "serialized_add")
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            add_finished.set()
+
+    def stop():
+        try:
+            ts.shutdown(timeout=5)
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            shutdown_finished.set()
+
+    add_thread = threading.Thread(target=add)
+    add_thread.start()
+    assert entered_add.wait(5)
+    stop_thread = threading.Thread(target=stop)
+    stop_thread.start()
+
+    # shutdown cannot change generation/state in the middle of registration.
+    time.sleep(0.05)
+    assert not shutdown_finished.is_set()
+    release_add.set()
+    add_thread.join(5)
+    stop_thread.join(5)
+
+    assert add_finished.is_set() and shutdown_finished.is_set()
+    assert errors == []
+    assert not ts.is_running()
+    ts.start()
+    try:
+        assert ts.scheduler.get_job("serialized_add") is None
+    finally:
+        assert ts.shutdown(timeout=5) is True
+
+
+def test_remove_failure_preserves_job_admission_and_propagates(monkeypatch):
+    ts = TaskScheduler()
+    ts.start()
+    calls = []
+    ts.add_interval_task(lambda: calls.append(1), 3600, "remove_failure")
+    assert ts.scheduler is not None
+    job = ts.scheduler.get_job("remove_failure")
+    token = ts._job_tokens["remove_failure"]
+
+    def fail_remove(job_id):
+        raise RuntimeError("job store unavailable")
+
+    monkeypatch.setattr(ts.scheduler, "remove_job", fail_remove)
+    with pytest.raises(RuntimeError, match="job store unavailable"):
+        ts.remove_task("remove_failure")
+
+    assert ts._job_tokens["remove_failure"] == token
+    assert ts._job_specs["remove_failure"].job_id == "remove_failure"
+    job.func()
+    assert calls == [1]
+
+    # Restore the concrete method before cleanup.
+    monkeypatch.undo()
+    assert ts.shutdown(timeout=5) is True
+
+
+def test_family_reconcile_failure_restores_complete_old_family(monkeypatch):
+    ts = TaskScheduler()
+    ts.start()
+    trigger = IntervalTrigger(seconds=3600)
+    old_specs = (
+        JobSpec("old_a", lambda: "old-a", trigger),
+        JobSpec("old_b", lambda: "old-b", trigger),
+    )
+    ts.reconcile_jobs("trading", old_specs)
+    assert ts.scheduler is not None
+    original_add = ts.scheduler.add_job
+
+    def fail_second_new(**kwargs):
+        if kwargs["id"] == "new_b":
+            raise RuntimeError("install failed")
+        return original_add(**kwargs)
+
+    monkeypatch.setattr(ts.scheduler, "add_job", fail_second_new)
+    new_specs = (
+        JobSpec("new_a", lambda: "new-a", trigger),
+        JobSpec("new_b", lambda: "new-b", trigger),
+    )
+    with pytest.raises(RuntimeError, match="install failed"):
+        ts.reconcile_jobs("trading", new_specs)
+
+    assert ts._job_families["trading"] == {"old_a", "old_b"}
+    assert set(ts._job_specs) == {"old_a", "old_b"}
+    assert {job.id for job in ts.scheduler.get_jobs()} == {"old_a", "old_b"}
+    assert {ts.scheduler.get_job(job_id).func() for job_id in ("old_a", "old_b")} == {
+        "old-a",
+        "old-b",
+    }
+    assert ts.shutdown(timeout=5) is True
+
+
+def test_family_reconcile_failure_never_replays_consumed_one_shot(monkeypatch):
+    ts = TaskScheduler()
+    ts.start()
+    calls = []
+    consumed = JobSpec(
+        "first_once",
+        lambda: calls.append("first"),
+        scheduler.DateTrigger(run_date=datetime.now(timezone.utc)),
+        misfire_grace_time=30,
+    )
+    ts.reconcile_jobs("trading", (consumed,))
+    deadline = time.monotonic() + 5
+    while calls != ["first"] and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert calls == ["first"]
+    assert ts.scheduler.get_job("first_once") is None
+    assert "first_once" not in ts._job_specs
+
+    original_add = ts.scheduler.add_job
+
+    def fail_new(**kwargs):
+        if kwargs["id"] == "new_bad":
+            raise RuntimeError("install failed")
+        return original_add(**kwargs)
+
+    monkeypatch.setattr(ts.scheduler, "add_job", fail_new)
+    with pytest.raises(RuntimeError, match="install failed"):
+        ts.reconcile_jobs(
+            "trading",
+            (JobSpec("new_bad", lambda: None, IntervalTrigger(seconds=3600)),),
+        )
+
+    time.sleep(0.1)
+    assert calls == ["first"]
+    assert ts.scheduler.get_job("first_once") is None
+    assert "first_once" not in ts._job_specs
+    assert ts.shutdown(timeout=5) is True
+
+
+def test_consumed_occurrence_is_idempotent_but_new_run_date_can_be_scheduled():
+    ts = TaskScheduler()
+    ts.start()
+    calls = []
+    first_run = datetime.now(timezone.utc)
+    first = JobSpec(
+        "first_once",
+        lambda: calls.append("first"),
+        scheduler.DateTrigger(run_date=first_run),
+        misfire_grace_time=30,
+    )
+    ts.reconcile_jobs("trading", (first,))
+    deadline = time.monotonic() + 5
+    while calls != ["first"] and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert calls == ["first"]
+
+    # Re-declaring the same occurrence is configuration idempotency, not replay.
+    ts.reconcile_jobs("trading", (first,))
+    time.sleep(0.1)
+    assert calls == ["first"]
+    assert ts.scheduler.get_job("first_once") is None
+
+    next_run = datetime.now(timezone.utc) + timedelta(seconds=1)
+    second = JobSpec(
+        "first_once",
+        lambda: calls.append("second"),
+        scheduler.DateTrigger(run_date=next_run),
+        misfire_grace_time=30,
+    )
+    ts.reconcile_jobs("trading", (second,))
+    assert ts.scheduler.get_job("first_once") is not None
+    deadline = time.monotonic() + 5
+    while calls != ["first", "second"] and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert calls == ["first", "second"]
+    assert ts.shutdown(timeout=5) is True
+
+
+def test_job_spec_is_immutable_and_job_ids_have_one_family_owner():
+    kwargs = {"value": 1}
+    spec = JobSpec(
+        "owned_job",
+        lambda **values: values["value"],
+        IntervalTrigger(seconds=3600),
+        kwargs=kwargs,
+    )
+    kwargs["value"] = 2
+    assert spec.kwargs["value"] == 1
+    with pytest.raises(TypeError):
+        spec.kwargs["value"] = 3
+
+    ts = TaskScheduler()
+    ts.start()
+    try:
+        ts.reconcile_jobs("first_family", (spec,))
+        with pytest.raises(ValueError, match="owned by family:first_family"):
+            ts.reconcile_jobs("second_family", (spec,))
+        assert ts._job_families == {"first_family": {"owned_job"}}
+        job = ts.scheduler.get_job("owned_job")
+        assert job.func(**job.kwargs) == 1
+
+        ts.add_interval_task(lambda: "standalone", 3600, "standalone_job")
+        standalone_spec = JobSpec(
+            "standalone_job", lambda: "replacement", IntervalTrigger(seconds=3600)
+        )
+        with pytest.raises(ValueError, match="owned by standalone"):
+            ts.reconcile_jobs("second_family", (standalone_spec,))
+        assert ts.scheduler.get_job("standalone_job").func() == "standalone"
+
+        with pytest.raises(ValueError, match="owned by family:first_family"):
+            ts.add_interval_task(lambda: "override", 3600, "owned_job")
+        assert ts.scheduler.get_job("owned_job").func(**job.kwargs) == 1
+        assert ts._job_families == {"first_family": {"owned_job"}}
+    finally:
+        assert ts.shutdown(timeout=5) is True
+
+
+def test_due_date_job_runs_when_token_activated_before_add_job():
+    """A misfired/past DateTrigger must not be skipped for an unpublished token."""
+    ts = TaskScheduler()
+    ts.start()
+    ran = []
+
+    past = datetime.now(timezone.utc) - timedelta(seconds=1)
+    ts.add_date_task(
+        lambda: ran.append(1),
+        past,
+        "due_first_run",
+        misfire_grace_time=30,
+    )
+
+    deadline = time.monotonic() + 5
+    while not ran and time.monotonic() < deadline:
+        time.sleep(0.05)
+
+    assert ran == [1], "due date job was consumed without running"
     assert ts.shutdown(timeout=5) is True
 
 

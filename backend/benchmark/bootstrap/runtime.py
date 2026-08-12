@@ -29,6 +29,16 @@ from benchmark.bootstrap.tasks import TaskDescriptor, TaskRegistry
 logger = logging.getLogger(__name__)
 
 
+class RuntimeShutdownError(RuntimeError):
+    """Raised after all stop callbacks ran when one or more failed."""
+
+    def __init__(self, failures: dict[str, str]) -> None:
+        self.failures = dict(failures)
+        super().__init__(
+            "runtime shutdown failed for: " + ", ".join(sorted(self.failures))
+        )
+
+
 class StartupMode(str, Enum):
     """Production default is FULL; tests pass their mode explicitly —
     never inferred from hidden environment variables."""
@@ -125,6 +135,7 @@ def shutdown_runtime_sync(handle: RuntimeHandle) -> None:
     failed = {task_id: err for task_id, err in results.items() if err}
     if failed:
         logger.error("shutdown completed with stop failures: %s", failed)
+        raise RuntimeShutdownError(failed)
     else:
         logger.info("all runtime services shut down")
 
