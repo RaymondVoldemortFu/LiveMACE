@@ -37,12 +37,14 @@ class TaskDescriptor:
     stop: Optional[Callable[[], None]] = None
     required: bool = True
     dependencies: Tuple[str, ...] = ()
+    owns_resources: Optional[Callable[[], bool]] = None
 
 
 class TaskState(str, Enum):
     REGISTERED = "registered"
     RUNNING = "running"
     START_FAILED = "start_failed"
+    START_CLEANUP_FAILED = "start_cleanup_failed"
     STOP_FAILED = "stop_failed"
     STOPPED = "stopped"
     SKIPPED = "skipped"
@@ -78,15 +80,16 @@ class TaskRegistry:
         started (see ``runtime.bootstrap_runtime``).
         """
         with self._lock:
-            stop_failed = [
+            cleanup_pending = [
                 record.descriptor.task_id
                 for record in self._records.values()
-                if record.state == TaskState.STOP_FAILED
+                if record.state
+                in (TaskState.START_CLEANUP_FAILED, TaskState.STOP_FAILED)
             ]
-            if stop_failed:
+            if cleanup_pending:
                 raise RuntimeError(
                     "runtime tasks have not completed shutdown: "
-                    f"{stop_failed!r}; retry stop_all() before start_all()"
+                    f"{cleanup_pending!r}; retry stop_all() before start_all()"
                 )
             for record in self._records.values():
                 if record.state == TaskState.RUNNING:
@@ -112,11 +115,36 @@ class TaskRegistry:
                         blocked,
                     )
                     continue
+                # Reserve lifecycle order before invoking start. A component
+                # that partially starts and then raises still owns resources at
+                # this exact position in the dependency/start sequence.
+                record.start_index = self._start_counter
+                self._start_counter += 1
                 try:
                     descriptor.start()
                 except Exception as exc:
-                    record.state = TaskState.START_FAILED
+                    probe_error: Optional[BaseException] = None
+                    try:
+                        owns_resources = bool(
+                            descriptor.owns_resources is not None
+                            and descriptor.owns_resources()
+                        )
+                    except BaseException as owned_exc:
+                        # Failure to prove that no resource exists must be
+                        # treated conservatively as cleanup pending.
+                        owns_resources = True
+                        probe_error = owned_exc
+                    record.state = (
+                        TaskState.START_CLEANUP_FAILED
+                        if owns_resources
+                        else TaskState.START_FAILED
+                    )
                     record.error = str(exc)
+                    if probe_error is not None:
+                        record.error += (
+                            "; resource ownership probe failed: "
+                            f"{type(probe_error).__name__}: {probe_error}"
+                        )
                     if descriptor.required:
                         logger.error(
                             "required task %s failed to start: %s", descriptor.task_id, exc
@@ -129,8 +157,6 @@ class TaskRegistry:
                     )
                 else:
                     record.state = TaskState.RUNNING
-                    record.start_index = self._start_counter
-                    self._start_counter += 1
                     logger.info("runtime task started: %s", descriptor.task_id)
 
     def stop_all(self) -> Dict[str, Optional[str]]:
@@ -147,7 +173,12 @@ class TaskRegistry:
                 (
                     r
                     for r in self._records.values()
-                    if r.state in (TaskState.RUNNING, TaskState.STOP_FAILED)
+                    if r.state
+                    in (
+                        TaskState.RUNNING,
+                        TaskState.START_CLEANUP_FAILED,
+                        TaskState.STOP_FAILED,
+                    )
                 ),
                 key=lambda r: r.start_index,
                 reverse=True,
@@ -158,7 +189,12 @@ class TaskRegistry:
                     dependent.descriptor.task_id
                     for dependent in self._records.values()
                     if descriptor.task_id in dependent.descriptor.dependencies
-                    and dependent.state in (TaskState.RUNNING, TaskState.STOP_FAILED)
+                    and dependent.state
+                    in (
+                        TaskState.RUNNING,
+                        TaskState.START_CLEANUP_FAILED,
+                        TaskState.STOP_FAILED,
+                    )
                 ]
                 if active_dependents:
                     results[descriptor.task_id] = (
@@ -197,7 +233,10 @@ class TaskRegistry:
         with self._lock:
             out: Dict[str, str] = {}
             for task_id, record in self._records.items():
-                if record.state == TaskState.START_FAILED:
+                if record.state in (
+                    TaskState.START_FAILED,
+                    TaskState.START_CLEANUP_FAILED,
+                ):
                     out[task_id] = (
                         "required_failed" if record.descriptor.required else "degraded"
                     )
@@ -210,7 +249,12 @@ class TaskRegistry:
     def is_ready(self) -> bool:
         with self._lock:
             return not any(
-                r.state in (TaskState.START_FAILED, TaskState.STOP_FAILED)
+                r.state
+                in (
+                    TaskState.START_FAILED,
+                    TaskState.START_CLEANUP_FAILED,
+                    TaskState.STOP_FAILED,
+                )
                 and r.descriptor.required
                 for r in self._records.values()
             )
@@ -258,6 +302,11 @@ def default_task_descriptors() -> List[TaskDescriptor]:
         from services.scheduler import stop_scheduler
 
         stop_scheduler()
+
+    def _scheduler_owns_resources() -> bool:
+        from services.scheduler import task_scheduler
+
+        return task_scheduler.has_pending_cleanup()
 
     def _market_tasks() -> None:
         from services.scheduler import setup_market_tasks
@@ -316,8 +365,14 @@ def default_task_descriptors() -> List[TaskDescriptor]:
                        dependencies=("redis_tool_cache",)),
         TaskDescriptor("docker_sandbox", _docker_sandbox_start, _docker_sandbox_stop,
                        required=False),
-        TaskDescriptor("scheduler", _scheduler_start, _scheduler_stop, required=True,
-                       dependencies=("extension_catalog",)),
+        TaskDescriptor(
+            "scheduler",
+            _scheduler_start,
+            _scheduler_stop,
+            required=True,
+            dependencies=("extension_catalog",),
+            owns_resources=_scheduler_owns_resources,
+        ),
         TaskDescriptor("market_tasks", _market_tasks, required=True,
                        dependencies=("scheduler",)),
         TaskDescriptor("asset_curve_backfill_1h", _asset_curve_backfill, required=False),

@@ -84,15 +84,24 @@ def _gateway(executor, store=None):
     kwargs = {}
     if store is not None:
         kwargs["_store"] = store
-    application_executor = (
-        lambda transaction, command: transaction.run_legacy_executor(
-            executor, command
-        )
-    )
+
+    class TestUnitOfWork(SqlAlchemyUnitOfWork):
+        def _build_adapters(self):
+            super()._build_adapters()
+            operations = self.trade_operations
+
+            class TestTradeOperations:
+                def execute_trade(self, command):
+                    return executor(operations._session_provider(), command)
+
+                def __getattr__(self, name):
+                    return getattr(operations, name)
+
+            self.trade_operations = TestTradeOperations()
+
     return (
         SynchronousTradeCommandGateway(
-            lambda: SqlAlchemyUnitOfWork(session_factory),
-            executor=application_executor,
+            lambda: TestUnitOfWork(session_factory),
             **kwargs,
         ),
         session_factory,
@@ -223,11 +232,23 @@ def test_m11_durable_receipt_is_reused_between_gateway_instances():
         return {"executed": True, "order_id": 321}
 
     first_gateway, session_factory = _gateway(fake_legacy)
+
+    class SecondTestUnitOfWork(SqlAlchemyUnitOfWork):
+        def _build_adapters(self):
+            super()._build_adapters()
+            operations = self.trade_operations
+
+            class TestTradeOperations:
+                def execute_trade(self, command):
+                    return fake_legacy(operations._session_provider(), command)
+
+                def __getattr__(self, name):
+                    return getattr(operations, name)
+
+            self.trade_operations = TestTradeOperations()
+
     second_gateway = SynchronousTradeCommandGateway(
-        lambda: SqlAlchemyUnitOfWork(session_factory),
-        executor=lambda transaction, command: transaction.run_legacy_executor(
-            fake_legacy, command
-        ),
+        lambda: SecondTestUnitOfWork(session_factory)
     )
     command = TradeCommand(1, "open", Market.CRYPTO, "BTC", "long", "portion", Decimal("0.2"), 1, "test", "shared-key")
 

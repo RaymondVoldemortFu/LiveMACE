@@ -2,7 +2,7 @@ from sqlalchemy import Column, Integer, String, DECIMAL, TIMESTAMP, ForeignKey, 
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 import datetime
-from sqlalchemy.dialects.mysql import LONGTEXT
+from sqlalchemy.dialects.mysql import BIGINT as MYSQL_BIGINT, LONGTEXT
 
 from .connection import Base
 
@@ -480,5 +480,33 @@ class TradeCommandReceipt(Base):
             "account_id",
             "idempotency_key",
             name="uix_trade_command_receipt_key",
+        ),
+    )
+
+
+class ScheduledJobOccurrence(Base):
+    """Durable admission ledger for one-shot scheduler occurrences."""
+
+    __tablename__ = "scheduled_job_occurrences"
+
+    id = Column(Integer, primary_key=True, index=True)
+    job_id = Column(String(255), nullable=False)
+    # Canonical UTC epoch microseconds has identical equality semantics on
+    # SQLite and MySQL (unlike DATETIME timezone/precision handling).
+    run_at_epoch_us = Column(
+        Integer().with_variant(MYSQL_BIGINT(), "mysql"),
+        nullable=False,
+    )
+    consumed_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.datetime.now(datetime.timezone.utc),
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "job_id",
+            "run_at_epoch_us",
+            name="uix_scheduled_job_occurrence_key",
         ),
     )

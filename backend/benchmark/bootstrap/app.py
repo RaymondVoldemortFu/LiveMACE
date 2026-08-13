@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
+import anyio
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import List, Optional
@@ -47,12 +48,32 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        from benchmark.bootstrap.runtime import RuntimeBootstrapError
+
         if mode == StartupMode.SCHEMA_ONLY:
             raise RuntimeError(
                 "SCHEMA_ONLY is for scripts/tests via bootstrap_runtime_sync; "
                 "an HTTP app must use FULL or NO_BACKGROUND"
             )
-        handle = await bootstrap_runtime(BootstrapContext(mode=mode))
+        try:
+            handle = await bootstrap_runtime(BootstrapContext(mode=mode))
+        except RuntimeBootstrapError as exc:
+            # Startup never reaches the lifespan yield/finally, so explicitly
+            # take ownership of the retryable handle before propagating the
+            # startup failure to ASGI.
+            app.state.runtime_handle = exc.handle
+            retry_delay = 0.05
+            while True:
+                try:
+                    await shutdown_runtime(exc.handle)
+                    break
+                except Exception:
+                    logger.exception(
+                        "runtime startup cleanup remains incomplete; retrying"
+                    )
+                    await anyio.sleep(retry_delay)
+                    retry_delay = min(retry_delay * 2, 1.0)
+            raise
         app.state.runtime_handle = handle
         try:
             yield

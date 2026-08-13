@@ -31,6 +31,7 @@ from services.scheduler import (
     TaskScheduler,
 )
 from apscheduler.triggers.interval import IntervalTrigger
+from apscheduler.triggers.date import DateTrigger
 
 
 # ---------------------------------------------------------------------------
@@ -720,6 +721,142 @@ def test_due_date_job_runs_when_token_activated_before_add_job():
 
     assert ran == [1], "due date job was consumed without running"
     assert ts.shutdown(timeout=5) is True
+
+
+def test_consumed_one_shot_is_not_replayed_after_scheduler_restart():
+    ts = TaskScheduler()
+    ran = []
+    run_date = datetime.now(timezone.utc) - timedelta(seconds=1)
+
+    def reconcile():
+        ts.reconcile_jobs(
+            "one-shot-family",
+            (
+                scheduler.JobSpec(
+                    "durable_once",
+                    lambda: ran.append(1),
+                    DateTrigger(run_date=run_date),
+                    misfire_grace_time=30,
+                ),
+            ),
+        )
+
+    ts.start()
+    reconcile()
+    deadline = time.monotonic() + 5
+    while len(ran) < 1 and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert ran == [1]
+    assert ts.shutdown(timeout=5) is True
+
+    ts.start()
+    reconcile()
+    time.sleep(0.2)
+    assert ran == [1]
+    assert ts.shutdown(timeout=5) is True
+
+
+def test_sqlalchemy_occurrence_ledger_prevents_cross_instance_replay(tmp_path):
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from database.connection import Base
+    from services.scheduler import SqlAlchemyOneShotOccurrenceLedger
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'occurrences.db'}")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine)
+    run_date = datetime.now(timezone.utc) - timedelta(seconds=1)
+    ran = []
+
+    for _ in range(2):
+        ts = TaskScheduler(SqlAlchemyOneShotOccurrenceLedger(factory))
+        ts.start()
+        ts.reconcile_jobs(
+            "durable-family",
+            (
+                scheduler.JobSpec(
+                    "durable_process_once",
+                    lambda: ran.append(1),
+                    DateTrigger(run_date=run_date),
+                    misfire_grace_time=30,
+                ),
+            ),
+        )
+        deadline = time.monotonic() + 2
+        while not ran and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert ts.shutdown(timeout=5) is True
+
+    assert ran == [1]
+    engine.dispose()
+
+
+def test_scheduler_start_cleans_a_candidate_that_started_then_raised(monkeypatch):
+    created = []
+
+    class PartialStartScheduler(scheduler._LifecycleSafeBackgroundScheduler):
+        def __init__(self):
+            super().__init__()
+            created.append(self)
+
+        def start(self):
+            super().start()
+            raise RuntimeError("after start")
+
+    monkeypatch.setattr(
+        scheduler,
+        "_LifecycleSafeBackgroundScheduler",
+        PartialStartScheduler,
+    )
+    ts = TaskScheduler()
+
+    with pytest.raises(RuntimeError, match="after start"):
+        ts.start()
+
+    assert len(created) == 1
+    assert created[0].shutdown_complete is True
+    assert ts.scheduler is None
+    assert ts._state == scheduler.SchedulerState.STOPPED
+
+
+def test_one_shot_ledger_io_does_not_hold_lifecycle_lock():
+    entered = threading.Event()
+    release = threading.Event()
+
+    class BlockingLedger:
+        def is_consumed(self, occurrence):
+            return False
+
+        def consume(self, occurrence):
+            entered.set()
+            assert release.wait(5)
+            return True
+
+    body_ran = threading.Event()
+    ts = TaskScheduler(BlockingLedger())
+    ts.start()
+    ts.reconcile_jobs(
+        "blocking-ledger",
+        (
+            scheduler.JobSpec(
+                "blocking_once",
+                body_ran.set,
+                DateTrigger(run_date=datetime.now(timezone.utc) - timedelta(seconds=1)),
+                misfire_grace_time=30,
+            ),
+        ),
+    )
+    assert entered.wait(2)
+
+    started = time.monotonic()
+    assert ts.shutdown(timeout=0.05) is False
+    assert time.monotonic() - started < 0.5
+    release.set()
+    assert body_ran.wait(2), "a successfully claimed occurrence must be drained, not lost"
+    deadline = time.monotonic() + 2
+    while ts._inflight_jobs and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert ts.shutdown(timeout=2) is True
 
 
 def test_shutdown_never_reports_clean_while_a_job_body_runs_after_return():

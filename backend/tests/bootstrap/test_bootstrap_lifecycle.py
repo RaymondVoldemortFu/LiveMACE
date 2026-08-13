@@ -12,6 +12,7 @@ if str(BACKEND_DIR) not in sys.path:
 
 from benchmark.bootstrap.runtime import (
     BootstrapContext,
+    RuntimeBootstrapError,
     RuntimeShutdownError,
     RuntimeHandle,
     StartupMode,
@@ -346,6 +347,98 @@ def test_partial_start_failure_stops_started_tasks_only():
     # t1 started and was stopped; t3 never started so never stopped.
     assert ("stop", "t1") in log
     assert ("start", "t3") not in log and ("stop", "t3") not in log
+
+
+def test_start_failure_with_owned_resources_is_cleanup_retryable():
+    owned = True
+    stop_calls = []
+
+    def start():
+        raise RuntimeError("partial start")
+
+    def stop():
+        nonlocal owned
+        stop_calls.append(1)
+        owned = False
+
+    registry = TaskRegistry()
+    registry.register(
+        TaskDescriptor(
+            "partial",
+            start,
+            stop,
+            required=False,
+            owns_resources=lambda: owned,
+        )
+    )
+    registry.start_all()
+    assert registry.status()["partial"] == TaskState.START_CLEANUP_FAILED
+    with pytest.raises(RuntimeError, match="not completed shutdown"):
+        registry.start_all()
+    assert registry.stop_all() == {"partial": None}
+    assert stop_calls == [1]
+    assert registry.status()["partial"] == TaskState.STOPPED
+
+
+def test_bootstrap_cleanup_failure_returns_retryable_runtime_handle():
+    stop_attempts = []
+    owned = True
+
+    def start_partial():
+        raise RuntimeError("partial start")
+
+    def stop_partial():
+        nonlocal owned
+        stop_attempts.append(1)
+        if len(stop_attempts) == 1:
+            raise RuntimeError("cleanup busy")
+        owned = False
+
+    with pytest.raises(RuntimeBootstrapError) as caught:
+        bootstrap_runtime_sync(
+            BootstrapContext(
+                mode=StartupMode.FULL,
+                task_descriptors=[
+                    TaskDescriptor("dependency", lambda: None, lambda: None),
+                    TaskDescriptor(
+                        "partial",
+                        start_partial,
+                        stop_partial,
+                        dependencies=("dependency",),
+                        owns_resources=lambda: owned,
+                    ),
+                ],
+                **_stage_recorder([]),
+            )
+        )
+
+    assert caught.value.cleanup_failures["partial"] == "cleanup busy"
+    assert caught.value.cleanup_failures["dependency"].startswith("stop deferred")
+    assert caught.value.handle.registry.status() == {
+        "dependency": TaskState.RUNNING,
+        "partial": TaskState.STOP_FAILED,
+    }
+    shutdown_runtime_sync(caught.value.handle)
+    assert stop_attempts == [1, 1]
+
+
+def test_ownership_probe_failure_is_conservatively_cleanup_pending():
+    stops = []
+    registry = TaskRegistry()
+    registry.register(
+        TaskDescriptor(
+            "partial",
+            lambda: (_ for _ in ()).throw(RuntimeError("start failed")),
+            lambda: stops.append(1),
+            required=False,
+            owns_resources=lambda: (_ for _ in ()).throw(RuntimeError("probe failed")),
+        )
+    )
+
+    registry.start_all()
+    assert registry.status()["partial"] == TaskState.START_CLEANUP_FAILED
+    assert registry.stop_all() == {"partial": None}
+    assert stops == [1]
 
 
 def test_default_task_table_matches_startup_contract():

@@ -21,6 +21,7 @@ from benchmark.contracts import Market, TradeCommand
 from benchmark.contracts import TradeCommandResult
 from benchmark.contracts.errors import TradeGatewayError
 from benchmark.persistence import SqlAlchemyUnitOfWork
+from benchmark.persistence.trade_transactions import TradeTransactionOperations
 from database.connection import Base
 from database.models import (
     AIDecisionLog,
@@ -65,17 +66,31 @@ def session_factory(tmp_path):
     engine.dispose()
 
 
+def _test_uow_factory(session_factory, executor):
+    class TestUnitOfWork(SqlAlchemyUnitOfWork):
+        def _build_adapters(self):
+            super()._build_adapters()
+            operations = self.trade_operations
+
+            class TestTradeOperations:
+                def execute_trade(self, command):
+                    return executor(operations._session_provider(), command)
+
+                def __getattr__(self, name):
+                    return getattr(operations, name)
+
+            self.trade_operations = TestTradeOperations()
+
+    return lambda: TestUnitOfWork(session_factory)
+
+
 def _gateway(session_factory, executor=None):
-    application_executor = None
-    if executor is not None:
-        application_executor = (
-            lambda transaction, command: transaction.run_legacy_executor(
-                executor, command
-            )
-        )
+    if executor is None:
+        uow_factory = lambda: SqlAlchemyUnitOfWork(session_factory)
+    else:
+        uow_factory = _test_uow_factory(session_factory, executor)
     return SynchronousTradeCommandGateway(
-        lambda: SqlAlchemyUnitOfWork(session_factory),
-        executor=application_executor,
+        uow_factory,
     )
 
 
@@ -124,8 +139,8 @@ class _FakeTradeOperations:
         self.savepoints.append(savepoint)
         yield savepoint
 
-    def run_legacy_executor(self, executor, command):
-        return executor(self, command)
+    def execute_trade(self, command):
+        return {"executed": True, "order_id": 7}
 
 
 class _FakeAccounts:
@@ -183,21 +198,25 @@ def test_gateway_application_port_runs_with_fake_uow_without_sqlalchemy():
         units.append(unit)
         return unit
 
-    transaction_seen = []
-
-    def executor(transaction, command):
-        transaction_seen.append(transaction)
-        return {"executed": True, "order_id": 7}
-
-    result = SynchronousTradeCommandGateway(factory, executor=executor).execute(
+    result = SynchronousTradeCommandGateway(factory).execute(
         _command(key="fake-port")
     )
 
     assert result.accepted is True
     assert result.order_id == 7
     assert units[0].committed is True
-    assert transaction_seen == [units[0].trade_operations]
     assert receipts[(1, "fake-port")].status == "COMPLETED"
+
+
+def test_application_transaction_port_cannot_supply_a_session_callback():
+    assert "run_legacy_executor" not in TradeTransactionOperations.__dict__
+    assert set(TradeTransactionOperations.__dict__) >= {
+        "execute_trade",
+        "savepoint",
+        "create_order",
+        "cancel_order",
+        "execute_order",
+    }
 
 
 def test_success_commits_business_write_and_receipt_once(session_factory):

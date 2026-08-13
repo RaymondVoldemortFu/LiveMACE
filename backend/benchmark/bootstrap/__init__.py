@@ -16,6 +16,8 @@ from benchmark.bootstrap.app import AppSettings, create_app
 from benchmark.bootstrap.runtime import (
     BootstrapContext,
     RuntimeHandle,
+    RuntimeBootstrapError,
+    RuntimeShutdownError,
     StartupMode,
     bootstrap_runtime,
     bootstrap_runtime_sync,
@@ -35,6 +37,8 @@ __all__ = [
     "StartupMode",
     "BootstrapContext",
     "RuntimeHandle",
+    "RuntimeBootstrapError",
+    "RuntimeShutdownError",
     "bootstrap_runtime",
     "bootstrap_runtime_sync",
     "shutdown_runtime",

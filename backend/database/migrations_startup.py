@@ -104,7 +104,179 @@ def _create_trade_command_receipts(conn: Connection) -> None:
     TradeCommandReceipt.__table__.create(bind=conn, checkfirst=True)
 
 
+def _scheduled_job_occurrences_exists(conn: Connection) -> bool:
+    from sqlalchemy import inspect
+
+    return inspect(conn).has_table("scheduled_job_occurrences")
+
+
+def _create_scheduled_job_occurrences(conn: Connection) -> None:
+    from database.models import ScheduledJobOccurrence
+
+    ScheduledJobOccurrence.__table__.create(bind=conn, checkfirst=True)
+
+
+def _scheduled_job_occurrences_uses_epoch_us(conn: Connection) -> bool:
+    from sqlalchemy import inspect
+
+    inspector = inspect(conn)
+    if not inspector.has_table("scheduled_job_occurrences"):
+        return False
+    columns = {
+        column["name"]: column
+        for column in inspector.get_columns("scheduled_job_occurrences")
+    }
+    epoch_column = columns.get("run_at_epoch_us")
+    if epoch_column is None or epoch_column.get("nullable", True):
+        return False
+    if "run_date" in columns:
+        return False
+    return any(
+        constraint.get("column_names") == ["job_id", "run_at_epoch_us"]
+        for constraint in inspector.get_unique_constraints(
+            "scheduled_job_occurrences"
+        )
+    )
+
+
+def _upgrade_scheduled_job_occurrences_to_epoch_us(conn: Connection) -> None:
+    """Upgrade the short-lived run_date schema without losing consumed rows."""
+    from sqlalchemy import inspect, text
+
+    if not inspect(conn).has_table("scheduled_job_occurrences"):
+        _create_scheduled_job_occurrences(conn)
+        return
+    if conn.dialect.name == "sqlite":
+        conn.execute(
+            text(
+                "CREATE TABLE scheduled_job_occurrences_epoch_us ("
+                "id INTEGER NOT NULL PRIMARY KEY, "
+                "job_id VARCHAR(255) NOT NULL, "
+                "run_at_epoch_us INTEGER NOT NULL, "
+                "consumed_at DATETIME NOT NULL, "
+                "CONSTRAINT uix_scheduled_job_occurrence_key "
+                "UNIQUE (job_id, run_at_epoch_us))"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO scheduled_job_occurrences_epoch_us "
+                "(id, job_id, run_at_epoch_us, consumed_at) "
+                "SELECT id, job_id, "
+                "CAST(strftime('%s', substr(run_date, 1, 19)) AS INTEGER) * 1000000 + "
+                "CASE WHEN instr(run_date, '.') > 0 "
+                "THEN CAST(substr(run_date || '000000', instr(run_date, '.') + 1, 6) AS INTEGER) "
+                "ELSE 0 END, "
+                "consumed_at FROM scheduled_job_occurrences"
+            )
+        )
+        conn.execute(text("DROP TABLE scheduled_job_occurrences"))
+        conn.execute(
+            text(
+                "ALTER TABLE scheduled_job_occurrences_epoch_us "
+                "RENAME TO scheduled_job_occurrences"
+            )
+        )
+        return
+    if conn.dialect.name == "mysql":
+        # MySQL DDL implicitly commits. Every phase is therefore discovered
+        # from schema state and individually retryable after interruption.
+        inspector = inspect(conn)
+        columns = {
+            column["name"]: column
+            for column in inspector.get_columns("scheduled_job_occurrences")
+        }
+        if "run_at_epoch_us" not in columns:
+            conn.execute(
+                text(
+                    "ALTER TABLE scheduled_job_occurrences "
+                    "ADD COLUMN run_at_epoch_us BIGINT NULL"
+                )
+            )
+
+        inspector = inspect(conn)
+        columns = {
+            column["name"]: column
+            for column in inspector.get_columns("scheduled_job_occurrences")
+        }
+        if "run_date" in columns:
+            # The legacy DATETIME stored a UTC wall clock without timezone.
+            # TIMESTAMPDIFF compares two DATETIME values directly and is not
+            # affected by the MySQL connection/session timezone.
+            conn.execute(
+                text(
+                    "UPDATE scheduled_job_occurrences SET run_at_epoch_us = "
+                    "TIMESTAMPDIFF(MICROSECOND, "
+                    "CAST('1970-01-01 00:00:00' AS DATETIME), run_date) "
+                    "WHERE run_at_epoch_us IS NULL"
+                )
+            )
+
+            inspector = inspect(conn)
+            for constraint in inspector.get_unique_constraints(
+                "scheduled_job_occurrences"
+            ):
+                if constraint.get("column_names") != [
+                    "job_id",
+                    "run_at_epoch_us",
+                ]:
+                    name = constraint.get("name")
+                    if name:
+                        conn.exec_driver_sql(
+                            "ALTER TABLE scheduled_job_occurrences "
+                            f"DROP INDEX `{name.replace('`', '``')}`"
+                        )
+            conn.execute(
+                text(
+                    "ALTER TABLE scheduled_job_occurrences "
+                    "DROP COLUMN run_date, "
+                    "MODIFY run_at_epoch_us BIGINT NOT NULL"
+                )
+            )
+        elif columns["run_at_epoch_us"].get("nullable", True):
+            conn.execute(
+                text(
+                    "ALTER TABLE scheduled_job_occurrences "
+                    "MODIFY run_at_epoch_us BIGINT NOT NULL"
+                )
+            )
+
+        inspector = inspect(conn)
+        if not any(
+            constraint.get("column_names") == ["job_id", "run_at_epoch_us"]
+            for constraint in inspector.get_unique_constraints(
+                "scheduled_job_occurrences"
+            )
+        ):
+            conn.execute(
+                text(
+                    "ALTER TABLE scheduled_job_occurrences "
+                    "ADD CONSTRAINT uix_scheduled_job_occurrence_key "
+                    "UNIQUE (job_id, run_at_epoch_us)"
+                )
+            )
+        return
+    raise RuntimeError(
+        "scheduled occurrence epoch-us migration does not support dialect "
+        f"{conn.dialect.name!r}"
+    )
+
+
 STARTUP_MIGRATIONS: List[StartupMigration] = [
+    StartupMigration(
+        migration_id="202608_scheduled_job_occurrences",
+        dialect=None,
+        is_applied=_scheduled_job_occurrences_exists,
+        apply=_create_scheduled_job_occurrences,
+        fatal=True,
+    ),
+    StartupMigration(
+        migration_id="202608_scheduled_job_occurrences_epoch_us",
+        dialect=None,
+        is_applied=_scheduled_job_occurrences_uses_epoch_us,
+        apply=_upgrade_scheduled_job_occurrences_to_epoch_us,
+        fatal=True,
+    ),
     StartupMigration(
         migration_id="202608_trade_command_receipts",
         dialect=None,

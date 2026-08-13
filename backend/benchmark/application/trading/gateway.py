@@ -32,14 +32,6 @@ from .commands import (
 from .policy import normalize_trade_command
 
 
-class TradeExecutor(Protocol):
-    def __call__(
-        self,
-        transaction: TradeTransactionOperations,
-        command: TradeCommand,
-    ) -> Mapping[str, Any]: ...
-
-
 @runtime_checkable
 class TradeCommandGateway(Protocol):
     def execute(self, command: TradeCommand) -> TradeCommandResult: ...
@@ -48,7 +40,6 @@ class TradeCommandGateway(Protocol):
 @dataclass
 class SynchronousTradeCommandGateway:
     uow_factory: UnitOfWorkFactory
-    executor: TradeExecutor | None = None
     _store: "TradeCommandIdempotencyStore" = field(
         default_factory=lambda: TradeCommandIdempotencyStore()
     )
@@ -59,8 +50,6 @@ class SynchronousTradeCommandGateway:
     def __post_init__(self) -> None:
         if not callable(self.uow_factory):
             raise TypeError("uow_factory must be callable")
-        if self.executor is not None and not callable(self.executor):
-            raise TypeError("executor must be callable or None")
 
     def execute(self, command: TradeCommand) -> TradeCommandResult:
         """Execute exactly once per account/idempotency key.
@@ -301,13 +290,7 @@ class SynchronousTradeCommandGateway:
         command: TradeCommand,
     ) -> TradeCommandResult:
         try:
-            if self.executor is None:
-                # The one legacy Session callback is invoked only inside the
-                # infrastructure adapter. Application executors receive the
-                # narrow transaction port itself.
-                raw = transaction.run_legacy_executor(_execute_legacy, command)
-            else:
-                raw = self.executor(transaction, command)
+            raw = transaction.execute_trade(command)
         except ValueError as exc:
             message = str(exc)
             return TradeCommandResult(
@@ -361,42 +344,6 @@ class SynchronousTradeCommandGateway:
             raw_result,
         )
 
-
-def _execute_legacy(session: Any, command: TradeCommand) -> Mapping[str, Any]:
-    from services.agent.trade_execution_tool import _execute_trade_tool_legacy
-
-    return _execute_trade_tool_legacy(
-        db=session,
-        account_id=command.account_id,
-        operation=command.operation,
-        symbol=command.symbol,
-        market=command.market.value,
-        direction=command.direction or "long",
-        size_mode=(
-            "portion"
-            if command.operation == "all_in"
-            else command.sizing_mode or "portion"
-        ),
-        target_portion_of_balance=(
-            _as_float(command.sizing_value)
-            if command.sizing_mode == "portion"
-            else None
-        ),
-        usd_amount=(
-            _as_float(command.sizing_value)
-            if command.sizing_mode == "usd"
-            else None
-        ),
-        close_ratio=(
-            _as_float(command.sizing_value)
-            if command.sizing_mode == "close_ratio"
-            else None
-        ),
-        leverage=command.leverage,
-        reason=command.reason,
-        manage_transaction=False,
-        raise_on_error=True,
-    )
 
 def _encode_command(command: TradeCommand) -> str:
     return json.dumps(
@@ -466,10 +413,6 @@ def _result_from_receipt(receipt: Any, expected_command_json: str) -> TradeComma
             code="TRADE_RECEIPT_CORRUPT",
             details={"account_id": receipt.account_id},
         ) from exc
-
-
-def _as_float(value: Decimal | None) -> float | None:
-    return None if value is None else float(value)
 
 
 def _positive_int_or_none(value: object, name: str) -> int | None:
@@ -587,7 +530,6 @@ def get_default_trade_gateway() -> TradeCommandGateway:
 __all__ = [
     "TradeCommandGateway",
     "TradeCommandIdempotencyStore",
-    "TradeExecutor",
     "SynchronousTradeCommandGateway",
     "get_default_trade_gateway",
 ]

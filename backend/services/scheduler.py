@@ -11,7 +11,7 @@ from apscheduler.jobstores.base import JobLookupError
 from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.triggers.date import DateTrigger
 from sqlalchemy.orm import Session
-from typing import Any, Dict, Set, Callable, Optional, List, Mapping
+from typing import Any, Dict, Set, Callable, Optional, List, Mapping, Protocol
 import functools
 import logging
 import threading
@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timezone, timedelta
 from enum import Enum
 from types import MappingProxyType
+from sqlalchemy.exc import IntegrityError
 
 from database.connection import SessionLocal
 from database.models import Position, CryptoPrice, Account, Order
@@ -92,7 +93,11 @@ class _LifecycleSafeBackgroundScheduler(BackgroundScheduler):
             if not self._shutdown_thread_joined:
                 thread = getattr(self, "_thread", None)
                 if thread is not None:
-                    thread.join()
+                    # ``Thread.start()`` itself may raise after assigning the
+                    # handle but before the OS thread is alive. Such a handle
+                    # is owned, yet Python forbids joining it.
+                    if thread.ident is not None or thread.is_alive():
+                        thread.join()
                     del self._thread
                 self._shutdown_thread_joined = True
 
@@ -114,6 +119,23 @@ class _LifecycleSafeBackgroundScheduler(BackgroundScheduler):
                 self._shutdown_event_dispatched = True
             self._shutdown_complete = True
             self._logger.info("Scheduler has been shut down")
+
+    def cleanup_failed_start(self, wait: bool = False) -> None:
+        """Own and clean every resource created by a partial ``start()``.
+
+        APScheduler does not expose a partial-start state.  Converting that
+        state into our phase-tracked shutdown state makes cleanup retryable
+        through the same adapter instead of guessing from ``running``.
+        """
+        with self._lifecycle_cleanup_lock:
+            if self._shutdown_complete:
+                return
+            self._lifecycle_shutdown_in_progress = True
+            self.state = STATE_STOPPED
+            event = getattr(self, "_event", None)
+            if event is not None:
+                event.set()
+        self.shutdown(wait=wait)
 
 
 def plan_first_and_recurring_runs(
@@ -185,6 +207,94 @@ class JobExecutionState(str, Enum):
 
 
 @dataclass(frozen=True)
+class OneShotOccurrence:
+    job_id: str
+    run_date: datetime
+
+    def __post_init__(self) -> None:
+        if self.run_date.tzinfo is None:
+            raise ValueError("one-shot run_date must be timezone-aware")
+        object.__setattr__(self, "run_date", self.run_date.astimezone(timezone.utc))
+
+
+class OneShotOccurrenceLedger(Protocol):
+    """Independent source of truth for one-shot callback admission."""
+
+    def is_consumed(self, occurrence: OneShotOccurrence) -> bool: ...
+
+    def consume(self, occurrence: OneShotOccurrence) -> bool: ...
+
+
+class InMemoryOneShotOccurrenceLedger:
+    """Process-local ledger used by isolated TaskScheduler instances/tests."""
+
+    def __init__(self) -> None:
+        self._consumed: set[OneShotOccurrence] = set()
+        self._lock = threading.Lock()
+
+    def is_consumed(self, occurrence: OneShotOccurrence) -> bool:
+        with self._lock:
+            return occurrence in self._consumed
+
+    def consume(self, occurrence: OneShotOccurrence) -> bool:
+        with self._lock:
+            if occurrence in self._consumed:
+                return False
+            self._consumed.add(occurrence)
+            return True
+
+
+class SqlAlchemyOneShotOccurrenceLedger:
+    """Durable occurrence ledger shared by scheduler generations/processes."""
+
+    def __init__(self, session_factory: Callable[[], Session]) -> None:
+        self._session_factory = session_factory
+
+    def is_consumed(self, occurrence: OneShotOccurrence) -> bool:
+        from database.models import ScheduledJobOccurrence
+
+        with self._session_factory() as session:
+            return (
+                session.query(ScheduledJobOccurrence.id)
+                .filter(
+                    ScheduledJobOccurrence.job_id == occurrence.job_id,
+                    ScheduledJobOccurrence.run_at_epoch_us
+                    == self._epoch_microseconds(occurrence.run_date),
+                )
+                .first()
+                is not None
+            )
+
+    def consume(self, occurrence: OneShotOccurrence) -> bool:
+        from database.models import ScheduledJobOccurrence
+
+        with self._session_factory() as session:
+            session.add(
+                ScheduledJobOccurrence(
+                    job_id=occurrence.job_id,
+                    run_at_epoch_us=self._epoch_microseconds(occurrence.run_date),
+                )
+            )
+            try:
+                session.commit()
+            except IntegrityError:
+                session.rollback()
+                return False
+            return True
+
+    @staticmethod
+    def _epoch_microseconds(value: datetime) -> int:
+        utc_value = value.astimezone(timezone.utc)
+        epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+        delta = utc_value - epoch
+        return (
+            delta.days * 86_400_000_000
+            + delta.seconds * 1_000_000
+            + delta.microseconds
+        )
+
+
+@dataclass(frozen=True)
 class JobOwner:
     """Exclusive owner of a scheduler registration."""
 
@@ -237,7 +347,10 @@ class TaskScheduler:
     #: Bounded wait (seconds) for in-flight jobs to drain during shutdown.
     DEFAULT_SHUTDOWN_TIMEOUT_SECONDS = 10.0
 
-    def __init__(self):
+    def __init__(
+        self,
+        occurrence_ledger: Optional[OneShotOccurrenceLedger] = None,
+    ):
         self.scheduler: Optional[BackgroundScheduler] = None
         self._started = False
         self._state = SchedulerState.STOPPED
@@ -260,6 +373,17 @@ class TaskScheduler:
         self._job_tokens: Dict[str, int] = {}
         self._job_token_seq = 0
         self._registrations: Dict[str, JobRegistration] = {}
+        self._occurrence_ledger = (
+            occurrence_ledger
+            if occurrence_ledger is not None
+            else InMemoryOneShotOccurrenceLedger()
+        )
+
+    @staticmethod
+    def _occurrence_for_spec(spec: JobSpec) -> OneShotOccurrence:
+        if not isinstance(spec.trigger, DateTrigger):
+            raise ValueError("only DateTrigger specs have one-shot occurrences")
+        return OneShotOccurrence(spec.job_id, spec.trigger.run_date)
 
     @property
     def _job_specs(self) -> Dict[str, JobSpec]:
@@ -313,17 +437,50 @@ class TaskScheduler:
                     "cannot start scheduler: failed generation must complete "
                     "shutdown before restart"
                 )
+            candidate = _LifecycleSafeBackgroundScheduler()
+            try:
+                candidate.start()
+            except BaseException as start_error:
+                try:
+                    candidate.cleanup_failed_start(wait=False)
+                except BaseException as cleanup_error:
+                    # Publish only the failed resource owner.  shutdown() can
+                    # now resume the adapter's phase-tracked cleanup.
+                    self.scheduler = candidate
+                    self._state = SchedulerState.FAILED
+                    self._started = False
+                    self._cancel_event.set()
+                    raise SchedulerBusyError(
+                        "scheduler start failed and partial resources require cleanup"
+                    ) from cleanup_error
+                raise start_error
+
+            # Publish the new generation only after the candidate is fully
+            # started. No externally observable handle/state is overwritten by
+            # a failed attempt.
             self._generation += 1
             self._job_tokens.clear()
             self._registrations.clear()
             # A generation owns its own event. Never clear an event captured by
             # callbacks from an earlier generation.
             self._cancel_event = threading.Event()
-            self.scheduler = _LifecycleSafeBackgroundScheduler()
-            self.scheduler.start()
+            self.scheduler = candidate
             self._started = True
             self._state = SchedulerState.RUNNING
             logger.info("Scheduler started")
+
+    def has_pending_cleanup(self) -> bool:
+        """Whether this component owns resources that registry must stop."""
+        with self._inflight_condition:
+            if self._state in (SchedulerState.STOPPING, SchedulerState.FAILED):
+                return True
+            scheduler = self.scheduler
+            return bool(
+                scheduler is not None
+                and hasattr(scheduler, "shutdown_complete")
+                and not scheduler.shutdown_complete
+                and self._state != SchedulerState.RUNNING
+            )
     
     def shutdown(self, timeout: Optional[float] = None) -> bool:
         """Shutdown the scheduler with a quiescence guarantee.
@@ -456,6 +613,7 @@ class TaskScheduler:
         def _run_tracked_job(*args, **kwargs):
             # Cancel / generation / token check and in-flight registration
             # must be atomic with shutdown, start, and remove/replace.
+            occurrence: Optional[OneShotOccurrence] = None
             with self._inflight_condition:
                 if (
                     cancel_event.is_set()
@@ -475,18 +633,45 @@ class TaskScheduler:
                         registration is not None
                         and registration.state == JobExecutionState.SCHEDULED
                     ):
-                        # APScheduler consumes DateTrigger jobs after submission.
-                        # Mirror that terminal transition under the same lock as
-                        # admission/reconcile so rollback can never resurrect it.
-                        self._registrations[task_id] = JobRegistration(
-                            spec=registration.spec,
-                            owner=registration.owner,
-                            lifetime=registration.lifetime,
-                            state=JobExecutionState.CONSUMED,
-                        )
-                        self._job_tokens.pop(task_id, None)
+                        occurrence = self._occurrence_for_spec(registration.spec)
                 self._inflight_jobs += 1
             try:
+                if occurrence is not None:
+                    # The lifecycle lock only performs in-memory admission.
+                    # Durable CAS may block on a database, so it runs outside
+                    # that lock while the operation is already counted as
+                    # in-flight. shutdown(timeout) can therefore remain bounded
+                    # and report an incomplete drain.
+                    consumed_here = self._occurrence_ledger.consume(occurrence)
+                    with self._inflight_condition:
+                        current = self._registrations.get(task_id)
+                        token_is_current = (
+                            self._job_tokens.get(task_id) == job_token
+                        )
+                        if (
+                            token_is_current
+                            and current is not None
+                            and current.spec == registration.spec
+                        ):
+                            self._registrations[task_id] = JobRegistration(
+                                spec=current.spec,
+                                owner=current.owner,
+                                lifetime=current.lifetime,
+                                state=JobExecutionState.CONSUMED,
+                            )
+                            self._job_tokens.pop(task_id, None)
+                    if not consumed_here:
+                        logger.info(
+                            "Skipping already consumed one-shot occurrence %s at %s",
+                            occurrence.job_id,
+                            occurrence.run_date,
+                        )
+                        return
+                    # The durable admission record is committed before the
+                    # callback body. Once claim succeeds this invocation owns
+                    # the occurrence and shutdown drains the already-counted
+                    # body; normal shutdown must never turn a claim into a
+                    # permanently skipped trade.
                 return task_func(*args, **kwargs)
             finally:
                 with self._inflight_condition:
@@ -1163,7 +1348,9 @@ class TaskScheduler:
 
 
 # Global scheduler instance
-task_scheduler = TaskScheduler()
+task_scheduler = TaskScheduler(
+    occurrence_ledger=SqlAlchemyOneShotOccurrenceLedger(SessionLocal)
+)
 
 
 # Convenience functions

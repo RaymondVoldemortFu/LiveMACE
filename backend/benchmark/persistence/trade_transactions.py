@@ -15,11 +15,7 @@ if TYPE_CHECKING:
 
 
 class TradeTransactionOperations(Protocol):
-    def run_legacy_executor(
-        self,
-        executor: Callable[[Any, Any], Mapping[str, Any]],
-        command: Any,
-    ) -> Mapping[str, Any]: ...
+    def execute_trade(self, command: Any) -> Mapping[str, Any]: ...
 
     def savepoint(self) -> AbstractContextManager: ...
 
@@ -34,8 +30,16 @@ class SqlAlchemyTradeTransactionOperations:
     def __init__(self, session_provider: Callable[[], Session]) -> None:
         self._session_provider = session_provider
 
-    def run_legacy_executor(self, executor, command):
-        return executor(self._session_provider(), command)
+    def execute_trade(self, command):
+        """Run the one fixed legacy bridge inside infrastructure.
+
+        The executor is fixed by the infrastructure module; callers holding
+        the application-facing transaction port cannot substitute a callback
+        or obtain the underlying Session.
+        """
+        from benchmark.infrastructure.adapters.trade import execute_legacy_trade
+
+        return execute_legacy_trade(self._session_provider(), command)
 
     def savepoint(self):
         return self._session_provider().begin_nested()

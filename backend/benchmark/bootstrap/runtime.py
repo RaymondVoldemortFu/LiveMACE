@@ -39,6 +39,21 @@ class RuntimeShutdownError(RuntimeError):
         )
 
 
+class RuntimeBootstrapError(RuntimeError):
+    """Startup failed and cleanup still owns retryable runtime resources."""
+
+    def __init__(
+        self,
+        start_error: BaseException,
+        handle: "RuntimeHandle",
+        cleanup_failures: dict[str, str],
+    ) -> None:
+        self.start_error = start_error
+        self.handle = handle
+        self.cleanup_failures = dict(cleanup_failures)
+        super().__init__(str(start_error))
+
+
 class StartupMode(str, Enum):
     """Production default is FULL; tests pass their mode explicitly —
     never inferred from hidden environment variables."""
@@ -119,11 +134,22 @@ def bootstrap_runtime_sync(context: BootstrapContext) -> RuntimeHandle:
         registry.register(descriptor)
     try:
         registry.start_all()
-    except Exception:
+    except Exception as start_error:
         # Partial-start failure: stop only what already started, then
         # surface the original error.
         logger.error("runtime bootstrap failed; stopping already-started tasks")
-        registry.stop_all()
+        cleanup_results = registry.stop_all()
+        cleanup_failures = {
+            task_id: error
+            for task_id, error in cleanup_results.items()
+            if error is not None
+        }
+        if cleanup_failures:
+            raise RuntimeBootstrapError(
+                start_error,
+                handle,
+                cleanup_failures,
+            ) from start_error
         raise
     logger.info("all runtime services initialized")
     return handle

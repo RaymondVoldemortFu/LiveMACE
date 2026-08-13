@@ -290,6 +290,7 @@ def test_sqlite_startup_migrations_add_missing_columns_idempotently():
 
     applied = run_startup_migrations(engine)
     assert applied == [
+        "202608_scheduled_job_occurrences",
         "202608_trade_command_receipts",
         "202606_agent_checkpoint_volatility",
         "202606_account_tool_routing_enabled",
@@ -302,6 +303,56 @@ def test_sqlite_startup_migrations_add_missing_columns_idempotently():
     assert "tool_routing_enabled" in cols
     # MySQL-only migrations must not run against sqlite
     assert all(m.dialect in ("sqlite", "mysql", None) for m in STARTUP_MIGRATIONS)
+
+
+def test_occurrence_migration_upgrades_legacy_run_date_schema():
+    from database.migrations_startup import (
+        STARTUP_MIGRATIONS,
+        run_startup_migrations,
+    )
+
+    migration = next(
+        item
+        for item in STARTUP_MIGRATIONS
+        if item.migration_id == "202608_scheduled_job_occurrences_epoch_us"
+    )
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "CREATE TABLE scheduled_job_occurrences ("
+                "id INTEGER PRIMARY KEY, job_id VARCHAR(255) NOT NULL, "
+                "run_date DATETIME NOT NULL, consumed_at DATETIME NOT NULL, "
+                "CONSTRAINT uix_scheduled_job_occurrence_key "
+                "UNIQUE (job_id, run_date))"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO scheduled_job_occurrences "
+                "(id, job_id, run_date, consumed_at) VALUES "
+                "(1, 'once', '2026-08-13 01:02:03.123456', "
+                "'2026-08-13 01:02:04')"
+            )
+        )
+
+    assert run_startup_migrations(engine, [migration]) == [
+        "202608_scheduled_job_occurrences_epoch_us"
+    ]
+    with engine.connect() as conn:
+        columns = {
+            row[1]
+            for row in conn.execute(text("PRAGMA table_info(scheduled_job_occurrences)"))
+        }
+        row = conn.execute(
+            text(
+                "SELECT job_id, run_at_epoch_us "
+                "FROM scheduled_job_occurrences"
+            )
+        ).one()
+    assert columns >= {"job_id", "run_at_epoch_us", "consumed_at"}
+    assert "run_date" not in columns
+    assert row == ("once", 1786582923123456)
 
 
 def test_fresh_schema_needs_no_sqlite_migrations():
