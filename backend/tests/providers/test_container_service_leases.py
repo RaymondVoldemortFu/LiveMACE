@@ -218,3 +218,35 @@ def test_container_shutdown_propagates_leaked_list_failure():
     assert service._pool_initialized is True
 
 
+def test_container_shutdown_clears_orphan_lease_tokens():
+    class Ok:
+        id = "active-ok"
+
+        def remove(self, force=False):
+            return None
+
+    service = _service_for_shutdown(active={1: Ok()}, idle=[])
+    service._active_lease_ids[7] = {"stale-lease"}
+    service.shutdown()
+    assert service.active_containers == {}
+    assert service._active_lease_ids == {}
+    assert service._pool_initialized is False
+
+
+def test_container_shutdown_drops_orphan_leases_when_other_remove_fails():
+    class Broken:
+        id = "broken-container"
+
+        def remove(self, force=False):
+            raise TimeoutError("docker hung")
+
+    broken = Broken()
+    service = _service_for_shutdown(active={3: broken}, idle=[])
+    service._active_lease_ids[7] = {"stale-lease"}
+    with pytest.raises(RuntimeError, match="container shutdown incomplete"):
+        service.shutdown()
+    assert service.active_containers[3] is broken
+    assert service._active_lease_ids == {3: {"lease-3"}}
+
+
+

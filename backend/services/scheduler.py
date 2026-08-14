@@ -13,6 +13,7 @@ from apscheduler.triggers.date import DateTrigger
 from sqlalchemy.orm import Session
 from typing import Any, Dict, Set, Callable, Optional, List, Mapping, Protocol
 import functools
+import inspect
 import logging
 import threading
 import time
@@ -39,6 +40,11 @@ class _LifecycleSafeBackgroundScheduler(BackgroundScheduler):
     The adapter first stops and joins admission, then closes executors and job
     stores; DateTrigger cleanup is idempotent only during that stop window.
     """
+
+    #: Bounded wait for the APScheduler thread to leave ``_main_loop``.
+    #: ``TaskScheduler.shutdown(timeout=)`` forwards remaining time here so
+    #: the join is inside the same deadline as job-body drain.
+    DEFAULT_JOIN_TIMEOUT_SECONDS = 10.0
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -69,7 +75,7 @@ class _LifecycleSafeBackgroundScheduler(BackgroundScheduler):
                 return None
             raise
 
-    def shutdown(self, wait: bool = True):
+    def shutdown(self, wait: bool = True, timeout: Optional[float] = None):
         """Retryable, phase-tracked APScheduler resource cleanup.
 
         APScheduler's public ``running`` flag only describes callback
@@ -89,15 +95,27 @@ class _LifecycleSafeBackgroundScheduler(BackgroundScheduler):
             if not self._lifecycle_shutdown_in_progress:
                 self._lifecycle_shutdown_in_progress = True
                 self.state = STATE_STOPPED
-                self.wakeup()
             if not self._shutdown_thread_joined:
+                # Wake on every join attempt: a prior timed-out join still
+                # owns the thread, and the first wakeup may have been missed.
+                self.wakeup()
                 thread = getattr(self, "_thread", None)
                 if thread is not None:
                     # ``Thread.start()`` itself may raise after assigning the
                     # handle but before the OS thread is alive. Such a handle
                     # is owned, yet Python forbids joining it.
                     if thread.ident is not None or thread.is_alive():
-                        thread.join()
+                        join_timeout = (
+                            self.DEFAULT_JOIN_TIMEOUT_SECONDS
+                            if timeout is None
+                            else max(timeout, 0.0)
+                        )
+                        thread.join(join_timeout)
+                        if thread.is_alive():
+                            raise TimeoutError(
+                                "APScheduler thread did not stop within "
+                                f"{join_timeout:.1f}s"
+                            )
                     del self._thread
                 self._shutdown_thread_joined = True
 
@@ -573,6 +591,7 @@ class TaskScheduler:
         """
         if timeout is None:
             timeout = self.DEFAULT_SHUTDOWN_TIMEOUT_SECONDS
+        deadline = time.monotonic() + max(timeout, 0.0)
 
         with self._inflight_condition:
             self._admission_closed = True
@@ -602,11 +621,14 @@ class TaskScheduler:
             shutdown_complete = not scheduler.running
         if scheduler is not None and not shutdown_complete:
             try:
-                scheduler.shutdown(wait=False)
+                remaining = max(deadline - time.monotonic(), 0.0)
+                parameters = inspect.signature(scheduler.shutdown).parameters
+                if "timeout" in parameters:
+                    scheduler.shutdown(wait=False, timeout=remaining)
+                else:
+                    scheduler.shutdown(wait=False)
             except BaseException as exc:
                 shutdown_error = exc
-
-        deadline = time.monotonic() + max(timeout, 0.0)
         with self._inflight_condition:
             while self._inflight_jobs > 0:
                 remaining = deadline - time.monotonic()

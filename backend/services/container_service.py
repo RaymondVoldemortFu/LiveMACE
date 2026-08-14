@@ -613,6 +613,13 @@ class ContainerService:
                         logger.info("Removed idle container %s", str(container_id)[:12])
                 self.idle_containers = remaining_idle
 
+                # Recovery can leave lease tokens without an active container.
+                # Those keys must not survive a cleanup pass: the next lease
+                # would inherit them and never return the container to the pool.
+                for account_id in list(self._active_lease_ids):
+                    if account_id not in self.active_containers:
+                        self._active_lease_ids.pop(account_id, None)
+
                 try:
                     apply_remaining_timeout()
                     tracked_ids = self._tracked_container_ids()

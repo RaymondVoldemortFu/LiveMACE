@@ -51,7 +51,7 @@ async def shutdown_runtime(handle: RuntimeHandle) -> None
 - startup rollback 的「到期」分三层，不得混用：
   1. **重试预算**（`startup_cleanup_timeout_seconds`）：约束「还要不要再开一轮 `shutdown_runtime`」。一轮已经返回（成功或结构化失败）之后，若预算耗尽，必须携带 `cleanup_failures` 把原始启动失败传给 ASGI/supervisor。禁止 `while True` 对已返回的失败无限重试。
   2. **当前这一次 in-flight cleanup**：同步 stop 跑在 worker 线程上，无法被强制取消。`fail_after` / CancelScope 只取消等待，不停止 stop callback。禁止用 `abandon_on_cancel` 或等价手段遗弃仍在修改 `RuntimeHandle` 的 worker。当前这一次必须 join 完再决定重试或传播失败。
-  3. **stop callback 自身的界**（scheduler drain、family reconcile、order `join`、Docker HTTP 等）：每一轮 `shutdown_runtime` 能在有限时间内返回的前提。无界 stop 会使第 2 层一直等；不得靠取消线程来补这个缺口。
+  3. **stop callback 自身的界**（APScheduler 调度线程 join、scheduler drain、family reconcile、order `join`、Docker HTTP 等）：每一轮 `shutdown_runtime` 能在有限时间内返回的前提。无界 stop 会使第 2 层一直等；不得靠取消线程来补这个缺口。adapter join 超时必须保留线程句柄和未完成 cleanup phase，并传播失败供重试。
   「禁止无限阻塞 startup」只禁止第 1 层的无限重试，不表示 lifespan 必须在预算秒数内返回、即使当前 stop 尚未结束。最坏等待约为重试预算 + 当前这一次 stop 的自身上限。family reconcile barrier 的 deadline 是调度器内部的第 3 层界，不是第 1 层重试预算。
 - Runtime registry 必须区分无资源的 START_FAILED、持有待清理资源的 START_CLEANUP_FAILED 与可重试的 STOP_FAILED；任何 START_CLEANUP_FAILED（包括 optional task）都必须中止 bootstrap 且 readiness 为 false；后两者清零前禁止 start，重复 shutdown 必须继续调用 stop。
 - APScheduler 的 STOPPED/running 只表示 callback admission 已关闭，不代表 executor、job store 与 shutdown event 已清理；adapter 必须逐阶段记录完成度，异常重试从首个未完成资源继续，全部完成前不得清空应用 registration 或报告成功。

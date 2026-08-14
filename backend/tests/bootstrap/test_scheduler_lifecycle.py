@@ -252,6 +252,64 @@ def test_shutdown_retries_unfinished_apscheduler_cleanup(monkeypatch):
     assert ts._registrations == {}
 
 
+def test_shutdown_join_timeout_keeps_thread_handle_and_retries(monkeypatch):
+    ts = TaskScheduler()
+    ts.start()
+    concrete = ts.scheduler
+    assert concrete is not None
+    jobstore = concrete._jobstores["default"]
+    jobstore_calls = []
+    original_jobstore_shutdown = jobstore.shutdown
+    monkeypatch.setattr(
+        jobstore,
+        "shutdown",
+        lambda: jobstore_calls.append(1) or original_jobstore_shutdown(),
+    )
+    release = threading.Event()
+    observed_join_timeouts = []
+    real_thread = concrete._thread
+
+    class StuckThread:
+        ident = 1
+
+        def is_alive(self):
+            return not release.is_set()
+
+        def join(self, timeout=None):
+            observed_join_timeouts.append(timeout)
+            if timeout is None:
+                release.wait()
+                return
+            release.wait(timeout)
+
+    try:
+        concrete._thread = StuckThread()
+        started = time.monotonic()
+        with pytest.raises(TimeoutError, match="APScheduler thread did not stop"):
+            ts.shutdown(timeout=0.05)
+        elapsed = time.monotonic() - started
+        assert elapsed < 0.3
+        assert observed_join_timeouts
+        assert observed_join_timeouts[0] <= 0.05
+        assert concrete._shutdown_thread_joined is False
+        assert concrete._thread is not None
+        assert concrete.shutdown_complete is False
+        assert ts._state == scheduler.SchedulerState.FAILED
+        assert jobstore_calls == []
+
+        release.set()
+        assert ts.shutdown(timeout=1) is True
+        assert jobstore_calls == [1]
+        assert concrete.shutdown_complete is True
+        assert concrete._shutdown_thread_joined is True
+        assert ts._state == scheduler.SchedulerState.STOPPED
+    finally:
+        release.set()
+        if real_thread is not None and real_thread.is_alive():
+            real_thread.join(timeout=1)
+
+
+
 def test_shutdown_retry_resumes_after_completed_cleanup_phase(monkeypatch):
     ts = TaskScheduler()
     ts.start()
