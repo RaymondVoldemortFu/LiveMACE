@@ -1,6 +1,8 @@
 from threading import Condition, RLock
 from types import SimpleNamespace
 
+import pytest
+
 from services.container_service import ContainerService
 
 
@@ -88,3 +90,131 @@ def test_recovery_interleaved_with_last_lease_release_keeps_invariant():
     service.release_container(1)
     assert 1 not in service.active_containers
     assert [c.id for c in service.idle_containers] == ["container-1"]
+
+
+class _FakeDockerAPI:
+    def __init__(self, timeout=60):
+        self.timeout = timeout
+
+
+class _FakeDockerClient:
+    def __init__(self, leaked=()):
+        self.timeout = 60
+        self.api = _FakeDockerAPI(60)
+        self.containers = SimpleNamespace(list=lambda **kwargs: list(leaked))
+
+
+def _service_for_shutdown(*, active=None, idle=None, leaked=()):
+    service = object.__new__(ContainerService)
+    service.client = _FakeDockerClient(leaked=leaked)
+    service._condition = Condition(RLock())
+    service._active_lease_ids = {account_id: {f"lease-{account_id}"} for account_id in (active or {})}
+    service.active_containers = dict(active or {})
+    service.idle_containers = list(idle or [])
+    service._pool_initialized = True
+    return service
+
+
+def test_container_shutdown_applies_timeout_and_clears_owned_containers():
+    observed = []
+
+    class Tracked:
+        def __init__(self, container_id):
+            self.id = container_id
+
+        def remove(self, force=False):
+            observed.append(service.client.timeout)
+            observed.append(service.client.api.timeout)
+
+    active = Tracked("active-container-1")
+    idle = Tracked("idle-container-1")
+    service = _service_for_shutdown(active={7: active}, idle=[idle])
+    service.shutdown()
+
+    assert service.active_containers == {}
+    assert service.idle_containers == []
+    assert service._pool_initialized is False
+    assert observed
+    assert all(0 < timeout <= ContainerService.DEFAULT_SHUTDOWN_TIMEOUT_SECONDS for timeout in observed)
+
+
+def test_container_shutdown_keeps_ownership_and_raises_when_remove_fails():
+    class Broken:
+        id = "broken-container"
+
+        def remove(self, force=False):
+            raise TimeoutError("docker hung")
+
+    broken = Broken()
+    service = _service_for_shutdown(active={3: broken}, idle=[])
+
+    with pytest.raises(RuntimeError, match="container shutdown incomplete"):
+        service.shutdown()
+
+    assert service.active_containers[3] is broken
+    assert service._active_lease_ids[3] == {"lease-3"}
+    assert service._pool_initialized is True
+    assert service.client.timeout == 60
+    assert service.client.api.timeout == 60
+
+
+def test_container_shutdown_drops_ownership_when_container_already_gone():
+    import docker.errors
+
+    class Missing:
+        id = "already-gone"
+
+        def remove(self, force=False):
+            raise docker.errors.NotFound("No such container")
+
+    service = _service_for_shutdown(active={4: Missing()}, idle=[])
+    service.shutdown()
+    assert service.active_containers == {}
+    assert service._active_lease_ids == {}
+    assert service._pool_initialized is False
+
+
+def test_container_shutdown_skips_tracked_ids_in_leaked_scan():
+    removed = []
+
+    class Tracked:
+        id = "tracked-1"
+
+        def remove(self, force=False):
+            raise TimeoutError("docker hung")
+
+    class LeakedTwin:
+        id = "tracked-1"
+
+        def remove(self, force=False):
+            removed.append(self.id)
+
+    tracked = Tracked()
+    service = _service_for_shutdown(
+        active={8: tracked},
+        idle=[],
+        leaked=[LeakedTwin()],
+    )
+    with pytest.raises(RuntimeError, match="container shutdown incomplete"):
+        service.shutdown()
+    assert removed == []
+    assert service.active_containers[8] is tracked
+
+
+def test_container_shutdown_propagates_leaked_list_failure():
+    class Ok:
+        id = "idle-ok"
+
+        def remove(self, force=False):
+            return None
+
+    service = _service_for_shutdown(idle=[Ok()])
+    service.client.containers = SimpleNamespace(
+        list=lambda **kwargs: (_ for _ in ()).throw(TimeoutError("list hung"))
+    )
+    with pytest.raises(RuntimeError, match="list leaked containers"):
+        service.shutdown()
+    assert service.idle_containers == []
+    assert service._pool_initialized is True
+
+

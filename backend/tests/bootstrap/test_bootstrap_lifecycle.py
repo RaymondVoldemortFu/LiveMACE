@@ -514,6 +514,188 @@ def test_asgi_startup_cleanup_has_deadline_and_propagates_state(monkeypatch):
     }
 
 
+def test_asgi_startup_cleanup_waits_for_inflight_worker(monkeypatch):
+    import threading
+
+    import anyio
+    from benchmark.bootstrap import app as app_module
+    from benchmark.bootstrap.app import AppSettings, create_app
+
+    handle = RuntimeHandle(StartupMode.FULL, TaskRegistry())
+    start_error = RuntimeError("start boom")
+    bootstrap_error = RuntimeBootstrapError(
+        start_error,
+        handle,
+        {"scheduler": "cleanup busy"},
+    )
+    cleanup_finished = threading.Event()
+    observed_kwargs = []
+
+    async def fail_bootstrap(context):
+        raise bootstrap_error
+
+    async def slow_successful_cleanup(runtime_handle, **kwargs):
+        observed_kwargs.append(kwargs)
+        await anyio.sleep(0.2)
+        cleanup_finished.set()
+
+    monkeypatch.setattr(app_module, "bootstrap_runtime", fail_bootstrap)
+    monkeypatch.setattr(app_module, "shutdown_runtime", slow_successful_cleanup)
+    app = create_app(
+        settings=AppSettings(startup_cleanup_timeout_seconds=0.05),
+        mode=StartupMode.FULL,
+    )
+
+    async def enter_lifespan():
+        async with app.router.lifespan_context(app):
+            pass
+
+    started = time.monotonic()
+    with pytest.raises(RuntimeError) as caught:
+        anyio.run(enter_lifespan)
+    elapsed = time.monotonic() - started
+    assert caught.value is start_error
+    assert elapsed >= 0.2
+    assert cleanup_finished.is_set()
+    assert observed_kwargs == [{}]
+
+
+def test_asgi_startup_cleanup_deadline_does_not_abandon_failed_worker(monkeypatch):
+    import threading
+
+    import anyio
+    from benchmark.bootstrap import app as app_module
+    from benchmark.bootstrap.app import AppSettings, create_app
+
+    handle = RuntimeHandle(StartupMode.FULL, TaskRegistry())
+    start_error = RuntimeError("start boom")
+    bootstrap_error = RuntimeBootstrapError(
+        start_error,
+        handle,
+        {"scheduler": "cleanup busy"},
+    )
+    cleanup_finished = threading.Event()
+
+    async def fail_bootstrap(context):
+        raise bootstrap_error
+
+    async def slow_failed_cleanup(runtime_handle, **kwargs):
+        await anyio.sleep(0.2)
+        cleanup_finished.set()
+        raise RuntimeShutdownError({"scheduler": "still busy"})
+
+    monkeypatch.setattr(app_module, "bootstrap_runtime", fail_bootstrap)
+    monkeypatch.setattr(app_module, "shutdown_runtime", slow_failed_cleanup)
+    app = create_app(
+        settings=AppSettings(startup_cleanup_timeout_seconds=0.05),
+        mode=StartupMode.FULL,
+    )
+
+    async def enter_lifespan():
+        async with app.router.lifespan_context(app):
+            pass
+
+    started = time.monotonic()
+    with pytest.raises(RuntimeBootstrapError) as caught:
+        anyio.run(enter_lifespan)
+    elapsed = time.monotonic() - started
+    assert elapsed >= 0.2
+    assert cleanup_finished.is_set()
+    assert caught.value.start_error is start_error
+    assert caught.value.cleanup_failures == {
+        "scheduler": "still busy",
+        "runtime": "startup cleanup deadline exceeded",
+    }
+
+
+def test_shutdown_runtime_joins_worker_when_await_is_cancelled():
+    import anyio
+    from benchmark.bootstrap.runtime import shutdown_runtime
+
+    finished = threading.Event()
+    registry = TaskRegistry()
+
+    def stop():
+        time.sleep(0.2)
+        finished.set()
+
+    registry.register(TaskDescriptor("worker", lambda: None, stop))
+    registry.start_all()
+    handle = RuntimeHandle(StartupMode.FULL, registry)
+
+    async def exercise():
+        with anyio.move_on_after(0.05):
+            await shutdown_runtime(handle)
+
+    started = time.monotonic()
+    anyio.run(exercise)
+    elapsed = time.monotonic() - started
+    assert elapsed >= 0.2
+    assert finished.is_set()
+    assert registry.status()["worker"] == TaskState.STOPPED
+
+
+def test_quiesced_auto_trading_stop_clears_family_when_sibling_fails(monkeypatch):
+    from apscheduler.triggers.interval import IntervalTrigger
+
+    from services import scheduler as scheduler_module
+    from services.scheduler import JobSpec, TaskScheduler
+
+    ts = TaskScheduler()
+    ts.start()
+    monkeypatch.setattr(scheduler_module, "task_scheduler", ts)
+
+    def start_auto_trading():
+        ts.reconcile_jobs(
+            "auto_trading",
+            (JobSpec("ai_trade_job", lambda: None, IntervalTrigger(seconds=60)),),
+        )
+
+    registry = TaskRegistry()
+    registry.register(
+        TaskDescriptor(
+            "scheduler",
+            start=lambda: None,
+            stop=lambda: scheduler_module.stop_scheduler(),
+            quiesce=scheduler_module.quiesce_scheduler,
+        )
+    )
+    registry.register(
+        TaskDescriptor(
+            "ai_auto_trading",
+            start_auto_trading,
+            scheduler_module.stop_auto_trading_jobs,
+            dependencies=("scheduler",),
+        )
+    )
+    registry.register(
+        TaskDescriptor(
+            "other_dependent",
+            start=lambda: None,
+            stop=lambda: (_ for _ in ()).throw(RuntimeError("other still draining")),
+            dependencies=("scheduler",),
+        )
+    )
+    try:
+        registry.start_all()
+        results = registry.stop_all()
+        assert results["other_dependent"] == "other still draining"
+        assert results["ai_auto_trading"] is None
+        assert "active dependents" in results["scheduler"]
+        assert registry.status() == {
+            "scheduler": TaskState.RUNNING,
+            "ai_auto_trading": TaskState.STOPPED,
+            "other_dependent": TaskState.STOP_FAILED,
+        }
+        assert "ai_trade_job" not in ts._registrations
+        assert ts.scheduler.get_job("ai_trade_job") is None
+        assert ts.is_running() is False
+        assert ts.is_control_plane_running() is True
+    finally:
+        ts.shutdown(timeout=2)
+
+
+
 def test_order_scheduler_partial_start_ownership_and_join_failure(monkeypatch):
     from services import order_scheduler as module
 

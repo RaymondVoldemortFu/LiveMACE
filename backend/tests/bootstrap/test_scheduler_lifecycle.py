@@ -1144,6 +1144,7 @@ def test_quiesce_closes_new_callback_admission_but_keeps_control_plane():
     release.set()
     time.sleep(0.2)
     assert calls == [1]
+    assert ts.is_control_plane_running() is True
 
     # Control-plane removal remains legal after admission is closed.
     ts.reconcile_jobs("quiesce-family", ())
@@ -1300,3 +1301,61 @@ def test_account_creation_runs_trading_reset_off_the_event_loop(monkeypatch):
     assert ran_on_event_loop == [False], "reset ran on the event loop thread"
     max_gap = max(b - a for a, b in zip(heartbeats, heartbeats[1:]))
     assert max_gap < 0.2, f"event loop was blocked for {max_gap:.3f}s"
+
+
+def test_stop_auto_trading_jobs_skips_when_control_plane_is_down(monkeypatch):
+    fresh = TaskScheduler()
+    monkeypatch.setattr(scheduler, "task_scheduler", fresh)
+    scheduler.stop_auto_trading_jobs()
+    assert fresh.scheduler is None
+    assert not fresh.is_control_plane_running()
+
+
+def test_stop_auto_trading_jobs_reconciles_after_quiesce(monkeypatch):
+    ts = TaskScheduler()
+    ts.start()
+    monkeypatch.setattr(scheduler, "task_scheduler", ts)
+    try:
+        ts.reconcile_jobs(
+            "auto_trading",
+            (JobSpec("ai_trade_job", lambda: None, IntervalTrigger(seconds=60)),),
+        )
+        ts.quiesce()
+        assert ts.is_running() is False
+        assert ts.is_control_plane_running() is True
+
+        scheduler.stop_auto_trading_jobs()
+
+        assert "ai_trade_job" not in ts._registrations
+        assert ts.scheduler.get_job("ai_trade_job") is None
+        assert "auto_trading" not in ts._job_families
+    finally:
+        assert ts.shutdown(timeout=2) is True
+
+
+def test_stop_auto_trading_jobs_propagates_family_barrier_timeout(monkeypatch):
+    ts = TaskScheduler()
+    ts.start()
+    monkeypatch.setattr(scheduler, "task_scheduler", ts)
+    ts.DEFAULT_RECONCILE_TIMEOUT_SECONDS = 0.2
+    entered = threading.Event()
+    release = threading.Event()
+
+    def job():
+        entered.set()
+        release.wait(2)
+
+    try:
+        ts.reconcile_jobs(
+            "auto_trading",
+            (JobSpec("ai_trade_job", job, IntervalTrigger(seconds=0.05)),),
+        )
+        assert entered.wait(1)
+        ts.quiesce()
+        with pytest.raises(SchedulerBusyError):
+            scheduler.stop_auto_trading_jobs()
+        assert ts.scheduler.get_job("ai_trade_job") is not None
+    finally:
+        release.set()
+        assert ts.shutdown(timeout=2) is True
+

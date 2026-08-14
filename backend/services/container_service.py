@@ -14,6 +14,9 @@ logger = logging.getLogger(__name__)
 class ContainerService:
     _instance = None
     _instance_lock = threading.Lock()
+    #: Docker HTTP calls during shutdown are bounded so bootstrap cleanup
+    #: cannot hang forever waiting on the daemon.
+    DEFAULT_SHUTDOWN_TIMEOUT_SECONDS = 10.0
 
     def __new__(cls):
         with cls._instance_lock:
@@ -518,44 +521,133 @@ class ContainerService:
         except Exception as e:
             return f"Error writing file: {e}"
 
+    def _set_client_timeout(self, timeout: float):
+        client = self.client
+        previous = (
+            getattr(client, "timeout", None),
+            getattr(getattr(client, "api", None), "timeout", None),
+        )
+        if hasattr(client, "timeout"):
+            client.timeout = timeout
+        api = getattr(client, "api", None)
+        if api is not None and hasattr(api, "timeout"):
+            api.timeout = timeout
+        return previous
+
+    def _restore_client_timeout(self, previous) -> None:
+        client_timeout, api_timeout = previous
+        client = self.client
+        if hasattr(client, "timeout"):
+            client.timeout = client_timeout
+        api = getattr(client, "api", None)
+        if api is not None and hasattr(api, "timeout"):
+            api.timeout = api_timeout
+
+    def _remove_container_for_shutdown(self, container) -> None:
+        """Remove a container; already-gone is the desired end state."""
+        try:
+            container.remove(force=True)
+        except docker.errors.NotFound:
+            return
+
     def shutdown(self):
-        """
-        Stops all active/idle containers and cleans stale managed containers.
-        """
+        """Stop owned containers; fail if any tracked resource remains."""
         logger.info("Shutting down ContainerService...")
         if not self.client:
             return
 
-        with self._condition:
-            for account_id, container in list(self.active_containers.items()):
+        deadline = time.monotonic() + self.DEFAULT_SHUTDOWN_TIMEOUT_SECONDS
+        previous_timeout = self._set_client_timeout(
+            self.DEFAULT_SHUTDOWN_TIMEOUT_SECONDS
+        )
+        failures: List[str] = []
+        try:
+            with self._condition:
+                def apply_remaining_timeout() -> None:
+                    left = deadline - time.monotonic()
+                    if left <= 0:
+                        raise TimeoutError("container shutdown deadline exceeded")
+                    self._set_client_timeout(left)
+
+                for account_id, container in list(self.active_containers.items()):
+                    container_id = getattr(container, "id", str(container))
+                    try:
+                        apply_remaining_timeout()
+                        self._remove_container_for_shutdown(container)
+                    except Exception as exc:
+                        failures.append(
+                            f"active {account_id}/{container_id}: "
+                            f"{type(exc).__name__}: {exc}"
+                        )
+                        logger.error(
+                            "Failed to remove active container for account %s: %s",
+                            account_id,
+                            exc,
+                        )
+                    else:
+                        self.active_containers.pop(account_id, None)
+                        self._active_lease_ids.pop(account_id, None)
+                        logger.info(
+                            "Removed active container %s for account %s",
+                            str(container_id)[:12],
+                            account_id,
+                        )
+
+                remaining_idle = []
+                for container in list(self.idle_containers):
+                    container_id = getattr(container, "id", str(container))
+                    try:
+                        apply_remaining_timeout()
+                        self._remove_container_for_shutdown(container)
+                    except Exception as exc:
+                        failures.append(
+                            f"idle {container_id}: {type(exc).__name__}: {exc}"
+                        )
+                        remaining_idle.append(container)
+                        logger.error(
+                            "Failed to remove idle container %s: %s",
+                            container_id,
+                            exc,
+                        )
+                    else:
+                        logger.info("Removed idle container %s", str(container_id)[:12])
+                self.idle_containers = remaining_idle
+
                 try:
-                    container.remove(force=True)
-                    logger.info(f"Removed active container {container.id[:12]} for account {account_id}")
-                except Exception as e:
-                    logger.error(f"Failed to remove active container for account {account_id}: {e}")
-            self.active_containers.clear()
-            self._active_lease_ids.clear()
+                    apply_remaining_timeout()
+                    tracked_ids = self._tracked_container_ids()
+                    leaked = self.client.containers.list(
+                        all=True,
+                        filters={"label": "open-alpha-arena-bench.managed=true"},
+                    )
+                    for container in leaked:
+                        container_id = getattr(container, "id", None)
+                        if container_id in tracked_ids:
+                            continue
+                        try:
+                            apply_remaining_timeout()
+                            self._remove_container_for_shutdown(container)
+                        except Exception as exc:
+                            failures.append(
+                                f"leaked {container_id}: {type(exc).__name__}: {exc}"
+                            )
+                except Exception as exc:
+                    failures.append(
+                        f"list leaked containers: {type(exc).__name__}: {exc}"
+                    )
+                    logger.warning(
+                        "Failed to cleanup leaked managed containers: %s",
+                        exc,
+                    )
 
-            for container in list(self.idle_containers):
-                try:
-                    container.remove(force=True)
-                    logger.info(f"Removed idle container {container.id[:12]}")
-                except Exception as e:
-                    logger.error(f"Failed to remove idle container: {e}")
-            self.idle_containers.clear()
+                if failures:
+                    raise RuntimeError(
+                        "container shutdown incomplete: " + "; ".join(failures)
+                    )
 
-            # Best-effort cleanup for managed containers that might be untracked
-            try:
-                leaked = self.client.containers.list(
-                    all=True,
-                    filters={"label": "open-alpha-arena-bench.managed=true"},
-                )
-                for container in leaked:
-                    self._remove_container_quietly(container)
-            except Exception as e:
-                logger.warning(f"Failed to cleanup leaked managed containers: {e}")
-
-            self._pool_initialized = False
-            self._condition.notify_all()
+                self._pool_initialized = False
+                self._condition.notify_all()
+        finally:
+            self._restore_client_timeout(previous_timeout)
 
         logger.info("ContainerService shutdown complete.")

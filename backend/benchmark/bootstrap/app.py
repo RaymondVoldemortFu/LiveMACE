@@ -65,9 +65,9 @@ def create_app(
             # startup failure to ASGI.
             app.state.runtime_handle = exc.handle
             # External ASGI cancellation must not steal ownership mid-cleanup.
-            # This shield has its own inner deadline, so it delays cancellation
-            # only until cleanup succeeds or a structured incomplete-cleanup
-            # error can be propagated.
+            # The retry budget is bounded, but an in-flight stop callback is
+            # never abandoned: each shutdown_runtime call runs to completion
+            # (stop callbacks themselves are bounded) before the next retry.
             with anyio.CancelScope(shield=True):
                 retry_delay = 0.05
                 deadline = (
@@ -75,22 +75,13 @@ def create_app(
                     + max(settings.startup_cleanup_timeout_seconds, 0.0)
                 )
                 cleanup_failures = dict(exc.cleanup_failures)
-                while time.monotonic() < deadline:
-                    remaining = deadline - time.monotonic()
+                while True:
                     try:
-                        with anyio.fail_after(remaining):
-                            await shutdown_runtime(
-                                exc.handle,
-                                abandon_on_cancel=True,
-                            )
+                        await shutdown_runtime(exc.handle)
                     except Exception as cleanup_error:
                         failures = getattr(cleanup_error, "failures", None)
                         if failures:
                             cleanup_failures = dict(failures)
-                        elif isinstance(cleanup_error, TimeoutError):
-                            cleanup_failures["runtime"] = (
-                                "startup cleanup deadline exceeded"
-                            )
                         else:
                             cleanup_failures = {
                                 "runtime": (
@@ -102,19 +93,18 @@ def create_app(
                         )
                         remaining = deadline - time.monotonic()
                         if remaining <= 0:
-                            break
+                            cleanup_failures["runtime"] = (
+                                "startup cleanup deadline exceeded"
+                            )
+                            raise RuntimeBootstrapError(
+                                exc.start_error,
+                                exc.handle,
+                                cleanup_failures,
+                            ) from exc
                         await anyio.sleep(min(retry_delay, remaining))
                         retry_delay = min(retry_delay * 2, 1.0)
                     else:
                         raise exc.start_error from exc
-                cleanup_failures["runtime"] = (
-                    "startup cleanup deadline exceeded"
-                )
-                raise RuntimeBootstrapError(
-                    exc.start_error,
-                    exc.handle,
-                    cleanup_failures,
-                ) from exc
         app.state.runtime_handle = handle
         try:
             yield

@@ -642,14 +642,28 @@ class TaskScheduler:
         return True
     
     def is_running(self) -> bool:
-        """Check if scheduler is running"""
+        """True while business callback admission is open."""
         with self._inflight_condition:
             return bool(
-                self._state == SchedulerState.RUNNING
+                self._control_plane_running_locked()
                 and not self._admission_closed
-                and self.scheduler
-                and self.scheduler.running
             )
+
+    def is_control_plane_running(self) -> bool:
+        """True while APScheduler can still remove/reconcile jobs.
+
+        Quiesce closes business admission (``is_running()`` becomes false)
+        but leaves this control plane available for dependent stop callbacks.
+        """
+        with self._inflight_condition:
+            return self._control_plane_running_locked()
+
+    def _control_plane_running_locked(self) -> bool:
+        return bool(
+            self._state == SchedulerState.RUNNING
+            and self.scheduler
+            and self.scheduler.running
+        )
 
     def cancellation_requested(self) -> bool:
         """True once shutdown has been requested; jobs should stop cooperatively."""
@@ -657,18 +671,14 @@ class TaskScheduler:
             return self._cancel_event.is_set()
 
     def _require_running(self, action: str) -> None:
-        if self._admission_closed or self._state != SchedulerState.RUNNING or not (
-            self.scheduler and self.scheduler.running
-        ):
+        if self._admission_closed or not self._control_plane_running_locked():
             raise SchedulerNotRunningError(
                 f"cannot {action}: scheduler is not running "
                 "(scheduler startup is owned by the runtime bootstrap)"
             )
 
     def _require_control_plane_running(self, action: str) -> None:
-        if self._state != SchedulerState.RUNNING or not (
-            self.scheduler and self.scheduler.running
-        ):
+        if not self._control_plane_running_locked():
             raise SchedulerNotRunningError(
                 f"cannot {action}: scheduler control plane is not running"
             )
@@ -1817,9 +1827,16 @@ def reset_auto_trading_job():
 
 
 def stop_auto_trading_jobs() -> None:
-    """Remove every job owned by the ai_auto_trading task descriptor."""
-    if task_scheduler.is_running():
-        task_scheduler.reconcile_jobs("auto_trading", ())
+    """Remove every job owned by the ai_auto_trading task descriptor.
+
+    Quiesce closes business admission, so ``is_running()`` is false, but the
+    scheduler control plane remains available until the scheduler task itself
+    stops. Cleanup must use that control plane; skipping here would mark the
+    task STOPPED while the family and APScheduler jobs still exist.
+    """
+    if not task_scheduler.is_control_plane_running():
+        return
+    task_scheduler.reconcile_jobs("auto_trading", ())
 
 
 def get_ai_trade_schedule_status() -> Dict[str, Optional[str]]:

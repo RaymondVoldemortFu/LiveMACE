@@ -170,13 +170,7 @@ async def bootstrap_runtime(context: BootstrapContext) -> RuntimeHandle:
     return await anyio.to_thread.run_sync(bootstrap_runtime_sync, context)
 
 
-async def shutdown_runtime(
-    handle: RuntimeHandle,
-    *,
-    abandon_on_cancel: bool = False,
-) -> None:
-    await anyio.to_thread.run_sync(
-        shutdown_runtime_sync,
-        handle,
-        abandon_on_cancel=abandon_on_cancel,
-    )
+async def shutdown_runtime(handle: RuntimeHandle) -> None:
+    # Stop callbacks are synchronous and cannot be cancelled. Never abandon
+    # the worker: the caller bounds retries, not in-flight cleanup.
+    await anyio.to_thread.run_sync(shutdown_runtime_sync, handle)
