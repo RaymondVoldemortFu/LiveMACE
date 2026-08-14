@@ -7,7 +7,6 @@ called legacy functions are forced into ``manage_transaction=False`` mode.
 
 from __future__ import annotations
 
-from contextlib import AbstractContextManager
 from typing import TYPE_CHECKING, Any, Callable, Mapping, Protocol
 
 if TYPE_CHECKING:
@@ -16,8 +15,6 @@ if TYPE_CHECKING:
 
 class TradeTransactionOperations(Protocol):
     def execute_trade(self, command: Any) -> Mapping[str, Any]: ...
-
-    def savepoint(self) -> AbstractContextManager: ...
 
     def create_order(self, **kwargs: Any) -> Any: ...
 
@@ -39,10 +36,15 @@ class SqlAlchemyTradeTransactionOperations:
         """
         from benchmark.infrastructure.adapters.trade import execute_legacy_trade
 
-        return execute_legacy_trade(self._session_provider(), command)
-
-    def savepoint(self):
-        return self._session_provider().begin_nested()
+        session = self._session_provider()
+        # The transaction object itself exposes ``.session``. Keep both the
+        # savepoint and its rollback decision private to infrastructure so the
+        # application-facing port cannot recover or commit the raw Session.
+        with session.begin_nested() as business_transaction:
+            result = execute_legacy_trade(session, command)
+            if not isinstance(result, Mapping) or result.get("executed") is not True:
+                business_transaction.rollback()
+            return result
 
     def create_order(self, **kwargs: Any) -> Any:
         from services.order_matching import create_order

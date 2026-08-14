@@ -2,6 +2,8 @@
 
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -19,7 +21,12 @@ from benchmark.bootstrap.runtime import (
     bootstrap_runtime_sync,
     shutdown_runtime_sync,
 )
-from benchmark.bootstrap.tasks import TaskDescriptor, TaskRegistry, TaskState
+from benchmark.bootstrap.tasks import (
+    TaskDescriptor,
+    TaskRegistry,
+    TaskState,
+    default_task_descriptors,
+)
 
 
 def test_import_has_no_runtime_side_effects():
@@ -44,7 +51,14 @@ def _tracking_task(task_id, log, required=True, fail=False, dependencies=()):
     def stop():
         log.append(("stop", task_id))
 
-    return TaskDescriptor(task_id, start, stop, required=required, dependencies=dependencies)
+    return TaskDescriptor(
+        task_id,
+        start,
+        stop,
+        required=required,
+        dependencies=dependencies,
+        owns_resources=lambda: False,
+    )
 
 
 def test_duplicate_task_id_rejected():
@@ -52,6 +66,19 @@ def test_duplicate_task_id_rejected():
     registry.register(_tracking_task("a", []))
     with pytest.raises(ValueError, match="duplicate"):
         registry.register(_tracking_task("a", []))
+
+
+def test_resource_ownership_probe_requires_stop_callback():
+    registry = TaskRegistry()
+
+    with pytest.raises(ValueError, match="has no stop callback"):
+        registry.register(
+            TaskDescriptor(
+                "unmanaged_resource",
+                lambda: None,
+                owns_resources=lambda: True,
+            )
+        )
 
 
 def test_start_all_is_idempotent_and_ordered():
@@ -371,7 +398,8 @@ def test_start_failure_with_owned_resources_is_cleanup_retryable():
             owns_resources=lambda: owned,
         )
     )
-    registry.start_all()
+    with pytest.raises(RuntimeError, match="partial start"):
+        registry.start_all()
     assert registry.status()["partial"] == TaskState.START_CLEANUP_FAILED
     with pytest.raises(RuntimeError, match="not completed shutdown"):
         registry.start_all()
@@ -435,10 +463,305 @@ def test_ownership_probe_failure_is_conservatively_cleanup_pending():
         )
     )
 
-    registry.start_all()
+    with pytest.raises(RuntimeError, match="start failed"):
+        registry.start_all()
     assert registry.status()["partial"] == TaskState.START_CLEANUP_FAILED
     assert registry.stop_all() == {"partial": None}
     assert stops == [1]
+
+
+def test_asgi_startup_cleanup_has_deadline_and_propagates_state(monkeypatch):
+    import anyio
+    from benchmark.bootstrap import app as app_module
+    from benchmark.bootstrap.app import AppSettings, create_app
+
+    handle = RuntimeHandle(StartupMode.FULL, TaskRegistry())
+    start_error = RuntimeError("start boom")
+    bootstrap_error = RuntimeBootstrapError(
+        start_error,
+        handle,
+        {"scheduler": "cleanup busy"},
+    )
+    attempts = []
+
+    async def fail_bootstrap(context):
+        raise bootstrap_error
+
+    async def fail_cleanup(runtime_handle, **kwargs):
+        attempts.append(1)
+        raise RuntimeShutdownError({"scheduler": "still busy"})
+
+    monkeypatch.setattr(app_module, "bootstrap_runtime", fail_bootstrap)
+    monkeypatch.setattr(app_module, "shutdown_runtime", fail_cleanup)
+    app = create_app(
+        settings=AppSettings(startup_cleanup_timeout_seconds=0.12),
+        mode=StartupMode.FULL,
+    )
+
+    async def enter_lifespan():
+        async with app.router.lifespan_context(app):
+            pass
+
+    started = time.monotonic()
+    with pytest.raises(RuntimeBootstrapError) as caught:
+        anyio.run(enter_lifespan)
+    assert time.monotonic() - started < 0.5
+    assert len(attempts) >= 2
+    assert caught.value.start_error is start_error
+    assert caught.value.cleanup_failures == {
+        "scheduler": "still busy",
+        "runtime": "startup cleanup deadline exceeded",
+    }
+
+
+def test_order_scheduler_partial_start_ownership_and_join_failure(monkeypatch):
+    from services import order_scheduler as module
+
+    class HalfStartedThread:
+        def __init__(self, *args, **kwargs):
+            self.alive = False
+
+        def start(self):
+            self.alive = True
+            raise RuntimeError("thread start failed late")
+
+        def is_alive(self):
+            return self.alive
+
+        def join(self, timeout=None):
+            pass
+
+    monkeypatch.setattr(module.threading, "Thread", HalfStartedThread)
+    instance = module.OrderScheduler()
+    with pytest.raises(RuntimeError, match="thread start failed late"):
+        instance.start()
+    assert instance.has_pending_cleanup() is True
+    with pytest.raises(RuntimeError, match="did not stop"):
+        instance.stop()
+
+    descriptor = next(
+        item
+        for item in default_task_descriptors()
+        if item.task_id == "order_scheduler"
+    )
+    assert descriptor.owns_resources is not None
+
+
+def test_order_scheduler_concurrent_start_owns_exactly_one_thread(monkeypatch):
+    from services import order_scheduler as module
+
+    instance = module.OrderScheduler()
+    worker_started = threading.Event()
+    worker_count = 0
+    worker_count_lock = threading.Lock()
+
+    def run_worker():
+        nonlocal worker_count
+        with worker_count_lock:
+            worker_count += 1
+        worker_started.set()
+        instance._stop_event.wait()
+
+    monkeypatch.setattr(instance, "_run_scheduler", run_worker)
+    callers = [threading.Thread(target=instance.start) for _ in range(2)]
+    for caller in callers:
+        caller.start()
+    for caller in callers:
+        caller.join(timeout=1)
+
+    assert worker_started.wait(timeout=1)
+    assert worker_count == 1
+    assert instance.has_pending_cleanup() is True
+    instance.stop()
+    assert instance.has_pending_cleanup() is False
+
+
+def test_optional_partial_start_with_resources_aborts_and_is_not_ready():
+    registry = TaskRegistry()
+    registry.register(
+        TaskDescriptor(
+            "optional_partial",
+            lambda: (_ for _ in ()).throw(RuntimeError("partial")),
+            lambda: None,
+            required=False,
+            owns_resources=lambda: True,
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="partial"):
+        registry.start_all()
+    assert registry.status()["optional_partial"] == TaskState.START_CLEANUP_FAILED
+    assert registry.is_ready() is False
+    assert registry.stop_all() == {"optional_partial": None}
+
+
+def test_optional_stop_failure_is_not_ready_and_remains_retryable():
+    registry = TaskRegistry()
+    attempts = 0
+
+    def stop():
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("join still pending")
+
+    registry.register(
+        TaskDescriptor("optional_worker", lambda: None, stop, required=False)
+    )
+    registry.start_all()
+
+    assert registry.stop_all() == {"optional_worker": "join still pending"}
+    assert registry.status()["optional_worker"] == TaskState.STOP_FAILED
+    assert registry.is_ready() is False
+    assert registry.stop_all() == {"optional_worker": None}
+    assert registry.status()["optional_worker"] == TaskState.STOPPED
+
+
+def test_shutdown_quiesces_dependency_before_dependent_stop_can_fail():
+    events = []
+    dependent_attempts = 0
+    registry = TaskRegistry()
+
+    registry.register(
+        TaskDescriptor(
+            "scheduler",
+            lambda: None,
+            lambda: events.append("scheduler:stop"),
+            quiesce=lambda: events.append("scheduler:quiesce"),
+        )
+    )
+
+    def stop_dependent():
+        nonlocal dependent_attempts
+        dependent_attempts += 1
+        events.append(f"dependent:stop:{dependent_attempts}")
+        if dependent_attempts == 1:
+            raise RuntimeError("still draining")
+
+    registry.register(
+        TaskDescriptor(
+            "dependent",
+            lambda: None,
+            stop_dependent,
+            dependencies=("scheduler",),
+        )
+    )
+    registry.start_all()
+
+    first = registry.stop_all()
+    assert first["dependent"] == "still draining"
+    assert "active dependents" in first["scheduler"]
+    assert events == ["scheduler:quiesce", "dependent:stop:1"]
+
+    assert registry.stop_all() == {"dependent": None, "scheduler": None}
+    assert events == [
+        "scheduler:quiesce",
+        "dependent:stop:1",
+        "dependent:stop:2",
+        "scheduler:stop",
+    ]
+
+
+def test_quiesce_failure_blocks_entire_stop_phase_until_retry():
+    events = []
+    quiesce_attempts = 0
+    registry = TaskRegistry()
+
+    def quiesce():
+        nonlocal quiesce_attempts
+        quiesce_attempts += 1
+        events.append(f"quiesce:{quiesce_attempts}")
+        if quiesce_attempts == 1:
+            raise RuntimeError("admission still open")
+
+    registry.register(
+        TaskDescriptor(
+            "scheduler",
+            lambda: None,
+            lambda: events.append("scheduler:stop"),
+            quiesce=quiesce,
+        )
+    )
+    registry.register(
+        TaskDescriptor(
+            "dependent",
+            lambda: None,
+            lambda: events.append("dependent:stop"),
+            dependencies=("scheduler",),
+        )
+    )
+    registry.start_all()
+
+    assert registry.stop_all() == {"scheduler": "admission still open"}
+    assert events == ["quiesce:1"]
+    assert registry.is_ready() is False
+    with pytest.raises(RuntimeError, match="shutdown is still in progress"):
+        registry.start_all()
+    assert registry.status() == {
+        "scheduler": TaskState.RUNNING,
+        "dependent": TaskState.RUNNING,
+    }
+
+    assert registry.stop_all() == {"dependent": None, "scheduler": None}
+    assert events == [
+        "quiesce:1",
+        "quiesce:2",
+        "dependent:stop",
+        "scheduler:stop",
+    ]
+    assert registry.is_ready() is False
+
+    # Only an explicit new start after every resource stopped opens the next
+    # registry generation.
+    registry.start_all()
+    assert registry.is_ready() is True
+
+
+def test_asgi_startup_cleanup_is_shielded_and_propagates_original(monkeypatch):
+    import anyio
+    from benchmark.bootstrap import app as app_module
+    from benchmark.bootstrap.app import AppSettings, create_app
+
+    handle = RuntimeHandle(StartupMode.FULL, TaskRegistry())
+    start_error = RuntimeError("original start failure")
+    bootstrap_error = RuntimeBootstrapError(
+        start_error,
+        handle,
+        {"scheduler": "cleanup busy"},
+    )
+    cleanup_completed = []
+    observed = []
+
+    async def fail_bootstrap(context):
+        raise bootstrap_error
+
+    async def eventually_clean(runtime_handle, **kwargs):
+        await anyio.sleep(0.05)
+        cleanup_completed.append(True)
+
+    monkeypatch.setattr(app_module, "bootstrap_runtime", fail_bootstrap)
+    monkeypatch.setattr(app_module, "shutdown_runtime", eventually_clean)
+    app = create_app(
+        settings=AppSettings(startup_cleanup_timeout_seconds=0.5),
+        mode=StartupMode.FULL,
+    )
+
+    async def run_lifespan():
+        try:
+            async with app.router.lifespan_context(app):
+                pass
+        except BaseException as error:
+            observed.append(error)
+
+    async def exercise_cancel():
+        async with anyio.create_task_group() as group:
+            group.start_soon(run_lifespan)
+            await anyio.sleep(0.01)
+            group.cancel_scope.cancel()
+
+    anyio.run(exercise_cancel)
+    assert cleanup_completed == [True]
+    assert observed == [start_error]
 
 
 def test_default_task_table_matches_startup_contract():

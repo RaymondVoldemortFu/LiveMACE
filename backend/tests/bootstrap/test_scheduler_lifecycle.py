@@ -697,6 +697,15 @@ def test_job_spec_is_immutable_and_job_ids_have_one_family_owner():
             ts.add_interval_task(lambda: "override", 3600, "owned_job")
         assert ts.scheduler.get_job("owned_job").func(**job.kwargs) == 1
         assert ts._job_families == {"first_family": {"owned_job"}}
+
+        snapshot_spec = JobSpec(
+            "snapshot_account_7",
+            lambda: None,
+            IntervalTrigger(seconds=3600),
+        )
+        ts.reconcile_jobs("snapshot-family", (snapshot_spec,))
+        with pytest.raises(ValueError, match="owned by family:snapshot-family"):
+            ts.add_account_snapshot_task(7)
     finally:
         assert ts.shutdown(timeout=5) is True
 
@@ -791,6 +800,49 @@ def test_sqlalchemy_occurrence_ledger_prevents_cross_instance_replay(tmp_path):
     engine.dispose()
 
 
+def test_occurrence_ledger_does_not_hide_unrelated_integrity_error():
+    from sqlalchemy.exc import IntegrityError
+    from services.scheduler import (
+        OneShotOccurrence,
+        SqlAlchemyOneShotOccurrenceLedger,
+    )
+
+    class EmptyQuery:
+        def filter(self, *args):
+            return self
+
+        def first(self):
+            return None
+
+    class BrokenSession:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def add(self, value):
+            pass
+
+        def commit(self):
+            raise IntegrityError("insert", {}, RuntimeError("check failed"))
+
+        def rollback(self):
+            pass
+
+        def query(self, *args):
+            return EmptyQuery()
+
+    ledger = SqlAlchemyOneShotOccurrenceLedger(BrokenSession)
+    occurrence = OneShotOccurrence(
+        "not-a-duplicate",
+        datetime.now(timezone.utc),
+    )
+
+    with pytest.raises(IntegrityError, match="check failed"):
+        ledger.consume(occurrence)
+
+
 def test_scheduler_start_cleans_a_candidate_that_started_then_raised(monkeypatch):
     created = []
 
@@ -856,6 +908,289 @@ def test_one_shot_ledger_io_does_not_hold_lifecycle_lock():
     deadline = time.monotonic() + 2
     while ts._inflight_jobs and time.monotonic() < deadline:
         time.sleep(0.01)
+    assert ts.shutdown(timeout=2) is True
+
+
+def test_family_reconcile_waits_for_admitted_one_shot_before_switching():
+    claim_entered = threading.Event()
+    release_claim = threading.Event()
+    old_body_entered = threading.Event()
+    release_old_body = threading.Event()
+    calls = []
+
+    class BlockingLedger:
+        def is_consumed(self, occurrence):
+            return False
+
+        def consume(self, occurrence):
+            if occurrence.job_id == "family_once":
+                claim_entered.set()
+                assert release_claim.wait(5)
+            return True
+
+    ts = TaskScheduler(BlockingLedger())
+    ts.start()
+
+    def old_body():
+        calls.append("old:start")
+        old_body_entered.set()
+        assert release_old_body.wait(5)
+        calls.append("old:end")
+
+    ts.reconcile_jobs(
+        "switch-family",
+        (
+            JobSpec(
+                "family_once",
+                old_body,
+                DateTrigger(
+                    run_date=datetime.now(timezone.utc) - timedelta(seconds=1)
+                ),
+                misfire_grace_time=30,
+            ),
+        ),
+    )
+    assert claim_entered.wait(2)
+
+    new_run_date = datetime.now(timezone.utc) - timedelta(milliseconds=100)
+    reconcile_done = threading.Event()
+
+    def switch_config():
+        ts.reconcile_jobs(
+            "switch-family",
+            (
+                JobSpec(
+                    "family_once",
+                    lambda: calls.append("new"),
+                    DateTrigger(run_date=new_run_date),
+                    misfire_grace_time=30,
+                ),
+            ),
+        )
+        reconcile_done.set()
+
+    thread = threading.Thread(target=switch_config)
+    thread.start()
+    release_claim.set()
+    assert old_body_entered.wait(2)
+    assert not reconcile_done.wait(0.1)
+    release_old_body.set()
+    assert reconcile_done.wait(2)
+    thread.join(2)
+
+    deadline = time.monotonic() + 2
+    while "new" not in calls and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert calls == ["old:start", "old:end", "new"]
+    assert ts.shutdown(timeout=2) is True
+
+
+def test_family_callback_cannot_synchronously_reconcile_any_family():
+    ts = TaskScheduler()
+    ts.start()
+    observed = []
+
+    def callback():
+        try:
+            ts.reconcile_jobs("other-family", ())
+        except Exception as exc:
+            observed.append(exc)
+
+    ts.reconcile_jobs(
+        "self-family",
+        (
+            JobSpec(
+                "self_reconcile",
+                callback,
+                IntervalTrigger(seconds=3600),
+            ),
+        ),
+    )
+    job = ts.scheduler.get_job("self_reconcile")
+    assert job is not None
+
+    invocation = threading.Thread(target=job.func, daemon=True)
+    invocation.start()
+    invocation.join(timeout=1)
+
+    assert invocation.is_alive() is False
+    assert len(observed) == 1
+    assert "cannot synchronously reconcile family 'other-family'" in str(observed[0])
+    assert ts._families_reconciling == set()
+    assert ts._inflight_families == {}
+    assert ts.shutdown(timeout=2) is True
+
+
+def test_family_reconcile_hidden_helper_wait_times_out_without_barrier_leak():
+    ts = TaskScheduler()
+    ts.start()
+    helper_errors = []
+    callback_completed = threading.Event()
+
+    def callback():
+        def reconcile_from_helper():
+            try:
+                ts.reconcile_jobs("helper-family", (), timeout=0.05)
+            except Exception as exc:
+                helper_errors.append(exc)
+
+        helper = threading.Thread(target=reconcile_from_helper)
+        helper.start()
+        helper.join(timeout=1)
+        callback_completed.set()
+
+    ts.reconcile_jobs(
+        "helper-family",
+        (
+            JobSpec(
+                "helper_reconcile",
+                callback,
+                IntervalTrigger(seconds=3600),
+            ),
+        ),
+    )
+    job = ts.scheduler.get_job("helper_reconcile")
+    assert job is not None
+
+    invocation = threading.Thread(target=job.func, daemon=True)
+    invocation.start()
+    invocation.join(timeout=1)
+
+    assert callback_completed.is_set()
+    assert len(helper_errors) == 1
+    assert isinstance(helper_errors[0], SchedulerBusyError)
+    assert "drain admitted callbacks" in str(helper_errors[0])
+    assert ts._families_reconciling == set()
+    assert ts._inflight_families == {}
+    assert ts.shutdown(timeout=2) is True
+
+
+def test_reconcile_timeout_releases_waiting_old_one_shot_without_losing_it():
+    ts = TaskScheduler()
+    ts.start()
+    blocker_entered = threading.Event()
+    release_blocker = threading.Event()
+    once_ran = threading.Event()
+
+    def blocker():
+        blocker_entered.set()
+        assert release_blocker.wait(2)
+
+    ts.reconcile_jobs(
+        "timeout-family",
+        (
+            JobSpec("blocker", blocker, IntervalTrigger(seconds=3600)),
+            JobSpec(
+                "waiting_once",
+                once_ran.set,
+                DateTrigger(
+                    run_date=datetime.now(timezone.utc) + timedelta(seconds=0.1)
+                ),
+                misfire_grace_time=5,
+            ),
+        ),
+    )
+    blocker_job = ts.scheduler.get_job("blocker")
+    assert blocker_job is not None
+    blocker_thread = threading.Thread(target=blocker_job.func, daemon=True)
+    blocker_thread.start()
+    assert blocker_entered.wait(1)
+
+    reconcile_errors = []
+
+    def reconcile_with_deadline():
+        try:
+            ts.reconcile_jobs("timeout-family", (), timeout=0.25)
+        except Exception as exc:
+            reconcile_errors.append(exc)
+
+    reconcile_thread = threading.Thread(target=reconcile_with_deadline)
+    reconcile_thread.start()
+    reconcile_thread.join(timeout=1)
+
+    assert len(reconcile_errors) == 1
+    assert isinstance(reconcile_errors[0], SchedulerBusyError)
+    assert once_ran.wait(1), "old one-shot must resume after switch rollback"
+    assert ts._families_reconciling == set()
+    release_blocker.set()
+    blocker_thread.join(timeout=1)
+    assert ts.shutdown(timeout=2) is True
+
+
+def test_quiesce_closes_new_callback_admission_but_keeps_control_plane():
+    ts = TaskScheduler()
+    ts.start()
+    entered = threading.Event()
+    release = threading.Event()
+    calls = []
+
+    def recurring():
+        calls.append(1)
+        entered.set()
+        release.wait(1)
+
+    ts.reconcile_jobs(
+        "quiesce-family",
+        (JobSpec("quiesce_job", recurring, IntervalTrigger(seconds=0.05)),),
+    )
+    assert entered.wait(1)
+
+    ts.quiesce()
+    assert ts.is_running() is False
+    with pytest.raises(SchedulerNotRunningError):
+        ts.add_interval_task(lambda: None, 3600, "late_business_job")
+    with pytest.raises(SchedulerBusyError, match="quiesced scheduler generation"):
+        ts.start()
+    release.set()
+    time.sleep(0.2)
+    assert calls == [1]
+
+    # Control-plane removal remains legal after admission is closed.
+    ts.reconcile_jobs("quiesce-family", ())
+    assert ts.shutdown(timeout=2) is True
+
+
+def test_concurrent_shutdown_attempts_publish_results_in_order(monkeypatch):
+    ts = TaskScheduler()
+    ts.start()
+    assert ts.scheduler is not None
+    original_shutdown = ts.scheduler.shutdown
+    first_entered = threading.Event()
+    release_first = threading.Event()
+    attempts = 0
+
+    def fail_first(wait=True):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            first_entered.set()
+            assert release_first.wait(1)
+            raise RuntimeError("first cleanup failed")
+        return original_shutdown(wait)
+
+    monkeypatch.setattr(ts.scheduler, "shutdown", fail_first)
+    outcomes = []
+
+    def stop():
+        try:
+            outcomes.append(ts.shutdown(timeout=1))
+        except Exception as exc:
+            outcomes.append(exc)
+
+    first = threading.Thread(target=stop)
+    second = threading.Thread(target=stop)
+    first.start()
+    assert first_entered.wait(1)
+    second.start()
+    release_first.set()
+    first.join(timeout=2)
+    second.join(timeout=2)
+
+    assert len(outcomes) == 2
+    assert any(isinstance(value, RuntimeError) for value in outcomes)
+    assert True in outcomes
+    assert ts._state == scheduler.SchedulerState.STOPPED
+    ts.start()
     assert ts.shutdown(timeout=2) is True
 
 

@@ -45,10 +45,10 @@ async def shutdown_runtime(handle: RuntimeHandle) -> None
 - 每个 job registration 同时记录唯一 owner（standalone 或一个 family）、lifetime（one-shot/recurring）和执行终态；所有安装、删除与 reconcile 必须经过同一所有权检查。
 - one-shot occurrence 一经 callback admission 即写入独立的持久化 consumed ledger；相同 job id/run_date 的 reconcile 是跨 scheduler generation、跨进程重启的幂等声明，失败恢复不得重新执行已消费 occurrence，新 run_date 才是新任务。活跃 registration 仍按 generation 重建，不得把 APScheduler job store 误作消费事实源。
 - start、shutdown、job reconcile、remove 与 callback admission 使用同一个 RLock/Condition 状态机；不得再引入并列 token/registry 锁。
-- 逻辑任务组（特别是 AI/baseline first-run 与 recurring jobs）必须通过一次 reconcile 更新；失败恢复完整旧组，禁止混合配置继续运行。
+- 逻辑任务组（特别是 AI/baseline first-run 与 recurring jobs）必须通过一次 reconcile 更新；reconcile 是带 deadline 的 family admission barrier，必须等待旧配置已 admission 的 callback 完成后再发布新配置，超时则保留完整旧组并传播失败；任何 family callback 不得同步重入任何 family reconcile，必须在所有 callback 工作返回后由外部提交切换；失败恢复完整旧组，禁止混合配置继续运行。
 - 每次 generation 创建独立 cancellation event；旧 callback 永远不能观察到被清除的旧 event。
-- shutdown 必须先阻止新 callback，再等待已进入 job body 的调用。超时或 stop callback 失败必须传播至 lifespan 调用方，不能只记日志。
-- Runtime registry 必须区分无资源的 START_FAILED、持有待清理资源的 START_CLEANUP_FAILED 与可重试的 STOP_FAILED；后两者清零前禁止 start，重复 shutdown 必须继续调用 stop。
+- shutdown 是两阶段协议：先对所有 runtime task 执行不可逆 quiesce，关闭新业务 callback admission 但保留 scheduler 控制面；再按逆依赖顺序 drain/remove/stop。dependent stop 失败时可保留 dependency 供重试，但不得重新开放业务 admission。超时或 stop callback 失败必须传播至 lifespan 调用方，不能只记日志；startup rollback 可以在显式 deadline 内重试，但到期必须携带未清理状态向 ASGI/supervisor 传播原始启动失败，禁止无限阻塞 startup。
+- Runtime registry 必须区分无资源的 START_FAILED、持有待清理资源的 START_CLEANUP_FAILED 与可重试的 STOP_FAILED；任何 START_CLEANUP_FAILED（包括 optional task）都必须中止 bootstrap 且 readiness 为 false；后两者清零前禁止 start，重复 shutdown 必须继续调用 stop。
 - APScheduler 的 STOPPED/running 只表示 callback admission 已关闭，不代表 executor、job store 与 shutdown event 已清理；adapter 必须逐阶段记录完成度，异常重试从首个未完成资源继续，全部完成前不得清空应用 registration 或报告成功。
 - Runtime 停止必须遵守 dependency graph：dependent 仍为 RUNNING/STOP_FAILED 时，其 dependency 保持运行并返回 deferred failure；dependent 重试成功后才可在同一逆序 pass 中继续停止依赖，且该规则必须传递保护整条依赖链。
 - APScheduler 3.x 的 DateTrigger 自动删除与 JobStore shutdown 竞态必须在 scheduler adapter 内收口；不得在业务任务或测试中吞掉后台线程异常。

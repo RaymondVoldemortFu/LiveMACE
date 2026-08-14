@@ -247,10 +247,7 @@ class SynchronousTradeCommandGateway:
                     uow.rollback()
                     return self._load_committed_receipt(command, command_json)
 
-                with uow.trade_operations.savepoint() as business_transaction:
-                    result = self._execute_once(uow.trade_operations, command)
-                    if not result.accepted:
-                        business_transaction.rollback()
+                result = self._execute_once(uow.trade_operations, command)
                 result_json = _encode_result(result)
                 uow.trade_command_receipts.complete(
                     receipt,

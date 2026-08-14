@@ -3,6 +3,7 @@
 import subprocess
 import sys
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -355,6 +356,330 @@ def test_occurrence_migration_upgrades_legacy_run_date_schema():
     assert row == ("once", 1786582923123456)
 
 
+def test_occurrence_migration_resumes_after_temp_table_creation():
+    from database.migrations_startup import STARTUP_MIGRATIONS, run_startup_migrations
+
+    migration = next(
+        item
+        for item in STARTUP_MIGRATIONS
+        if item.migration_id == "202608_scheduled_job_occurrences_epoch_us"
+    )
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "CREATE TABLE scheduled_job_occurrences ("
+                "id INTEGER PRIMARY KEY, job_id VARCHAR(255) NOT NULL, "
+                "run_date DATETIME NOT NULL, consumed_at DATETIME NOT NULL, "
+                "UNIQUE (job_id, run_date))"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO scheduled_job_occurrences VALUES "
+                "(1, 'once', '2026-08-13 01:02:03.123456', '2026-08-13 01:02:04')"
+            )
+        )
+        # Simulate a prior process dying immediately after phase 1.
+        conn.execute(
+            text(
+                "CREATE TABLE scheduled_job_occurrences_epoch_us ("
+                "id INTEGER PRIMARY KEY, job_id VARCHAR(255) NOT NULL, "
+                "run_at_epoch_us INTEGER NOT NULL, consumed_at DATETIME NOT NULL, "
+                "UNIQUE (job_id, run_at_epoch_us))"
+            )
+        )
+
+    assert run_startup_migrations(engine, [migration]) == [migration.migration_id]
+    assert run_startup_migrations(engine, [migration]) == []
+    with engine.connect() as conn:
+        assert conn.execute(
+            text("SELECT COUNT(*) FROM scheduled_job_occurrences")
+        ).scalar_one() == 1
+        temp_exists = conn.execute(
+            text(
+                "SELECT COUNT(*) FROM sqlite_master "
+                "WHERE type='table' AND name='scheduled_job_occurrences_epoch_us'"
+            )
+        ).scalar_one()
+    assert temp_exists == 0
+
+
+def test_occurrence_migration_resumes_after_source_drop_before_rename():
+    from database.migrations_startup import STARTUP_MIGRATIONS, run_startup_migrations
+
+    occurrence_migrations = [
+        item
+        for item in STARTUP_MIGRATIONS
+        if item.migration_id.startswith("202608_scheduled_job_occurrences")
+    ]
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "CREATE TABLE scheduled_job_occurrences_epoch_us ("
+                "id INTEGER PRIMARY KEY, job_id VARCHAR(255) NOT NULL, "
+                "run_at_epoch_us INTEGER NOT NULL, consumed_at DATETIME NOT NULL, "
+                "UNIQUE (job_id, run_at_epoch_us))"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO scheduled_job_occurrences_epoch_us VALUES "
+                "(1, 'once', 1786582923123456, '2026-08-13 01:02:04')"
+            )
+        )
+
+    # Exercise the real registry order: the preceding create migration must
+    # recognize the temp-only phase rather than creating an empty final table.
+    assert run_startup_migrations(engine, occurrence_migrations) == [
+        "202608_scheduled_job_occurrences_epoch_us"
+    ]
+    with engine.connect() as conn:
+        assert conn.execute(
+            text(
+                "SELECT job_id, run_at_epoch_us "
+                "FROM scheduled_job_occurrences"
+            )
+        ).one() == ("once", 1786582923123456)
+
+
+def test_occurrence_migration_merges_temp_rows_when_final_table_also_exists():
+    from database.migrations_startup import STARTUP_MIGRATIONS, run_startup_migrations
+
+    occurrence_migrations = [
+        item
+        for item in STARTUP_MIGRATIONS
+        if item.migration_id.startswith("202608_scheduled_job_occurrences")
+    ]
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        for table in (
+            "scheduled_job_occurrences",
+            "scheduled_job_occurrences_epoch_us",
+        ):
+            conn.execute(
+                text(
+                    f"CREATE TABLE {table} ("
+                    "id INTEGER PRIMARY KEY, job_id VARCHAR(255) NOT NULL, "
+                    "run_at_epoch_us INTEGER NOT NULL, consumed_at DATETIME NOT NULL, "
+                    "UNIQUE (job_id, run_at_epoch_us))"
+                )
+            )
+        conn.execute(
+            text(
+                "INSERT INTO scheduled_job_occurrences_epoch_us VALUES "
+                "(1, 'recovered', 1786582923123456, '2026-08-13 01:02:04')"
+            )
+        )
+
+    assert run_startup_migrations(engine, occurrence_migrations) == [
+        "202608_scheduled_job_occurrences_epoch_us"
+    ]
+    with engine.connect() as conn:
+        assert conn.execute(
+            text(
+                "SELECT job_id, run_at_epoch_us FROM scheduled_job_occurrences"
+            )
+        ).one() == ("recovered", 1786582923123456)
+        assert conn.execute(
+            text(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' "
+                "AND name='scheduled_job_occurrences_epoch_us'"
+            )
+        ).scalar_one() == 0
+
+
+def test_occurrence_migration_serializes_concurrent_sqlite_startups(tmp_path):
+    from database.migrations_startup import STARTUP_MIGRATIONS, run_startup_migrations
+
+    migration = next(
+        item
+        for item in STARTUP_MIGRATIONS
+        if item.migration_id == "202608_scheduled_job_occurrences_epoch_us"
+    )
+    url = f"sqlite:///{tmp_path / 'migration-race.db'}"
+    setup_engine = create_engine(url, connect_args={"timeout": 5})
+    with setup_engine.begin() as conn:
+        conn.execute(
+            text(
+                "CREATE TABLE scheduled_job_occurrences ("
+                "id INTEGER PRIMARY KEY, job_id VARCHAR(255) NOT NULL, "
+                "run_date DATETIME NOT NULL, consumed_at DATETIME NOT NULL, "
+                "UNIQUE (job_id, run_date))"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO scheduled_job_occurrences VALUES "
+                "(1, 'once', '2026-08-13 01:02:03.123456', '2026-08-13 01:02:04')"
+            )
+        )
+    setup_engine.dispose()
+
+    barrier = threading.Barrier(2)
+
+    def migrate():
+        engine = create_engine(url, connect_args={"timeout": 5})
+        try:
+            barrier.wait(2)
+            return run_startup_migrations(engine, [migration])
+        finally:
+            engine.dispose()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _: migrate(), range(2)))
+
+    assert sorted(len(result) for result in results) == [0, 1]
+    verify_engine = create_engine(url)
+    with verify_engine.connect() as conn:
+        assert conn.execute(
+            text("SELECT COUNT(*) FROM scheduled_job_occurrences")
+        ).scalar_one() == 1
+    verify_engine.dispose()
+
+
+def test_mysql_startup_migration_holds_advisory_lock_across_check_and_apply():
+    from database.migrations_startup import StartupMigration, run_startup_migrations
+
+    events = []
+
+    class ScalarResult:
+        def __init__(self, value):
+            self.value = value
+
+        def scalar_one(self):
+            return self.value
+
+        def scalar_one_or_none(self):
+            return self.value
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def exec_driver_sql(self, statement):
+            events.append(statement)
+            return ScalarResult("bench_db")
+
+        def execute(self, statement, params=None):
+            sql = str(statement)
+            events.append((sql, params))
+            return ScalarResult(1)
+
+        def commit(self):
+            events.append("commit")
+
+        def rollback(self):
+            events.append("rollback")
+
+    class Engine:
+        dialect = type("Dialect", (), {"name": "mysql"})()
+
+        def connect(self):
+            return Connection()
+
+    migration = StartupMigration(
+        "concurrent_mysql",
+        "mysql",
+        lambda conn: events.append("check") or False,
+        lambda conn: events.append("apply"),
+        fatal=True,
+    )
+
+    assert run_startup_migrations(Engine(), [migration]) == ["concurrent_mysql"]
+    get_lock_index = next(
+        index
+        for index, event in enumerate(events)
+        if isinstance(event, tuple) and "GET_LOCK" in event[0]
+    )
+    release_lock_index = next(
+        index
+        for index, event in enumerate(events)
+        if isinstance(event, tuple) and "RELEASE_LOCK" in event[0]
+    )
+    assert get_lock_index < events.index("check") < events.index("apply")
+    assert events.index("apply") < release_lock_index
+
+
+def test_mysql_occurrence_migration_drops_only_exact_legacy_unique_key(monkeypatch):
+    import sqlalchemy
+    from database.migrations_startup import (
+        _upgrade_scheduled_job_occurrences_to_epoch_us,
+    )
+
+    class Connection:
+        dialect = type("Dialect", (), {"name": "mysql"})()
+
+        def __init__(self):
+            self.columns = {
+                "id": False,
+                "job_id": False,
+                "run_date": False,
+                "consumed_at": False,
+            }
+            self.constraints = [
+                {"name": "legacy_occurrence", "column_names": ["job_id", "run_date"]},
+                {"name": "business_guard", "column_names": ["job_id", "consumed_at"]},
+            ]
+            self.dropped = []
+
+        def execute(self, statement, params=None):
+            sql = str(statement)
+            if "ADD COLUMN run_at_epoch_us" in sql:
+                self.columns["run_at_epoch_us"] = True
+            elif "DROP COLUMN run_date" in sql:
+                self.columns.pop("run_date", None)
+                self.columns["run_at_epoch_us"] = False
+            elif "ADD CONSTRAINT uix_scheduled_job_occurrence_key" in sql:
+                self.constraints.append(
+                    {
+                        "name": "uix_scheduled_job_occurrence_key",
+                        "column_names": ["job_id", "run_at_epoch_us"],
+                    }
+                )
+
+        def exec_driver_sql(self, statement):
+            self.dropped.append(statement)
+            name = statement.split("`")[1]
+            self.constraints = [
+                item for item in self.constraints if item["name"] != name
+            ]
+
+    class Inspector:
+        def __init__(self, conn):
+            self.conn = conn
+
+        def has_table(self, name):
+            return name == "scheduled_job_occurrences"
+
+        def get_columns(self, name):
+            return [
+                {"name": column, "nullable": nullable}
+                for column, nullable in self.conn.columns.items()
+            ]
+
+        def get_unique_constraints(self, name):
+            return list(self.conn.constraints)
+
+    monkeypatch.setattr(sqlalchemy, "inspect", lambda conn: Inspector(conn))
+    conn = Connection()
+
+    _upgrade_scheduled_job_occurrences_to_epoch_us(conn)
+
+    assert conn.dropped == [
+        "ALTER TABLE scheduled_job_occurrences DROP INDEX `legacy_occurrence`"
+    ]
+    assert any(item["name"] == "business_guard" for item in conn.constraints)
+    assert any(
+        item["column_names"] == ["job_id", "run_at_epoch_us"]
+        for item in conn.constraints
+    )
+
+
 def test_fresh_schema_needs_no_sqlite_migrations():
     from database.migrations_startup import run_startup_migrations
 
@@ -371,6 +696,27 @@ class _FakeMySQLConnection:
         self.column_types = column_types
         self.executed_ddl = []
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    @staticmethod
+    def _scalar(value):
+        class Result:
+            def scalar_one(self):
+                return value
+
+            def scalar_one_or_none(self):
+                return value
+
+        return Result()
+
+    def exec_driver_sql(self, statement):
+        assert statement == "SELECT DATABASE()"
+        return self._scalar("bench_test")
+
     def execute(self, statement, params=None):
         sql = str(statement)
         if "information_schema.COLUMNS" in sql:
@@ -379,8 +725,16 @@ class _FakeMySQLConnection:
                 (name, data_type)
                 for name, data_type in self.column_types.get(table, {}).items()
             ]
+        if "GET_LOCK" in sql or "RELEASE_LOCK" in sql:
+            return self._scalar(1)
         self.executed_ddl.append(sql)
         return []
+
+    def commit(self):
+        pass
+
+    def rollback(self):
+        pass
 
 
 class _FakeMySQLEngine:
@@ -401,6 +755,9 @@ class _FakeMySQLEngine:
                 return False
 
         return _Ctx()
+
+    def connect(self):
+        return self._conn
 
 
 def _mysql_migrations():

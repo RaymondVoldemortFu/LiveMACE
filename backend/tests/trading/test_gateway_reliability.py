@@ -3,7 +3,6 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 import json
-from contextlib import contextmanager
 from dataclasses import dataclass
 from threading import Event, Lock
 
@@ -74,7 +73,15 @@ def _test_uow_factory(session_factory, executor):
 
             class TestTradeOperations:
                 def execute_trade(self, command):
-                    return executor(operations._session_provider(), command)
+                    session = operations._session_provider()
+                    with session.begin_nested() as business_transaction:
+                        result = executor(session, command)
+                        if (
+                            not isinstance(result, dict)
+                            or result.get("executed") is not True
+                        ):
+                            business_transaction.rollback()
+                        return result
 
                 def __getattr__(self, name):
                     return getattr(operations, name)
@@ -121,24 +128,7 @@ class _FakeReceipt:
     completed_at: object | None = None
 
 
-class _FakeSavepoint:
-    def __init__(self):
-        self.rolled_back = False
-
-    def rollback(self):
-        self.rolled_back = True
-
-
 class _FakeTradeOperations:
-    def __init__(self):
-        self.savepoints = []
-
-    @contextmanager
-    def savepoint(self):
-        savepoint = _FakeSavepoint()
-        self.savepoints.append(savepoint)
-        yield savepoint
-
     def execute_trade(self, command):
         return {"executed": True, "order_id": 7}
 
@@ -210,9 +200,9 @@ def test_gateway_application_port_runs_with_fake_uow_without_sqlalchemy():
 
 def test_application_transaction_port_cannot_supply_a_session_callback():
     assert "run_legacy_executor" not in TradeTransactionOperations.__dict__
+    assert "savepoint" not in TradeTransactionOperations.__dict__
     assert set(TradeTransactionOperations.__dict__) >= {
         "execute_trade",
-        "savepoint",
         "create_order",
         "cancel_order",
         "execute_order",

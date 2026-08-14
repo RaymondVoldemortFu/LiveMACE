@@ -279,7 +279,22 @@ class SqlAlchemyOneShotOccurrenceLedger:
                 session.commit()
             except IntegrityError:
                 session.rollback()
-                return False
+                # IntegrityError is not synonymous with a duplicate claim.
+                # Confirm the exact occurrence exists before translating it
+                # into the expected compare-and-set loser result; corruption,
+                # invalid data and unrelated constraints must remain fatal.
+                existing = (
+                    session.query(ScheduledJobOccurrence.id)
+                    .filter(
+                        ScheduledJobOccurrence.job_id == occurrence.job_id,
+                        ScheduledJobOccurrence.run_at_epoch_us
+                        == self._epoch_microseconds(occurrence.run_date),
+                    )
+                    .first()
+                )
+                if existing is not None:
+                    return False
+                raise
             return True
 
     @staticmethod
@@ -346,6 +361,10 @@ class TaskScheduler:
 
     #: Bounded wait (seconds) for in-flight jobs to drain during shutdown.
     DEFAULT_SHUTDOWN_TIMEOUT_SECONDS = 10.0
+    #: Family barriers are also bounded. This is the final safety boundary for
+    #: causal waits hidden behind helper threads, which execution-local
+    #: callback context cannot observe.
+    DEFAULT_RECONCILE_TIMEOUT_SECONDS = 10.0
 
     def __init__(
         self,
@@ -363,6 +382,16 @@ class TaskScheduler:
         self._lifecycle_lock = threading.RLock()
         self._inflight_condition = threading.Condition(self._lifecycle_lock)
         self._inflight_jobs = 0
+        self._inflight_families: Dict[str, int] = {}
+        self._families_reconciling: Set[str] = set()
+        self._admission_closed = True
+        self._shutdown_in_progress = False
+        self._shutdown_waiters = 0
+        # A synchronous family reconcile cannot wait for the callback that is
+        # currently requesting it. Track admitted callback context explicitly
+        # so this unsupported lifecycle re-entry fails before opening a
+        # barrier instead of deadlocking the scheduler generation.
+        self._callback_context = threading.local()
         # Bumped on every successful start(). Wrappers capture the generation
         # at registration time so jobs already submitted to an old executor
         # cannot run after a clean shutdown + restart clears the cancel flag.
@@ -419,7 +448,16 @@ class TaskScheduler:
         shutdown but only begin running after the next start.
         """
         with self._inflight_condition:
+            if self._shutdown_in_progress or self._shutdown_waiters:
+                raise SchedulerBusyError(
+                    "cannot start scheduler while shutdown attempt(s) are active"
+                )
             if self._state == SchedulerState.RUNNING:
+                if self._admission_closed:
+                    raise SchedulerBusyError(
+                        "cannot reopen a quiesced scheduler generation; complete "
+                        "shutdown before restarting"
+                    )
                 return
             if self._state == SchedulerState.STOPPING or self._inflight_jobs > 0:
                 raise SchedulerBusyError(
@@ -464,6 +502,7 @@ class TaskScheduler:
             # A generation owns its own event. Never clear an event captured by
             # callbacks from an earlier generation.
             self._cancel_event = threading.Event()
+            self._admission_closed = False
             self.scheduler = candidate
             self._started = True
             self._state = SchedulerState.RUNNING
@@ -482,7 +521,37 @@ class TaskScheduler:
                 and self._state != SchedulerState.RUNNING
             )
     
+    def quiesce(self) -> None:
+        """Irreversibly close business callback admission for this generation.
+
+        The APScheduler control plane remains available so dependent task stop
+        callbacks can remove/reconcile jobs before the scheduler resource is
+        finally shut down. A later successful ``start`` creates the only new
+        admission-open generation.
+        """
+        with self._inflight_condition:
+            self._admission_closed = True
+            self._cancel_event.set()
+            self._inflight_condition.notify_all()
+
     def shutdown(self, timeout: Optional[float] = None) -> bool:
+        """Serialize shutdown attempts so stale failures cannot overwrite success."""
+        with self._inflight_condition:
+            self._shutdown_waiters += 1
+            try:
+                while self._shutdown_in_progress:
+                    self._inflight_condition.wait()
+                self._shutdown_in_progress = True
+            finally:
+                self._shutdown_waiters -= 1
+        try:
+            return self._shutdown_once(timeout)
+        finally:
+            with self._inflight_condition:
+                self._shutdown_in_progress = False
+                self._inflight_condition.notify_all()
+
+    def _shutdown_once(self, timeout: Optional[float] = None) -> bool:
         """Shutdown the scheduler with a quiescence guarantee.
 
         Signals cooperative cancellation to running jobs, stops future
@@ -506,6 +575,7 @@ class TaskScheduler:
             timeout = self.DEFAULT_SHUTDOWN_TIMEOUT_SECONDS
 
         with self._inflight_condition:
+            self._admission_closed = True
             if self._state == SchedulerState.STOPPED and self._inflight_jobs == 0:
                 # Never started (or already drained by a previous shutdown):
                 # nothing to cancel or wait for.
@@ -576,6 +646,7 @@ class TaskScheduler:
         with self._inflight_condition:
             return bool(
                 self._state == SchedulerState.RUNNING
+                and not self._admission_closed
                 and self.scheduler
                 and self.scheduler.running
             )
@@ -586,12 +657,20 @@ class TaskScheduler:
             return self._cancel_event.is_set()
 
     def _require_running(self, action: str) -> None:
-        if self._state != SchedulerState.RUNNING or not (
+        if self._admission_closed or self._state != SchedulerState.RUNNING or not (
             self.scheduler and self.scheduler.running
         ):
             raise SchedulerNotRunningError(
                 f"cannot {action}: scheduler is not running "
                 "(scheduler startup is owned by the runtime bootstrap)"
+            )
+
+    def _require_control_plane_running(self, action: str) -> None:
+        if self._state != SchedulerState.RUNNING or not (
+            self.scheduler and self.scheduler.running
+        ):
+            raise SchedulerNotRunningError(
+                f"cannot {action}: scheduler control plane is not running"
             )
 
     def _allocate_tracked_job(
@@ -614,9 +693,26 @@ class TaskScheduler:
             # Cancel / generation / token check and in-flight registration
             # must be atomic with shutdown, start, and remove/replace.
             occurrence: Optional[OneShotOccurrence] = None
+            admitted_family: Optional[str] = None
             with self._inflight_condition:
+                # A wrapper submitted after a family barrier opened must wait
+                # for the switch outcome. On success its token is stale; on a
+                # pre-switch failure it is still the old valid occurrence and
+                # must run (especially DateTrigger jobs APScheduler has already
+                # removed from its store).
+                while True:
+                    registration = self._registrations.get(task_id)
+                    owner_family = (
+                        registration.owner.family
+                        if registration is not None
+                        else None
+                    )
+                    if owner_family not in self._families_reconciling:
+                        break
+                    self._inflight_condition.wait()
                 if (
                     cancel_event.is_set()
+                    or self._admission_closed
                     or self._state != SchedulerState.RUNNING
                     or job_generation != self._generation
                     or self._job_tokens.get(task_id) != job_token
@@ -628,14 +724,27 @@ class TaskScheduler:
                     )
                     return
                 if lifetime == JobLifetime.ONE_SHOT:
-                    registration = self._registrations.get(task_id)
                     if (
                         registration is not None
                         and registration.state == JobExecutionState.SCHEDULED
                     ):
                         occurrence = self._occurrence_for_spec(registration.spec)
                 self._inflight_jobs += 1
+                admitted_family = owner_family
+                if admitted_family is not None:
+                    self._inflight_families[admitted_family] = (
+                        self._inflight_families.get(admitted_family, 0) + 1
+                    )
             try:
+                callback_families = getattr(
+                    self._callback_context,
+                    "families",
+                    None,
+                )
+                if callback_families is None:
+                    callback_families = []
+                    self._callback_context.families = callback_families
+                callback_families.append(admitted_family)
                 if occurrence is not None:
                     # The lifecycle lock only performs in-memory admission.
                     # Durable CAS may block on a database, so it runs outside
@@ -674,8 +783,17 @@ class TaskScheduler:
                     # permanently skipped trade.
                 return task_func(*args, **kwargs)
             finally:
+                callback_families.pop()
+                if not callback_families:
+                    del self._callback_context.families
                 with self._inflight_condition:
                     self._inflight_jobs -= 1
+                    if admitted_family is not None:
+                        remaining = self._inflight_families[admitted_family] - 1
+                        if remaining:
+                            self._inflight_families[admitted_family] = remaining
+                        else:
+                            self._inflight_families.pop(admitted_family, None)
                     self._inflight_condition.notify_all()
 
         return _run_tracked_job, job_token
@@ -823,16 +941,51 @@ class TaskScheduler:
         self._registrations.pop(task_id, None)
         return existed
 
-    def reconcile_jobs(self, family: str, specs: tuple[JobSpec, ...]) -> None:
+    def reconcile_jobs(
+        self,
+        family: str,
+        specs: tuple[JobSpec, ...],
+        *,
+        timeout: Optional[float] = None,
+    ) -> None:
         """Atomically replace a logical family, restoring the old family on failure."""
         if not family:
             raise ValueError("family must be non-empty")
+        active_callback_families = getattr(
+            self._callback_context,
+            "families",
+            (),
+        )
+        if active_callback_families:
+            raise RuntimeError(
+                f"cannot synchronously reconcile family {family!r} from an "
+                "admitted family callback; request reconciliation after all "
+                "callback work returns"
+            )
+        wait_timeout = (
+            self.DEFAULT_RECONCILE_TIMEOUT_SECONDS
+            if timeout is None
+            else max(timeout, 0.0)
+        )
+        deadline = time.monotonic() + wait_timeout
+
+        def wait_for_lifecycle_change(reason: str) -> None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise SchedulerBusyError(
+                    f"timed out waiting to {reason} for family {family!r}"
+                )
+            self._inflight_condition.wait(timeout=remaining)
+
         ids = [spec.job_id for spec in specs]
         if len(ids) != len(set(ids)):
             raise ValueError(f"duplicate job id in family {family!r}")
         with self._inflight_condition:
-            self._require_running(f"reconcile job family {family!r}")
+            self._require_control_plane_running(f"reconcile job family {family!r}")
             assert self.scheduler is not None
+            while family in self._families_reconciling:
+                wait_for_lifecycle_change("serialize reconcile")
+                self._require_control_plane_running(f"reconcile job family {family!r}")
             owner = JobOwner.for_family(family)
             for job_id in ids:
                 self._assert_owner_locked(job_id, owner)
@@ -841,8 +994,24 @@ class TaskScheduler:
                 for job_id, registration in self._registrations.items()
                 if registration.owner == owner
             }
-            self.scheduler.pause()
+            self._families_reconciling.add(family)
+            scheduler_paused = False
+            switch_started = False
             try:
+                # A family switch is a barrier: callbacks admitted under the
+                # old immutable specs (including durable one-shot claim I/O)
+                # finish before any new spec is installed. Wrappers arriving
+                # after the barrier wait without admission; after the switch
+                # they either observe a stale token or resume the preserved
+                # old configuration when the switch fails.
+                while self._inflight_families.get(family, 0) > 0:
+                    wait_for_lifecycle_change("drain admitted callbacks")
+                self._require_control_plane_running(
+                    f"complete reconcile job family {family!r}"
+                )
+                self.scheduler.pause()
+                scheduler_paused = True
+                switch_started = True
                 for job_id, registration in tuple(old_registrations.items()):
                     if registration.state == JobExecutionState.SCHEDULED:
                         self._remove_task_locked(job_id, owner)
@@ -861,6 +1030,8 @@ class TaskScheduler:
                     else:
                         self._install_spec_locked(spec, owner)
             except Exception as install_error:
+                if not switch_started:
+                    raise
                 restore_errors = []
                 current_family_ids = [
                     job_id
@@ -900,7 +1071,9 @@ class TaskScheduler:
                     ) from install_error
                 raise
             finally:
-                if self._state == SchedulerState.RUNNING:
+                self._families_reconciling.discard(family)
+                self._inflight_condition.notify_all()
+                if scheduler_paused and self._state == SchedulerState.RUNNING:
                     self.scheduler.resume()
 
     def add_account_snapshot_task(self, account_id: int, interval_seconds: int = 10):
@@ -914,7 +1087,8 @@ class TaskScheduler:
         job_id = f"snapshot_account_{account_id}"
         with self._inflight_condition:
             self._require_running("add account snapshot task")
-            if self.scheduler.get_job(job_id):
+            self._assert_owner_locked(job_id, JobOwner.standalone())
+            if job_id in self._registrations:
                 logger.debug(f"Snapshot task for account {account_id} already exists")
                 return
             self._install_tracked_job(
@@ -938,7 +1112,8 @@ class TaskScheduler:
         job_id = "margin_monitor"
         with self._inflight_condition:
             self._require_running("add margin monitor task")
-            if self.scheduler.get_job(job_id):
+            self._assert_owner_locked(job_id, JobOwner.standalone())
+            if job_id in self._registrations:
                 logger.debug("Margin monitor task already exists")
                 return
             self._install_tracked_job(
@@ -961,7 +1136,8 @@ class TaskScheduler:
         job_id = "database_snapshot_all_accounts"
         with self._inflight_condition:
             self._require_running("add database snapshot task")
-            if self.scheduler.get_job(job_id):
+            self._assert_owner_locked(job_id, JobOwner.standalone())
+            if job_id in self._registrations:
                 logger.debug("Database snapshot task already exists")
                 return
             self._install_tracked_job(
@@ -1370,6 +1546,11 @@ def stop_scheduler():
             "scheduler shutdown incomplete: running jobs did not stop within "
             "the shutdown timeout"
         )
+
+
+def quiesce_scheduler():
+    """Close callback admission while leaving scheduler control-plane cleanup usable."""
+    task_scheduler.quiesce()
 
 
 def shutdown_cancellation_requested() -> bool:
