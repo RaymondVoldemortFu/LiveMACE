@@ -88,7 +88,7 @@ def test_execute_trade_tool_rejects_crypto_short_in_spot(monkeypatch):
     account = SimpleNamespace(id=1, current_cash=1000)
     db = _FakeDb(account)
 
-    result = te.execute_trade_tool(
+    result = te._execute_trade_tool_legacy(
         db=db,
         account_id=1,
         operation="open",
@@ -103,4 +103,3 @@ def test_execute_trade_tool_rejects_crypto_short_in_spot(monkeypatch):
 
     assert result["executed"] is False
     assert "requires leverage > 1" in result["error"]
-

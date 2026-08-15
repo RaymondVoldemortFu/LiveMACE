@@ -50,9 +50,10 @@
     "python": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["requires"],
+      "required": ["requires", "entrypoint"],
       "properties": {
-        "requires": {"type": "string", "minLength": 1, "maxLength": 200}
+        "requires": {"type": "string", "minLength": 1, "maxLength": 200},
+        "entrypoint": {"$ref": "#/$defs/entrypoint"}
       }
     },
     "agent": {

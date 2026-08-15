@@ -333,6 +333,15 @@ backend/tests/extensions/__pycache__/
 !backend/tests/prompts/
 !backend/tests/prompts/**
 backend/tests/prompts/__pycache__/
+!backend/tests/tools/
+!backend/tests/tools/**
+backend/tests/tools/__pycache__/
+!backend/tests/providers/
+!backend/tests/providers/**
+backend/tests/providers/__pycache__/
+!backend/tests/trading/
+!backend/tests/trading/**
+backend/tests/trading/__pycache__/
 .vscode/
 backend/.DS_Store
 

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from types import MappingProxyType
-from typing import Mapping
+from typing import Mapping, Protocol, runtime_checkable
 
 from benchmark.contracts import (
     ComponentConfigError,
@@ -39,6 +39,24 @@ REACT_PROFILE_BY_FLAGS = MappingProxyType(
 @dataclass(frozen=True)
 class PromptProfileContract:
     slots: Mapping[str, frozenset[str]]
+
+
+@runtime_checkable
+class BuiltinPromptResolver(PromptResolver, Protocol):
+    """Extra catalog operations required only by bundled profile-based Agents."""
+
+    def get_prompt_spec(self, prompt_id: str, *, version: str | None = None): ...
+
+    def get_profile(self, profile_id: str, *, version: str | None = None): ...
+
+    def render_slot(
+        self,
+        profile_id: str,
+        slot: str,
+        variables,
+        *,
+        profile_version: str | None = None,
+    ): ...
 
 
 def _contract(**slots: tuple[str, ...]) -> PromptProfileContract:
@@ -130,8 +148,16 @@ def get_builtin_prompt_registry() -> PromptRegistry:
     return registry
 
 
-def get_prompt_resolver(prompts: PromptResolver | None) -> PromptResolver:
-    return prompts if prompts is not None else get_builtin_prompt_registry()
+def get_prompt_resolver(
+    prompts: PromptResolver | None,
+) -> BuiltinPromptResolver:
+    resolver = prompts if prompts is not None else get_builtin_prompt_registry()
+    if not isinstance(resolver, BuiltinPromptResolver):
+        raise ComponentConfigError(
+            "Bundled Agent requires a profile-capable Prompt resolver",
+            code="PROMPT_PROFILE_RESOLVER_REQUIRED",
+        )
+    return resolver
 
 
 def read_builtin_template(relative_path: str) -> str:
@@ -153,7 +179,7 @@ def render_react_prompt(
     memory_enabled: bool,
     tool_routing_enabled: bool,
     include_simulation_notice: bool,
-    resolver: PromptResolver | None = None,
+    resolver: BuiltinPromptResolver | None = None,
 ) -> str:
     prompts = get_prompt_resolver(resolver)
     profile_id = REACT_PROFILE_BY_FLAGS[(memory_enabled, tool_routing_enabled)]
@@ -182,7 +208,7 @@ def render_react_prompt(
 
 
 def validate_profile_contract(
-    resolver: PromptResolver,
+    resolver: BuiltinPromptResolver,
     profile_id: str,
     contract_name: str,
 ) -> ValidationReport:
@@ -239,7 +265,7 @@ def validate_profile_contract(
 
 
 def require_profile_contract(
-    resolver: PromptResolver,
+    resolver: BuiltinPromptResolver,
     profile_id: str,
     contract_name: str,
 ) -> PromptProfileDescriptor:

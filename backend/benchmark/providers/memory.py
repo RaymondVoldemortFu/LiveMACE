@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Mapping, Protocol, Sequence
+from typing import Mapping, Protocol, Sequence, runtime_checkable
 
 from benchmark.contracts import JsonValue, Market
 from benchmark.contracts.common import _freeze_mapping, _require_aware, _require_non_empty
@@ -29,6 +29,7 @@ class MemoryRecord:
             _require_aware(self.created_at, "created_at")
 
 
+@runtime_checkable
 class MemoryStorePort(Protocol):
     id: str
     version: str

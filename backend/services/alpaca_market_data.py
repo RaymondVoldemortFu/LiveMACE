@@ -368,15 +368,26 @@ def _alpaca_feed_kwargs() -> Dict[str, Any]:
     return {"feed": feed}
 
 
-alpaca_client = AlpacaClient()
+_alpaca_client: Optional[AlpacaClient] = None
+_alpaca_client_lock = Lock()
+
+
+def _get_alpaca_client() -> AlpacaClient:
+    global _alpaca_client
+    if _alpaca_client is not None:
+        return _alpaca_client
+    with _alpaca_client_lock:
+        if _alpaca_client is None:
+            _alpaca_client = AlpacaClient()
+        return _alpaca_client
 
 
 def get_last_price_from_alpaca(symbol: str) -> Optional[float]:
-    return alpaca_client.get_last_price(symbol)
+    return _get_alpaca_client().get_last_price(symbol)
 
 
 def get_last_close_price_from_alpaca(symbol: str) -> Optional[float]:
-    return alpaca_client.get_last_close_price(symbol)
+    return _get_alpaca_client().get_last_close_price(symbol)
 
 
 def get_kline_data_from_alpaca(
@@ -386,11 +397,11 @@ def get_kline_data_from_alpaca(
     start_time: Optional[int] = None,
     end_time: Optional[int] = None
 ) -> List[Dict[str, Any]]:
-    return alpaca_client.get_kline_data(symbol, period, count, start_time, end_time)
+    return _get_alpaca_client().get_kline_data(symbol, period, count, start_time, end_time)
 
 
 def get_market_status_from_alpaca(symbol: str) -> Dict[str, Any]:
-    return alpaca_client.get_market_status(symbol)
+    return _get_alpaca_client().get_market_status(symbol)
 
 
 def get_all_supported_symbols() -> List[str]:

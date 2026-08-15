@@ -102,6 +102,7 @@ def test_freeze_blocks_all_writes_but_allows_concurrent_reads():
     registry = AgentRegistry()
     registry.register(descriptor(), Factory())
     registry.freeze()
+    registry.freeze()
 
     with pytest.raises(AgentRegistryFrozenError):
         registry.register(AgentDescriptor("com.example.other", "1.0.0"), Factory())

@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from apscheduler.triggers.interval import IntervalTrigger
 
-from services.scheduler import TaskScheduler, plan_first_and_recurring_runs
+from services.scheduler import SchedulerState, TaskScheduler, plan_first_and_recurring_runs
 
 
 def test_plan_first_and_recurring_runs_before_first_time():
@@ -83,6 +83,7 @@ def test_add_interval_task_passes_start_date_into_interval_trigger():
     scheduler = TaskScheduler()
     scheduler.scheduler = _RecorderScheduler()
     scheduler._started = True
+    scheduler._state = SchedulerState.RUNNING
 
     start_date = datetime(2026, 4, 13, 21, 58, 0, tzinfo=timezone.utc)
     scheduler.add_interval_task(
@@ -96,4 +97,3 @@ def test_add_interval_task_passes_start_date_into_interval_trigger():
     trigger = scheduler.scheduler.calls[0]["trigger"]
     assert isinstance(trigger, IntervalTrigger)
     assert trigger.start_date == start_date
-

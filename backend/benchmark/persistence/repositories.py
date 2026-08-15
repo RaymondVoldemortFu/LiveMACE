@@ -36,12 +36,15 @@ if TYPE_CHECKING:  # ORM types for typing only; no runtime import side effects
         Order,
         Position,
         Trade,
+        TradeCommandReceipt,
         User,
     )
 
 
 @runtime_checkable
 class AccountRepository(Protocol):
+    def add(self, account: "Account") -> "Account": ...
+
     def get(self, account_id: int) -> Optional["Account"]: ...
 
     def get_for_update(self, account_id: int) -> Optional["Account"]: ...
@@ -81,6 +84,8 @@ class OrderRepository(Protocol):
 
     def list_pending_for_update(self, account_id: Optional[int] = None) -> List["Order"]: ...
 
+    def list_pending_account_ids(self) -> List[int]: ...
+
 
 @runtime_checkable
 class TradeRepository(Protocol):
@@ -89,6 +94,29 @@ class TradeRepository(Protocol):
     def list_by_account(self, account_id: int) -> List["Trade"]: ...
 
     def list_by_order(self, order_id: int) -> List["Trade"]: ...
+
+
+@runtime_checkable
+class TradeCommandReceiptRepository(Protocol):
+    def get(
+        self,
+        account_id: int,
+        idempotency_key: str,
+    ) -> Optional["TradeCommandReceipt"]: ...
+
+    def claim(
+        self,
+        account_id: int,
+        idempotency_key: str,
+        command_json: str,
+    ) -> "TradeCommandReceipt": ...
+
+    def complete(
+        self,
+        receipt: "TradeCommandReceipt",
+        result_json: str,
+        completed_at: datetime,
+    ) -> "TradeCommandReceipt": ...
 
 
 @runtime_checkable
@@ -146,6 +174,8 @@ class EvaluationRepository(Protocol):
 
 @runtime_checkable
 class UserRepository(Protocol):
+    def add(self, user: "User") -> "User": ...
+
     def get(self, user_id: int) -> Optional["User"]: ...
 
     def get_by_username(self, username: str) -> Optional["User"]: ...

@@ -6,6 +6,8 @@ from typing import Mapping
 
 from .common import JsonValue, _freeze_mapping, to_jsonable
 
+_PROVIDER_RESERVED_DETAIL_KEYS = frozenset({"retryable", "provider_id"})
+
 
 class BenchmarkError(Exception):
     default_code = "BENCHMARK_ERROR"
@@ -65,7 +67,42 @@ class PromptRenderError(BenchmarkError):
 
 
 class ProviderError(BenchmarkError):
+    """Provider failures uniformly expose code/message/retryable/provider_id."""
+
     default_code = "PROVIDER_ERROR"
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str | None = None,
+        details: Mapping[str, JsonValue] | None = None,
+        retryable: bool = False,
+        provider_id: str = "unknown",
+    ) -> None:
+        if not isinstance(retryable, bool):
+            raise TypeError("retryable must be bool")
+        if not isinstance(provider_id, str) or not provider_id.strip():
+            raise ValueError("provider_id must be a non-empty string")
+        safe_details = dict(details or {})
+        reserved = _PROVIDER_RESERVED_DETAIL_KEYS.intersection(safe_details)
+        if reserved:
+            raise ValueError(
+                "details must not contain reserved ProviderError fields: "
+                + ", ".join(sorted(reserved))
+            )
+        super().__init__(message, code=code, details=safe_details)
+        self.retryable = retryable
+        self.provider_id = provider_id
+
+    def to_dict(self) -> dict[str, JsonValue]:
+        return {
+            "code": self.code,
+            "message": self.message,
+            "retryable": self.retryable,
+            "provider_id": self.provider_id,
+            "details": to_jsonable(self.details),
+        }
 
 
 class TradeGatewayError(BenchmarkError):

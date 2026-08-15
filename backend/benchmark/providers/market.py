@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Mapping, Protocol, Sequence
+from typing import Mapping, Protocol, runtime_checkable
 
 from benchmark.contracts import JsonValue, Market
 from benchmark.contracts.common import _freeze_mapping, _require_aware, _require_non_empty
@@ -31,6 +31,8 @@ class PriceResult:
     def __post_init__(self) -> None:
         if self.value is not None and not isinstance(self.value, Decimal):
             raise TypeError("value must be Decimal or None")
+        if self.value is not None and not self.value.is_finite():
+            raise ValueError("value must be finite or None")
         if self.as_of is not None:
             _require_aware(self.as_of, "as_of")
         _require_non_empty(self.source, "source")
@@ -38,6 +40,29 @@ class PriceResult:
             raise TypeError("freshness must be Freshness")
         if self.freshness is Freshness.UNAVAILABLE and not self.error:
             raise ValueError("unavailable price requires error")
+
+
+@dataclass(frozen=True)
+class MarketStatusResult:
+    is_trading: bool
+    source: str
+    as_of: datetime | None = None
+    reason: str | None = None
+    metadata: Mapping[str, JsonValue] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.is_trading, bool):
+            raise TypeError("is_trading must be bool")
+        _require_non_empty(self.source, "source")
+        if self.as_of is not None:
+            _require_aware(self.as_of, "as_of")
+        if self.reason is not None and not isinstance(self.reason, str):
+            raise TypeError("reason must be str or None")
+        object.__setattr__(
+            self,
+            "metadata",
+            _freeze_mapping(self.metadata, "metadata"),
+        )
 
 
 @dataclass(frozen=True)
@@ -76,6 +101,7 @@ class KlineResult:
         object.__setattr__(self, "metadata", _freeze_mapping(self.metadata, "metadata"))
 
 
+@runtime_checkable
 class MarketDataPort(Protocol):
     id: str
     version: str
@@ -84,7 +110,19 @@ class MarketDataPort(Protocol):
 
     def get_price(self, symbol: str, market: Market) -> PriceResult: ...
     def get_klines(self, query: KlineQuery) -> KlineResult: ...
+    def get_market_status(
+        self,
+        symbol: str,
+        market: Market,
+    ) -> MarketStatusResult: ...
     def healthcheck(self) -> HealthStatus: ...
 
 
-__all__ = ["Freshness", "KlineQuery", "KlineResult", "MarketDataPort", "PriceResult"]
+__all__ = [
+    "Freshness",
+    "KlineQuery",
+    "KlineResult",
+    "MarketDataPort",
+    "MarketStatusResult",
+    "PriceResult",
+]

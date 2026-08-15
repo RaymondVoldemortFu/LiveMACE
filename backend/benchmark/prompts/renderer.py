@@ -112,13 +112,29 @@ def render_template(
     merged: dict[str, JsonValue] = dict(spec.optional_variables)
     merged.update(variables)
     serialized = {name: _serialize_value(value) for name, value in merged.items()}
+
+    # Templates forbid format specs and conversions, so the rendered length
+    # is exactly the literal text plus every placeholder's serialized value.
+    # Enforce the limit *before* allocating the rendered string so oversized
+    # renders fail without materializing a huge result.
+    projected_length = 0
+    for literal_text, field_name, _format_spec, _conversion in Formatter().parse(
+        template.content
+    ):
+        projected_length += len(literal_text)
+        if field_name is not None:
+            projected_length += len(serialized[field_name])
+        if projected_length > max_characters:
+            raise PromptRenderError(
+                "rendered prompt exceeds the character limit",
+                code="PROMPT_RENDER_TOO_LARGE",
+                details={
+                    "max_characters": max_characters,
+                    "projected_characters_at_least": projected_length,
+                },
+            )
+
     content = template.content.format_map(serialized)
-    if len(content) > max_characters:
-        raise PromptRenderError(
-            "rendered prompt exceeds the character limit",
-            code="PROMPT_RENDER_TOO_LARGE",
-            details={"max_characters": max_characters},
-        )
     digest = sha256(content.encode("utf-8")).hexdigest()
     return RenderedPrompt(spec=spec, content=content, content_sha256=digest)
 

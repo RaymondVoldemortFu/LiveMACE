@@ -4,4 +4,12 @@ Importing this package must not initialize the application, database, scheduler,
 or any external provider.
 """
 
-__all__ = ["agents", "contracts", "extensions", "prompts"]
+__all__ = [
+    "agents",
+    "contracts",
+    "extensions",
+    "prompts",
+    "providers",
+    "testing",
+    "tools",
+]

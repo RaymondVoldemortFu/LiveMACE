@@ -87,6 +87,8 @@ def test_account_test_endpoint_requires_explicit_model_base_url_and_key():
 def test_llm_client_call_retries_then_succeeds(monkeypatch):
     client = object.__new__(LLMClient)
     client.model = "gpt-4o-mini"
+    client.extra_body = None
+    client.reasoning_effort = None
     client.max_retries = 2
     client._last_wire_tool_calls = None
     client.is_gemini_model = lambda: False
@@ -109,6 +111,8 @@ def test_llm_client_call_retries_then_succeeds(monkeypatch):
 def test_llm_client_call_raises_after_max_retries(monkeypatch):
     client = object.__new__(LLMClient)
     client.model = "gpt-4o-mini"
+    client.extra_body = None
+    client.reasoning_effort = None
     client.max_retries = 1
     client._last_wire_tool_calls = None
     client.is_gemini_model = lambda: False
@@ -131,6 +135,8 @@ def test_llm_client_call_raises_after_max_retries(monkeypatch):
 def test_llm_client_call_uses_max_completion_tokens_for_grok_model():
     client = object.__new__(LLMClient)
     client.model = "grok-3"
+    client.extra_body = None
+    client.reasoning_effort = None
     client.max_retries = 0
     client._last_wire_tool_calls = None
     client.is_gemini_model = lambda: False
@@ -156,6 +162,8 @@ def test_llm_client_call_uses_max_completion_tokens_for_grok_model():
 def test_llm_client_call_keeps_max_tokens_for_non_grok_model():
     client = object.__new__(LLMClient)
     client.model = "gpt-4o-mini"
+    client.extra_body = None
+    client.reasoning_effort = None
     client.max_retries = 0
     client._last_wire_tool_calls = None
     client.is_gemini_model = lambda: False
@@ -181,6 +189,8 @@ def test_llm_client_call_keeps_max_tokens_for_non_grok_model():
 def test_llm_client_long_timeout_first_strike_returns_warning(monkeypatch):
     client = object.__new__(LLMClient)
     client.model = "gpt-4o-mini"
+    client.extra_body = None
+    client.reasoning_effort = None
     client.max_retries = 0
     client._last_wire_tool_calls = None
     client.is_gemini_model = lambda: False
@@ -208,6 +218,8 @@ def test_llm_client_long_timeout_first_strike_returns_warning(monkeypatch):
 def test_llm_client_long_timeout_second_strike_forces_trade_done(monkeypatch):
     client = object.__new__(LLMClient)
     client.model = "gpt-4o-mini"
+    client.extra_body = None
+    client.reasoning_effort = None
     client.max_retries = 0
     client._last_wire_tool_calls = None
     client.is_gemini_model = lambda: False
@@ -235,6 +247,8 @@ def test_llm_client_long_timeout_second_strike_forces_trade_done(monkeypatch):
 def test_llm_client_short_timeout_does_not_trigger_guardrail(monkeypatch):
     client = object.__new__(LLMClient)
     client.model = "gpt-4o-mini"
+    client.extra_body = None
+    client.reasoning_effort = None
     client.max_retries = 0
     client._last_wire_tool_calls = None
     client.is_gemini_model = lambda: False

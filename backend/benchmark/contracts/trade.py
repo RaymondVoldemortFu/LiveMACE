@@ -4,10 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from decimal import Decimal
-from types import MappingProxyType
-from typing import Any, Mapping
+from typing import Mapping
 
-from .common import Market, _require_non_empty
+from .common import JsonValue, Market, _freeze_mapping, _require_non_empty, to_jsonable
 
 
 @dataclass(frozen=True)
@@ -39,6 +38,8 @@ class TradeCommand:
         if not isinstance(self.reason, str):
             raise TypeError("reason must be str")
         _require_non_empty(self.idempotency_key, "idempotency_key")
+        if len(self.idempotency_key) > 255:
+            raise ValueError("idempotency_key must not exceed 255 characters")
 
 
 @dataclass(frozen=True)
@@ -50,7 +51,7 @@ class TradeCommandResult:
     order_id: int | None
     trade_id: int | None
     normalized_command: TradeCommand
-    raw_result: Mapping[str, Any] = field(default_factory=dict)
+    raw_result: Mapping[str, JsonValue] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not isinstance(self.accepted, bool) or not isinstance(self.executed, bool):
@@ -67,7 +68,10 @@ class TradeCommandResult:
                 raise ValueError(f"{name} must be a positive integer or None")
         if not isinstance(self.raw_result, Mapping):
             raise TypeError("raw_result must be a mapping")
-        object.__setattr__(self, "raw_result", MappingProxyType(dict(self.raw_result)))
+        # Convert to a deterministic JsonValue tree, then recursively freeze so
+        # callers cannot mutate nested lists/dicts through the original object.
+        frozen = _freeze_mapping(to_jsonable(dict(self.raw_result)), "raw_result")
+        object.__setattr__(self, "raw_result", frozen)
 
 
 __all__ = ["TradeCommand", "TradeCommandResult"]

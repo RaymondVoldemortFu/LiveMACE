@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from database.models import (
     Order, Position, Trade, Account,
     CRYPTO_TAKER_FEE_RATE, CRYPTO_INTEREST_RATE_HOURLY, CRYPTO_MAX_LEVERAGE,
-    CRYPTO_MIN_ORDER_QUANTITY, CRYPTO_LOT_SIZE, CRYPTO_MAINTENANCE_MARGIN_RATIO
+    CRYPTO_MIN_ORDER_QUANTITY,
 )
 from .market_data import get_last_price
 from services.time_source import now_utc
@@ -44,7 +44,9 @@ def place_and_execute_crypto(
     order_type: str,
     price: float | None,
     quantity: float,
-    leverage: int = 1
+    leverage: int = 1,
+    *,
+    manage_transaction: bool = True,
 ) -> Order:
     """
     Place and execute a CRYPTO order with leverage support.
@@ -281,10 +283,13 @@ def place_and_execute_crypto(
     order.filled_quantity = quantity
     order.status = "FILLED"
     
-    db.commit()
-    db.refresh(order)
-    db.refresh(account)
-    if pos:
-        db.refresh(pos)
+    if manage_transaction:
+        db.commit()
+        db.refresh(order)
+        db.refresh(account)
+        if pos:
+            db.refresh(pos)
+    else:
+        db.flush()
     
     return order

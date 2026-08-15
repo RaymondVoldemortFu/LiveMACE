@@ -13,14 +13,34 @@ MySQL-production split in RFC-0000.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import List, Optional
+from typing import Callable, List, Optional
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from benchmark.persistence.errors import PersistenceConflictError
 
-class SqlAlchemyAccountRepository:
-    def __init__(self, session: Session):
-        self._session = session
+
+class _RepositoryBase:
+    """Resolve the owning session on every repository operation.
+
+    The provider is the UoW lifecycle/thread guard. SQLAlchemy objects never
+    leave the persistence adapters as an application-facing session facade.
+    """
+
+    def __init__(self, session_provider: Callable[[], Session]):
+        self._session_provider = session_provider
+
+    @property
+    def _session(self) -> Session:
+        return self._session_provider()
+
+
+class SqlAlchemyAccountRepository(_RepositoryBase):
+    def add(self, account):
+        self._session.add(account)
+        self._session.flush()
+        return account
 
     def get(self, account_id: int):
         from database.models import Account
@@ -79,9 +99,7 @@ class SqlAlchemyAccountRepository:
         return account
 
 
-class SqlAlchemyPositionRepository:
-    def __init__(self, session: Session):
-        self._session = session
+class SqlAlchemyPositionRepository(_RepositoryBase):
 
     def get(self, account_id: int, symbol: str, market: str):
         from database.models import Position
@@ -111,9 +129,7 @@ class SqlAlchemyPositionRepository:
         return position
 
 
-class SqlAlchemyOrderRepository:
-    def __init__(self, session: Session):
-        self._session = session
+class SqlAlchemyOrderRepository(_RepositoryBase):
 
     def add(self, order):
         self._session.add(order)
@@ -151,12 +167,22 @@ class SqlAlchemyOrderRepository:
         query = self._session.query(Order).filter(Order.status == "PENDING")
         if account_id is not None:
             query = query.filter(Order.account_id == account_id)
-        return query.with_for_update().all()
+        return query.order_by(Order.id.asc()).with_for_update().all()
+
+    def list_pending_account_ids(self) -> List[int]:
+        from database.models import Order
+
+        rows = (
+            self._session.query(Order.account_id)
+            .filter(Order.status == "PENDING")
+            .distinct()
+            .order_by(Order.account_id.asc())
+            .all()
+        )
+        return [int(row[0]) for row in rows]
 
 
-class SqlAlchemyTradeRepository:
-    def __init__(self, session: Session):
-        self._session = session
+class SqlAlchemyTradeRepository(_RepositoryBase):
 
     def add(self, trade):
         self._session.add(trade)
@@ -179,9 +205,49 @@ class SqlAlchemyTradeRepository:
         return self._session.query(Trade).filter(Trade.order_id == order_id).all()
 
 
-class SqlAlchemyDecisionRepository:
-    def __init__(self, session: Session):
-        self._session = session
+class SqlAlchemyTradeCommandReceiptRepository(_RepositoryBase):
+
+    def get(self, account_id: int, idempotency_key: str):
+        from database.models import TradeCommandReceipt
+
+        return (
+            self._session.query(TradeCommandReceipt)
+            .filter(
+                TradeCommandReceipt.account_id == account_id,
+                TradeCommandReceipt.idempotency_key == idempotency_key,
+            )
+            .first()
+        )
+
+    def claim(self, account_id: int, idempotency_key: str, command_json: str):
+        from database.models import TradeCommandReceipt
+
+        receipt = TradeCommandReceipt(
+            account_id=account_id,
+            idempotency_key=idempotency_key,
+            status="PENDING",
+            command_json=command_json,
+        )
+        self._session.add(receipt)
+        try:
+            self._session.flush()
+        except IntegrityError as exc:
+            raise PersistenceConflictError(
+                "trade command receipt claim conflicted"
+            ) from exc
+        return receipt
+
+    def complete(self, receipt, result_json: str, completed_at: datetime):
+        if receipt.status != "PENDING":
+            raise ValueError("only a pending trade command receipt can be completed")
+        receipt.status = "COMPLETED"
+        receipt.result_json = result_json
+        receipt.completed_at = completed_at
+        self._session.flush()
+        return receipt
+
+
+class SqlAlchemyDecisionRepository(_RepositoryBase):
 
     def add(self, decision):
         self._session.add(decision)
@@ -210,9 +276,7 @@ class SqlAlchemyDecisionRepository:
         return query.all()
 
 
-class SqlAlchemyTraceRepository:
-    def __init__(self, session: Session):
-        self._session = session
+class SqlAlchemyTraceRepository(_RepositoryBase):
 
     def add(self, step):
         self._session.add(step)
@@ -242,9 +306,7 @@ class SqlAlchemyTraceRepository:
         return query.all()
 
 
-class SqlAlchemySnapshotRepository:
-    def __init__(self, session: Session):
-        self._session = session
+class SqlAlchemySnapshotRepository(_RepositoryBase):
 
     def add(self, snapshot):
         self._session.add(snapshot)
@@ -272,9 +334,7 @@ class SqlAlchemySnapshotRepository:
         )
 
 
-class SqlAlchemyEvaluationRepository:
-    def __init__(self, session: Session):
-        self._session = session
+class SqlAlchemyEvaluationRepository(_RepositoryBase):
 
     def add(self, checkpoint):
         self._session.add(checkpoint)
@@ -316,9 +376,11 @@ class SqlAlchemyEvaluationRepository:
         return query.order_by(AgentPeriodCheckpoint.period_end.asc()).all()
 
 
-class SqlAlchemyUserRepository:
-    def __init__(self, session: Session):
-        self._session = session
+class SqlAlchemyUserRepository(_RepositoryBase):
+    def add(self, user):
+        self._session.add(user)
+        self._session.flush()
+        return user
 
     def get(self, user_id: int):
         from database.models import User

@@ -24,6 +24,26 @@ class StructuredDataError(ValueError):
 
 
 class _UniqueKeySafeLoader(yaml.SafeLoader):
+    #: Maximum node nesting enforced while composing, *before* any deep
+    #: object graph is materialized. Overridden per load call.
+    max_compose_depth = DEFAULT_MAX_DEPTH
+
+    def __init__(self, stream: Any) -> None:
+        super().__init__(stream)
+        self._compose_depth = 0
+
+    def compose_node(self, parent: Any, index: Any) -> Any:
+        self._compose_depth += 1
+        try:
+            if self._compose_depth > self.max_compose_depth:
+                raise StructuredDataError(
+                    f"document exceeds nesting depth {self.max_compose_depth}",
+                    code="NESTING_TOO_DEEP",
+                )
+            return super().compose_node(parent, index)
+        finally:
+            self._compose_depth -= 1
+
     def construct_mapping(
         self, node: MappingNode, deep: bool = False
     ) -> dict[Any, Any]:
@@ -184,7 +204,15 @@ def load_structured_text(
                     f"document exceeds alias limit {max_aliases}",
                     code="TOO_MANY_ALIASES",
                 )
-            value = yaml.load(text, Loader=_UniqueKeySafeLoader)
+            # Enforce the depth limit at compose time (before construction)
+            # so untrusted deep documents fail with the declared error
+            # instead of exhausting the interpreter recursion limit.
+            loader = _UniqueKeySafeLoader(text)
+            loader.max_compose_depth = max_depth
+            try:
+                value = loader.get_single_data()
+            finally:
+                loader.dispose()
         else:
             raise StructuredDataError(
                 "unsupported structured file format", code="UNSUPPORTED_FORMAT"
@@ -194,6 +222,14 @@ def load_structured_text(
     except (json.JSONDecodeError, yaml.YAMLError) as exc:
         raise StructuredDataError(
             "file contains invalid structured data", code="PARSE_ERROR"
+        ) from exc
+    except RecursionError as exc:
+        # Backstop for parser internals (e.g. very deep JSON in the C
+        # decoder) that recurse before our own depth accounting runs:
+        # surface the declared stable error instead of a bare crash.
+        raise StructuredDataError(
+            f"document exceeds nesting depth {max_depth}",
+            code="NESTING_TOO_DEEP",
         ) from exc
     _check_json_value_and_depth(value, max_depth=max_depth)
     return value

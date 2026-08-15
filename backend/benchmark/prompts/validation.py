@@ -182,10 +182,22 @@ def validate_prompt_directory(root: Path, index: Path) -> ValidationReport:
     return ValidationReport(valid=not errors, errors=errors)
 
 
+def parse_prompt_directory(
+    root: Path, index: Path
+) -> tuple[PromptDirectoryData | None, tuple[ValidationIssue, ...]]:
+    """Validate a Prompt directory and also return its parsed contents.
+
+    Used by extension validation to aggregate Prompt ids and profile keys
+    across all declared Prompt directories.
+    """
+    return _parse_prompt_directory(root, index)
+
+
 __all__ = [
     "PROMPT_FILE_MAX_BYTES",
     "ValidatedPromptFile",
     "PromptDirectoryData",
     "resolve_contained_path",
+    "parse_prompt_directory",
     "validate_prompt_directory",
 ]

@@ -27,35 +27,10 @@ class PromptProvider(Protocol):
 
 @runtime_checkable
 class PromptResolver(Protocol):
-    def get_prompt_spec(
-        self,
-        prompt_id: str,
-        *,
-        version: str | None = None,
-    ) -> PromptSpec: ...
-
-    def get_profile(
-        self,
-        profile_id: str,
-        *,
-        version: str | None = None,
-    ) -> PromptProfileDescriptor: ...
-
     def render(
         self,
         prompt_id: str,
         variables: Mapping[str, JsonValue],
-        *,
-        version: str | None = None,
-    ) -> RenderedPrompt: ...
-
-    def render_slot(
-        self,
-        profile_id: str,
-        slot: str,
-        variables: Mapping[str, JsonValue],
-        *,
-        profile_version: str | None = None,
     ) -> RenderedPrompt: ...
 
 

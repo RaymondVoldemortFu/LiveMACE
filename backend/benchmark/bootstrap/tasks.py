@@ -37,12 +37,16 @@ class TaskDescriptor:
     stop: Optional[Callable[[], None]] = None
     required: bool = True
     dependencies: Tuple[str, ...] = ()
+    owns_resources: Optional[Callable[[], bool]] = None
+    quiesce: Optional[Callable[[], None]] = None
 
 
 class TaskState(str, Enum):
     REGISTERED = "registered"
     RUNNING = "running"
-    FAILED = "failed"
+    START_FAILED = "start_failed"
+    START_CLEANUP_FAILED = "start_cleanup_failed"
+    STOP_FAILED = "stop_failed"
     STOPPED = "stopped"
     SKIPPED = "skipped"
 
@@ -53,6 +57,7 @@ class _TaskRecord:
     state: TaskState = TaskState.REGISTERED
     error: Optional[str] = None
     start_index: int = field(default=-1)
+    quiesced: bool = False
 
 
 class TaskRegistry:
@@ -62,11 +67,17 @@ class TaskRegistry:
         self._lock = threading.RLock()
         self._records: Dict[str, _TaskRecord] = {}
         self._start_counter = 0
+        self._shutdown_requested = False
 
     def register(self, descriptor: TaskDescriptor) -> None:
         with self._lock:
             if descriptor.task_id in self._records:
                 raise ValueError(f"duplicate runtime task id: {descriptor.task_id!r}")
+            if descriptor.owns_resources is not None and descriptor.stop is None:
+                raise ValueError(
+                    f"runtime task {descriptor.task_id!r} declares resource ownership "
+                    "but has no stop callback"
+                )
             self._records[descriptor.task_id] = _TaskRecord(descriptor=descriptor)
 
     def start_all(self) -> None:
@@ -77,10 +88,43 @@ class TaskRegistry:
         started (see ``runtime.bootstrap_runtime``).
         """
         with self._lock:
+            if self._shutdown_requested:
+                active = [
+                    record.descriptor.task_id
+                    for record in self._records.values()
+                    if record.state
+                    in (
+                        TaskState.RUNNING,
+                        TaskState.START_CLEANUP_FAILED,
+                        TaskState.STOP_FAILED,
+                    )
+                ]
+                if active:
+                    raise RuntimeError(
+                        "runtime tasks have not completed shutdown; shutdown is "
+                        f"still in progress for: {active!r}; retry stop_all() "
+                        "before starting a new generation"
+                    )
+                # An explicit start after every owned resource reached a
+                # terminal stopped/non-active state creates the next registry
+                # generation. Quiesce itself is never reversed in-place.
+                self._shutdown_requested = False
+            cleanup_pending = [
+                record.descriptor.task_id
+                for record in self._records.values()
+                if record.state
+                in (TaskState.START_CLEANUP_FAILED, TaskState.STOP_FAILED)
+            ]
+            if cleanup_pending:
+                raise RuntimeError(
+                    "runtime tasks have not completed shutdown: "
+                    f"{cleanup_pending!r}; retry stop_all() before start_all()"
+                )
             for record in self._records.values():
                 if record.state == TaskState.RUNNING:
                     continue
                 descriptor = record.descriptor
+                record.quiesced = False
                 blocked = [
                     dep
                     for dep in descriptor.dependencies
@@ -101,14 +145,42 @@ class TaskRegistry:
                         blocked,
                     )
                     continue
+                # Reserve lifecycle order before invoking start. A component
+                # that partially starts and then raises still owns resources at
+                # this exact position in the dependency/start sequence.
+                record.start_index = self._start_counter
+                self._start_counter += 1
                 try:
                     descriptor.start()
                 except Exception as exc:
-                    record.state = TaskState.FAILED
+                    probe_error: Optional[BaseException] = None
+                    try:
+                        owns_resources = (
+                            bool(descriptor.owns_resources())
+                            if descriptor.owns_resources is not None
+                            else descriptor.stop is not None
+                        )
+                    except BaseException as owned_exc:
+                        # Failure to prove that no resource exists must be
+                        # treated conservatively as cleanup pending.
+                        owns_resources = True
+                        probe_error = owned_exc
+                    record.state = (
+                        TaskState.START_CLEANUP_FAILED
+                        if owns_resources
+                        else TaskState.START_FAILED
+                    )
                     record.error = str(exc)
-                    if descriptor.required:
+                    if probe_error is not None:
+                        record.error += (
+                            "; resource ownership probe failed: "
+                            f"{type(probe_error).__name__}: {probe_error}"
+                        )
+                    if descriptor.required or owns_resources:
                         logger.error(
-                            "required task %s failed to start: %s", descriptor.task_id, exc
+                            "task %s failed to start and cannot continue: %s",
+                            descriptor.task_id,
+                            exc,
                         )
                         raise
                     logger.error(
@@ -118,33 +190,108 @@ class TaskRegistry:
                     )
                 else:
                     record.state = TaskState.RUNNING
-                    record.start_index = self._start_counter
-                    self._start_counter += 1
                     logger.info("runtime task started: %s", descriptor.task_id)
 
     def stop_all(self) -> Dict[str, Optional[str]]:
-        """Stop running tasks in reverse start order (idempotent).
+        """Stop tasks in reverse order without dismantling failed dependents.
 
         Returns ``{task_id: error_or_None}``; stop failures are recorded
-        and logged, never silently dropped.
+        and remain eligible for every later retry until stop succeeds. A task
+        is deferred while any direct dependent remains RUNNING/STOP_FAILED;
+        this rule naturally preserves the complete transitive dependency chain.
         """
         results: Dict[str, Optional[str]] = {}
         with self._lock:
-            running = sorted(
-                (r for r in self._records.values() if r.state == TaskState.RUNNING),
+            self._shutdown_requested = True
+            # Phase 1 closes admissions for every active resource before any
+            # dependent-specific stop can fail. Dependencies may remain alive
+            # for retry, but they can no longer execute new business work.
+            quiesce_failed = False
+            for record in self._records.values():
+                if (
+                    record.state
+                    in (
+                        TaskState.RUNNING,
+                        TaskState.START_CLEANUP_FAILED,
+                        TaskState.STOP_FAILED,
+                    )
+                    and record.descriptor.quiesce is not None
+                    and not record.quiesced
+                ):
+                    try:
+                        record.descriptor.quiesce()
+                    except Exception as exc:
+                        quiesce_failed = True
+                        record.error = str(exc)
+                        results[record.descriptor.task_id] = str(exc)
+                        logger.error(
+                            "runtime task %s failed to quiesce: %s",
+                            record.descriptor.task_id,
+                            exc,
+                        )
+                    else:
+                        record.quiesced = True
+            if quiesce_failed:
+                # Quiesce is a global phase boundary. Starting destructive
+                # dependency teardown while any admission gate may still be
+                # open recreates the exact mixed running/stopped state this
+                # protocol is meant to prevent. Retry the entire phase first.
+                return results
+            stoppable = sorted(
+                (
+                    r
+                    for r in self._records.values()
+                    if r.state
+                    in (
+                        TaskState.RUNNING,
+                        TaskState.START_CLEANUP_FAILED,
+                        TaskState.STOP_FAILED,
+                    )
+                ),
                 key=lambda r: r.start_index,
                 reverse=True,
             )
-            for record in running:
+            for record in stoppable:
                 descriptor = record.descriptor
+                active_dependents = [
+                    dependent.descriptor.task_id
+                    for dependent in self._records.values()
+                    if descriptor.task_id in dependent.descriptor.dependencies
+                    and dependent.state
+                    in (
+                        TaskState.RUNNING,
+                        TaskState.START_CLEANUP_FAILED,
+                        TaskState.STOP_FAILED,
+                    )
+                ]
+                if active_dependents:
+                    results[descriptor.task_id] = (
+                        "stop deferred; active dependents: "
+                        + ", ".join(sorted(active_dependents))
+                    )
+                    logger.warning(
+                        "runtime task %s stop deferred; active dependents: %s",
+                        descriptor.task_id,
+                        active_dependents,
+                    )
+                    continue
                 if descriptor.stop is None:
+                    if record.state in (
+                        TaskState.START_CLEANUP_FAILED,
+                        TaskState.STOP_FAILED,
+                    ):
+                        error = "cleanup required but task has no stop callback"
+                        record.state = TaskState.STOP_FAILED
+                        record.error = error
+                        results[descriptor.task_id] = error
+                        continue
                     record.state = TaskState.STOPPED
                     results[descriptor.task_id] = None
                     continue
                 try:
                     descriptor.stop()
                 except Exception as exc:
-                    record.state = TaskState.FAILED
+                    record.state = TaskState.STOP_FAILED
                     record.error = str(exc)
                     results[descriptor.task_id] = str(exc)
                     logger.error("runtime task %s failed to stop: %s", descriptor.task_id, exc)
@@ -163,18 +310,30 @@ class TaskRegistry:
         with self._lock:
             out: Dict[str, str] = {}
             for task_id, record in self._records.items():
-                if record.state == TaskState.FAILED:
+                if record.state in (
+                    TaskState.START_FAILED,
+                    TaskState.START_CLEANUP_FAILED,
+                ):
                     out[task_id] = (
                         "required_failed" if record.descriptor.required else "degraded"
                     )
+                elif record.state == TaskState.STOP_FAILED:
+                    out[task_id] = "stop_failed"
                 else:
                     out[task_id] = record.state.value
             return out
 
     def is_ready(self) -> bool:
         with self._lock:
-            return not any(
-                r.state == TaskState.FAILED and r.descriptor.required
+            return not self._shutdown_requested and not any(
+                (
+                    r.state
+                    in (TaskState.START_CLEANUP_FAILED, TaskState.STOP_FAILED)
+                    or (
+                        r.state == TaskState.START_FAILED
+                        and r.descriptor.required
+                    )
+                )
                 for r in self._records.values()
             )
 
@@ -222,6 +381,16 @@ def default_task_descriptors() -> List[TaskDescriptor]:
 
         stop_scheduler()
 
+    def _scheduler_quiesce() -> None:
+        from services.scheduler import quiesce_scheduler
+
+        quiesce_scheduler()
+
+    def _scheduler_owns_resources() -> bool:
+        from services.scheduler import task_scheduler
+
+        return task_scheduler.has_pending_cleanup()
+
     def _market_tasks() -> None:
         from services.scheduler import setup_market_tasks
 
@@ -237,6 +406,11 @@ def default_task_descriptors() -> List[TaskDescriptor]:
         from services.scheduler import reset_auto_trading_job
 
         reset_auto_trading_job()
+
+    def _auto_trading_stop() -> None:
+        from services.scheduler import stop_auto_trading_jobs
+
+        stop_auto_trading_jobs()
 
     def _price_cache_cleanup() -> None:
         from services.price_cache import clear_expired_prices
@@ -263,6 +437,11 @@ def default_task_descriptors() -> List[TaskDescriptor]:
 
         stop_order_scheduler()
 
+    def _order_scheduler_owns_resources() -> bool:
+        from services.order_scheduler import order_scheduler_has_pending_cleanup
+
+        return order_scheduler_has_pending_cleanup()
+
     def _eval_checkpoint_job() -> None:
         from services.startup import schedule_eval_checkpoint_job
 
@@ -274,19 +453,31 @@ def default_task_descriptors() -> List[TaskDescriptor]:
                        dependencies=("redis_tool_cache",)),
         TaskDescriptor("docker_sandbox", _docker_sandbox_start, _docker_sandbox_stop,
                        required=False),
-        TaskDescriptor("scheduler", _scheduler_start, _scheduler_stop, required=True,
-                       dependencies=("extension_catalog",)),
+        TaskDescriptor(
+            "scheduler",
+            _scheduler_start,
+            _scheduler_stop,
+            required=True,
+            dependencies=("extension_catalog",),
+            owns_resources=_scheduler_owns_resources,
+            quiesce=_scheduler_quiesce,
+        ),
         TaskDescriptor("market_tasks", _market_tasks, required=True,
                        dependencies=("scheduler",)),
         TaskDescriptor("asset_curve_backfill_1h", _asset_curve_backfill, required=False),
-        TaskDescriptor("ai_auto_trading", _auto_trading, required=True,
+        TaskDescriptor("ai_auto_trading", _auto_trading, _auto_trading_stop, required=True,
                        dependencies=("scheduler", "market_tasks")),
         TaskDescriptor("price_cache_cleanup", _price_cache_cleanup, required=False,
                        dependencies=("scheduler",)),
         TaskDescriptor("margin_monitor", _margin_monitor, required=True,
                        dependencies=("scheduler",)),
-        TaskDescriptor("order_scheduler", _order_scheduler_start, _order_scheduler_stop,
-                       required=False),
+        TaskDescriptor(
+            "order_scheduler",
+            _order_scheduler_start,
+            _order_scheduler_stop,
+            required=False,
+            owns_resources=_order_scheduler_owns_resources,
+        ),
         TaskDescriptor("eval_checkpoint_job", _eval_checkpoint_job, required=False,
                        dependencies=("scheduler",)),
     ]

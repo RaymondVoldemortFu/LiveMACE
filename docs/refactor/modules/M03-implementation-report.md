@@ -95,6 +95,11 @@ create_agent(agent_type, llm, tools, **kwargs)
 
 旧 Agent 仍返回原来的 dict，保证当前交易调用链不变。`LegacyAgentAdapter` 已提供 `DecisionContext -> 旧 portfolio/prices -> AgentRunResult` 的同步转换，供 M04 逐个迁移内置 Agent；M03 不提前改写具体 Agent 文件。
 
+M05 为旧 `services.agent.tools.ToolRegistry` 提供了明确的同步 `ToolInvoker.call()`
+bridge，因此 deprecated factory 注入 `AgentBuildContext.tools` 的对象真实满足公开
+ToolInvoker 协议；旧 Agent 继续使用 `.get()`/`.openai_tools`，直到 M04/M06 删除
+该双接口过渡层。
+
 ## 第三方 Agent 的最小接入方式
 
 ```python

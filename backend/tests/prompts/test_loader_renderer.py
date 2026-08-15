@@ -44,6 +44,47 @@ def _shared_alias_dag(levels: int) -> str:
     return "\n".join(lines) + "\n"
 
 
+def test_render_size_limit_is_enforced_before_allocating_the_result():
+    import tracemalloc
+
+    from benchmark.contracts import PromptSpec
+    from benchmark.prompts.renderer import parse_template, render_template
+
+    placeholder_count = 20_000
+    variable = "x" * 1_000  # would render to ~20M characters
+    template = parse_template("{v}" * placeholder_count)
+    spec = PromptSpec(id="core.example.big", version="1.0.0", required_variables=("v",))
+
+    tracemalloc.start()
+    try:
+        with pytest.raises(PromptRenderError) as caught:
+            render_template(template, spec, {"v": variable}, max_characters=100)
+        _current, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert caught.value.code == "PROMPT_RENDER_TOO_LARGE"
+    assert caught.value.to_dict()["details"]["max_characters"] == 100
+    # The full ~20MB result must never be allocated; the limit check happens
+    # on the projected length before rendering.
+    assert peak < 5_000_000, f"peak allocation too high: {peak} bytes"
+
+
+def test_render_within_limit_still_renders_exact_content():
+    from benchmark.contracts import PromptSpec
+    from benchmark.prompts.renderer import parse_template, render_template
+
+    template = parse_template("a{{literal}}{v}z")
+    spec = PromptSpec(id="core.example.ok", version="1.0.0", required_variables=("v",))
+
+    rendered = render_template(template, spec, {"v": "-mid-"}, max_characters=17)
+    assert rendered.content == "a{literal}-mid-z"
+
+    with pytest.raises(PromptRenderError) as caught:
+        render_template(template, spec, {"v": "-mid-"}, max_characters=15)
+    assert caught.value.code == "PROMPT_RENDER_TOO_LARGE"
+
+
 def test_file_provider_normalizes_lf_and_renders_canonical_json(tmp_path):
     _write_index(tmp_path, variables="[portfolio]", optional='      memory_block: ""')
     (tmp_path / "system.txt").write_bytes(

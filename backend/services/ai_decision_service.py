@@ -504,7 +504,13 @@ def call_agent_for_decision(
 
         logger.info(f"Calling agent.run() for account {account_name} with decision_round_id={decision_round_id}")
         with tool_cache.use_round(decision_round_id):
-            decision = agent.run(portfolio=portfolio, prices=prices, on_step=on_step, trace_id=trace_id)
+            decision = agent.run(
+                portfolio=portfolio,
+                prices=prices,
+                on_step=on_step,
+                trace_id=trace_id,
+                decision_round_id=decision_round_id,
+            )
         logger.info(f"Agent.run() completed for account {account_name}, decision: {decision}")
 
         if decision:

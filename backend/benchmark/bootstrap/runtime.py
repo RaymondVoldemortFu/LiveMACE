@@ -29,6 +29,31 @@ from benchmark.bootstrap.tasks import TaskDescriptor, TaskRegistry
 logger = logging.getLogger(__name__)
 
 
+class RuntimeShutdownError(RuntimeError):
+    """Raised after all stop callbacks ran when one or more failed."""
+
+    def __init__(self, failures: dict[str, str]) -> None:
+        self.failures = dict(failures)
+        super().__init__(
+            "runtime shutdown failed for: " + ", ".join(sorted(self.failures))
+        )
+
+
+class RuntimeBootstrapError(RuntimeError):
+    """Startup failed and cleanup still owns retryable runtime resources."""
+
+    def __init__(
+        self,
+        start_error: BaseException,
+        handle: "RuntimeHandle",
+        cleanup_failures: dict[str, str],
+    ) -> None:
+        self.start_error = start_error
+        self.handle = handle
+        self.cleanup_failures = dict(cleanup_failures)
+        super().__init__(str(start_error))
+
+
 class StartupMode(str, Enum):
     """Production default is FULL; tests pass their mode explicitly —
     never inferred from hidden environment variables."""
@@ -109,11 +134,22 @@ def bootstrap_runtime_sync(context: BootstrapContext) -> RuntimeHandle:
         registry.register(descriptor)
     try:
         registry.start_all()
-    except Exception:
+    except Exception as start_error:
         # Partial-start failure: stop only what already started, then
         # surface the original error.
         logger.error("runtime bootstrap failed; stopping already-started tasks")
-        registry.stop_all()
+        cleanup_results = registry.stop_all()
+        cleanup_failures = {
+            task_id: error
+            for task_id, error in cleanup_results.items()
+            if error is not None
+        }
+        if cleanup_failures:
+            raise RuntimeBootstrapError(
+                start_error,
+                handle,
+                cleanup_failures,
+            ) from start_error
         raise
     logger.info("all runtime services initialized")
     return handle
@@ -125,6 +161,7 @@ def shutdown_runtime_sync(handle: RuntimeHandle) -> None:
     failed = {task_id: err for task_id, err in results.items() if err}
     if failed:
         logger.error("shutdown completed with stop failures: %s", failed)
+        raise RuntimeShutdownError(failed)
     else:
         logger.info("all runtime services shut down")
 
@@ -134,4 +171,6 @@ async def bootstrap_runtime(context: BootstrapContext) -> RuntimeHandle:
 
 
 async def shutdown_runtime(handle: RuntimeHandle) -> None:
+    # Stop callbacks are synchronous and cannot be cancelled. Never abandon
+    # the worker: the caller bounds retries, not in-flight cleanup.
     await anyio.to_thread.run_sync(shutdown_runtime_sync, handle)

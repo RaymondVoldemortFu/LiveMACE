@@ -77,7 +77,12 @@ def test_react_tool_call_is_completed_before_next_llm_step():
     agent = create_agent("react", llm, _registry_with_trade(events), max_steps=3)
     agent.set_tool_routing_enabled(False)
 
-    result = agent.run(PORTFOLIO, PRICES, trace_id="trace-1")
+    result = agent.run(
+        PORTFOLIO,
+        PRICES,
+        trace_id="trace-1",
+        decision_round_id="round-1",
+    )
 
     assert events == ["llm_1", "tool_started", "tool_finished", "llm_2"]
     assert result["protocol"] == "tool"
@@ -98,7 +103,12 @@ def test_react_does_not_repeat_completed_trade_when_trade_done_is_missing():
     agent = create_agent("react", llm, _registry_with_trade(events), max_steps=2)
     agent.set_tool_routing_enabled(False)
 
-    result = agent.run(PORTFOLIO, PRICES, trace_id="trace-no-marker")
+    result = agent.run(
+        PORTFOLIO,
+        PRICES,
+        trace_id="trace-no-marker",
+        decision_round_id="round-no-marker",
+    )
 
     assert events == ["tool_started", "tool_finished"]
     assert len(result["executed_trades"]) == 1

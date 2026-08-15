@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import logging
 import os
+import anyio
+import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import List, Optional
@@ -31,6 +33,7 @@ class AppSettings:
     title: str = "Crypto Paper Trading API"
     cors_allow_origins: List[str] = field(default_factory=lambda: ["*"])
     static_dir: Optional[str] = None  # default: backend/static
+    startup_cleanup_timeout_seconds: float = 10.0
 
     def resolved_static_dir(self) -> str:
         if self.static_dir is not None:
@@ -47,12 +50,61 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        from benchmark.bootstrap.runtime import RuntimeBootstrapError
+
         if mode == StartupMode.SCHEMA_ONLY:
             raise RuntimeError(
                 "SCHEMA_ONLY is for scripts/tests via bootstrap_runtime_sync; "
                 "an HTTP app must use FULL or NO_BACKGROUND"
             )
-        handle = await bootstrap_runtime(BootstrapContext(mode=mode))
+        try:
+            handle = await bootstrap_runtime(BootstrapContext(mode=mode))
+        except RuntimeBootstrapError as exc:
+            # Startup never reaches the lifespan yield/finally, so explicitly
+            # take ownership of the retryable handle before propagating the
+            # startup failure to ASGI.
+            app.state.runtime_handle = exc.handle
+            # External ASGI cancellation must not steal ownership mid-cleanup.
+            # The retry budget is bounded, but an in-flight stop callback is
+            # never abandoned: each shutdown_runtime call runs to completion
+            # (stop callbacks themselves are bounded) before the next retry.
+            with anyio.CancelScope(shield=True):
+                retry_delay = 0.05
+                deadline = (
+                    time.monotonic()
+                    + max(settings.startup_cleanup_timeout_seconds, 0.0)
+                )
+                cleanup_failures = dict(exc.cleanup_failures)
+                while True:
+                    try:
+                        await shutdown_runtime(exc.handle)
+                    except Exception as cleanup_error:
+                        failures = getattr(cleanup_error, "failures", None)
+                        if failures:
+                            cleanup_failures = dict(failures)
+                        else:
+                            cleanup_failures = {
+                                "runtime": (
+                                    f"{type(cleanup_error).__name__}: {cleanup_error}"
+                                )
+                            }
+                        logger.exception(
+                            "runtime startup cleanup remains incomplete; retrying"
+                        )
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            cleanup_failures["runtime"] = (
+                                "startup cleanup deadline exceeded"
+                            )
+                            raise RuntimeBootstrapError(
+                                exc.start_error,
+                                exc.handle,
+                                cleanup_failures,
+                            ) from exc
+                        await anyio.sleep(min(retry_delay, remaining))
+                        retry_delay = min(retry_delay * 2, 1.0)
+                    else:
+                        raise exc.start_error from exc
         app.state.runtime_handle = handle
         try:
             yield

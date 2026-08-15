@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Mapping, Protocol, Sequence
+from math import isfinite
+from typing import Mapping, Protocol, runtime_checkable
 
-from benchmark.contracts import JsonValue
+from benchmark.contracts import JsonValue, to_jsonable
 from benchmark.contracts.common import _freeze_mapping, _require_non_empty
-
-from .health import HealthStatus
-
 
 @dataclass(frozen=True)
 class LLMToolCall:
@@ -20,7 +18,10 @@ class LLMToolCall:
     def __post_init__(self) -> None:
         _require_non_empty(self.id, "id")
         _require_non_empty(self.name, "name")
-        object.__setattr__(self, "arguments", _freeze_mapping(self.arguments, "arguments"))
+        arguments = to_jsonable(self.arguments)
+        if not isinstance(arguments, dict):
+            raise TypeError("arguments must be a JSON object")
+        object.__setattr__(self, "arguments", _freeze_mapping(arguments, "arguments"))
 
 
 @dataclass(frozen=True)
@@ -38,9 +39,41 @@ class LLMRequest:
         _require_non_empty(self.model, "model")
         if not isinstance(self.tools, tuple):
             raise TypeError("tools must be a tuple")
-        object.__setattr__(self, "messages", tuple(_freeze_mapping(item, "message") for item in self.messages))
-        object.__setattr__(self, "tools", tuple(_freeze_mapping(item, "tool") for item in self.tools))
-        object.__setattr__(self, "metadata", _freeze_mapping(self.metadata, "metadata"))
+        if self.temperature is not None and (
+            isinstance(self.temperature, bool)
+            or not isinstance(self.temperature, (int, float))
+            or not isfinite(float(self.temperature))
+            or not 0 <= float(self.temperature) <= 2
+        ):
+            raise ValueError("temperature must be a finite number between 0 and 2")
+        if self.max_tokens is not None and (
+            isinstance(self.max_tokens, bool)
+            or not isinstance(self.max_tokens, int)
+            or self.max_tokens <= 0
+        ):
+            raise ValueError("max_tokens must be a positive integer")
+        messages = to_jsonable(self.messages)
+        tools = to_jsonable(self.tools)
+        metadata = to_jsonable(self.metadata)
+        if not isinstance(messages, list) or not all(
+            isinstance(item, dict) for item in messages
+        ):
+            raise TypeError("messages must contain JSON objects")
+        if not isinstance(tools, list) or not all(isinstance(item, dict) for item in tools):
+            raise TypeError("tools must contain JSON objects")
+        if not isinstance(metadata, dict):
+            raise TypeError("metadata must be a JSON object")
+        object.__setattr__(
+            self,
+            "messages",
+            tuple(_freeze_mapping(item, "message") for item in messages),
+        )
+        object.__setattr__(
+            self,
+            "tools",
+            tuple(_freeze_mapping(item, "tool") for item in tools),
+        )
+        object.__setattr__(self, "metadata", _freeze_mapping(metadata, "metadata"))
 
 
 @dataclass(frozen=True)
@@ -58,14 +91,9 @@ class LLMResponse:
         object.__setattr__(self, "raw", _freeze_mapping(self.raw, "raw"))
 
 
+@runtime_checkable
 class LLMClientPort(Protocol):
-    id: str
-    version: str
-    capabilities: tuple[str, ...]
-    config_schema: Mapping[str, JsonValue]
-
     def complete(self, request: LLMRequest) -> LLMResponse: ...
-    def healthcheck(self) -> HealthStatus: ...
 
 
 __all__ = ["LLMClientPort", "LLMRequest", "LLMResponse", "LLMToolCall"]

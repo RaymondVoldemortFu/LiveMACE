@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from decimal import Decimal
-from typing import Dict, Any, Optional, Callable
+from typing import Dict, Any, Optional, Callable, Mapping
 
 from benchmark.contracts import (
     AgentRunResult,
@@ -23,9 +23,59 @@ class BaseAgent(ABC):
         self.agent_name = agent_name
 
     @abstractmethod
-    def run(self, portfolio: Dict[str, Any], prices: Dict[str, float], on_step: Optional[Callable[[Dict], None]] = None, trace_id: Optional[str] = None) -> Dict[str, Any]:
+    def run(
+        self,
+        portfolio: Dict[str, Any],
+        prices: Dict[str, float],
+        on_step: Optional[Callable[[Dict], None]] = None,
+        trace_id: Optional[str] = None,
+        decision_round_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """Execute the agent's decision making process."""
         pass
+
+    def _invoke_llm_tool(
+        self,
+        name: str,
+        arguments: Mapping[str, Any],
+        *,
+        tool_call_id: str,
+        decision_round_id: Optional[str],
+    ) -> Any:
+        """Invoke a legacy Tool while keeping runtime metadata out of LLM input.
+
+        M06 will replace this bridge with ``ToolContext``. Until then, the
+        legacy Agents must propagate the provider call id and the orchestrator
+        decision-round id explicitly so trading commands have a stable key.
+        """
+
+        if not isinstance(arguments, Mapping):
+            raise TypeError("TOOL_ARGUMENTS_INVALID: arguments must be a mapping")
+        runtime_arguments = dict(arguments)
+        resolved_name = name.rsplit(":", 1)[-1] if isinstance(name, str) else name
+        if resolved_name == "execute_trade":
+            reserved = {
+                "idempotency_key",
+                "decision_round_id",
+                "tool_call_id",
+            }.intersection(runtime_arguments)
+            if reserved:
+                fields = ", ".join(sorted(reserved))
+                raise ValueError(
+                    "TOOL_RUNTIME_ARGUMENT_FORBIDDEN: "
+                    f"LLM supplied runtime-owned field(s): {fields}"
+                )
+            if not isinstance(decision_round_id, str) or not decision_round_id.strip():
+                raise RuntimeError(
+                    "DECISION_ROUND_ID_REQUIRED: execute_trade requires a runtime decision round id"
+                )
+            if not isinstance(tool_call_id, str) or not tool_call_id.strip():
+                raise RuntimeError(
+                    "TOOL_CALL_ID_REQUIRED: execute_trade requires a provider tool call id"
+                )
+            runtime_arguments["decision_round_id"] = decision_round_id
+            runtime_arguments["tool_call_id"] = tool_call_id
+        return self.tools.get(name)(**runtime_arguments)
 
 
 class LegacyAgentAdapter:
@@ -76,6 +126,7 @@ class LegacyAgentAdapter:
             prices=prices,
             on_step=self._on_step,
             trace_id=context.trace_id,
+            decision_round_id=context.decision_round_id,
         )
         if not isinstance(legacy_result, dict):
             raise TypeError("legacy Agent must return a dict")

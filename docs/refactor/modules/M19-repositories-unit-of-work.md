@@ -48,6 +48,13 @@ class UnitOfWork(Protocol):
 - repository 函数不调用 LLM/market/WS，不自行决定交易策略。
 - 原有 repository 行为和查询排序保持。
 
+## 实现约束：最小事务能力
+
+- UnitOfWork 不公开 SQLAlchemy Session、Engine、Connection、Pool 或 Result，也不通过通用代理/属性黑名单模拟安全边界。
+- SQLAlchemy Session 仅存在于 concrete UoW、repository adapter 与 infrastructure transaction adapter 内部；application service 只依赖 repository/transaction Protocol。
+- 正常退出但未 commit、业务拒绝、异常与取消均显式 rollback；commit/rollback 后禁止隐式开启第二个事务。
+- repository 公共结果逐步收敛为 DTO/view 或受控 handle；公共扩展永远不能取得 ORM/Session。
+
 ## 前置与并行
 
 前置 M01。各 repository domain 可并行；M12 涉及账户配置表，需协调后串行合并 model 变更。

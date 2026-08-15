@@ -22,12 +22,15 @@ from benchmark.persistence.repositories import (
     SnapshotRepository,
     TraceRepository,
     TradeRepository,
+    TradeCommandReceiptRepository,
     UserRepository,
 )
+from benchmark.persistence.errors import PersistenceConflictError
 from benchmark.persistence.uow import (
     SqlAlchemyUnitOfWork,
     UnitOfWork,
     UnitOfWorkFactory,
+    UnitOfWorkState,
     default_unit_of_work_factory,
 )
 
@@ -36,6 +39,7 @@ __all__ = [
     "PositionRepository",
     "OrderRepository",
     "TradeRepository",
+    "TradeCommandReceiptRepository",
     "DecisionRepository",
     "TraceRepository",
     "SnapshotRepository",
@@ -43,6 +47,8 @@ __all__ = [
     "UserRepository",
     "UnitOfWork",
     "UnitOfWorkFactory",
+    "UnitOfWorkState",
     "SqlAlchemyUnitOfWork",
     "default_unit_of_work_factory",
+    "PersistenceConflictError",
 ]

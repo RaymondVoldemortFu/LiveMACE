@@ -9,8 +9,9 @@ schema bootstrap stage (``benchmark.bootstrap.schema``) on every start.
 from __future__ import annotations
 
 import logging
+import hashlib
 from dataclasses import dataclass
-from typing import Callable, List, Optional
+from typing import Callable, Dict, List, Optional
 
 from sqlalchemy.engine import Connection, Engine
 
@@ -63,13 +64,302 @@ def _mysql_alter(statement: str) -> Callable[[Connection], None]:
     return apply
 
 
-def _never_applied(conn: Connection) -> bool:
-    # MySQL widenings are themselves idempotent; failure (already widened)
-    # is non-fatal, matching the old try/except-warn behavior in main.py.
-    return False
+def _mysql_columns_have_types(
+    table: str, expected: Dict[str, str]
+) -> Callable[[Connection], bool]:
+    """True when every column already has the target MySQL data type.
+
+    Checked through ``information_schema`` so the widening DDL runs only
+    when actually needed: repeating ``ALTER TABLE`` on every startup takes
+    metadata locks and triggers implicit commits even when it is a no-op.
+    """
+
+    def check(conn: Connection) -> bool:
+        from sqlalchemy import text
+
+        rows = conn.execute(
+            text(
+                "SELECT COLUMN_NAME, DATA_TYPE FROM information_schema.COLUMNS "
+                "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :table_name"
+            ),
+            {"table_name": table},
+        )
+        actual = {str(row[0]).lower(): str(row[1]).lower() for row in rows}
+        return all(
+            actual.get(column.lower()) == data_type.lower()
+            for column, data_type in expected.items()
+        )
+
+    return check
+
+
+def _trade_command_receipts_exists(conn: Connection) -> bool:
+    from sqlalchemy import inspect
+
+    return inspect(conn).has_table("trade_command_receipts")
+
+
+def _create_trade_command_receipts(conn: Connection) -> None:
+    from database.models import TradeCommandReceipt
+
+    TradeCommandReceipt.__table__.create(bind=conn, checkfirst=True)
+
+
+def _scheduled_job_occurrences_exists(conn: Connection) -> bool:
+    from sqlalchemy import inspect
+
+    inspector = inspect(conn)
+    # The epoch-us temp table is an owned intermediate phase of the following
+    # migration. Treat it as existence here so the create migration cannot
+    # manufacture an empty final table and shadow recoverable rows after an
+    # interruption between DROP source and RENAME temp.
+    return inspector.has_table(
+        "scheduled_job_occurrences"
+    ) or inspector.has_table("scheduled_job_occurrences_epoch_us")
+
+
+def _create_scheduled_job_occurrences(conn: Connection) -> None:
+    from database.models import ScheduledJobOccurrence
+
+    ScheduledJobOccurrence.__table__.create(bind=conn, checkfirst=True)
+
+
+def _scheduled_job_occurrences_uses_epoch_us(conn: Connection) -> bool:
+    from sqlalchemy import inspect
+
+    inspector = inspect(conn)
+    if not inspector.has_table("scheduled_job_occurrences"):
+        return False
+    if inspector.has_table("scheduled_job_occurrences_epoch_us"):
+        return False
+    columns = {
+        column["name"]: column
+        for column in inspector.get_columns("scheduled_job_occurrences")
+    }
+    epoch_column = columns.get("run_at_epoch_us")
+    if epoch_column is None or epoch_column.get("nullable", True):
+        return False
+    if "run_date" in columns:
+        return False
+    return any(
+        constraint.get("column_names") == ["job_id", "run_at_epoch_us"]
+        for constraint in inspector.get_unique_constraints(
+            "scheduled_job_occurrences"
+        )
+    )
+
+
+def _upgrade_scheduled_job_occurrences_to_epoch_us(conn: Connection) -> None:
+    """Upgrade the short-lived run_date schema without losing consumed rows."""
+    from sqlalchemy import inspect, text
+
+    initial_inspector = inspect(conn)
+    source_exists_initially = initial_inspector.has_table(
+        "scheduled_job_occurrences"
+    )
+    temp_exists_initially = initial_inspector.has_table(
+        "scheduled_job_occurrences_epoch_us"
+    )
+    if not source_exists_initially and not temp_exists_initially:
+        _create_scheduled_job_occurrences(conn)
+        return
+    if conn.dialect.name == "sqlite":
+        inspector = inspect(conn)
+        source_exists = inspector.has_table("scheduled_job_occurrences")
+        target_exists = inspector.has_table("scheduled_job_occurrences_epoch_us")
+        if source_exists:
+            source_columns = {
+                column["name"]
+                for column in inspector.get_columns("scheduled_job_occurrences")
+            }
+            if "run_at_epoch_us" in source_columns:
+                if target_exists:
+                    # A previous buggy/interrupted startup may have both an
+                    # epoch-us final table and the recovery temp table. Merge
+                    # by the occurrence identity before dropping temp; never
+                    # infer "stale" merely from the final table's existence.
+                    conn.execute(
+                        text(
+                            "INSERT OR IGNORE INTO scheduled_job_occurrences "
+                            "(id, job_id, run_at_epoch_us, consumed_at) "
+                            "SELECT id, job_id, run_at_epoch_us, consumed_at "
+                            "FROM scheduled_job_occurrences_epoch_us"
+                        )
+                    )
+                    missing_count = conn.execute(
+                        text(
+                            "SELECT COUNT(*) "
+                            "FROM scheduled_job_occurrences_epoch_us temp "
+                            "LEFT JOIN scheduled_job_occurrences final "
+                            "ON final.job_id = temp.job_id "
+                            "AND final.run_at_epoch_us = temp.run_at_epoch_us "
+                            "WHERE final.id IS NULL"
+                        )
+                    ).scalar_one()
+                    if missing_count:
+                        raise RuntimeError(
+                            "scheduled occurrence recovery temp contains "
+                            f"{missing_count} unmerged row(s)"
+                        )
+                    conn.execute(
+                        text("DROP TABLE scheduled_job_occurrences_epoch_us")
+                    )
+                return
+        if not target_exists:
+            conn.execute(
+                text(
+                    "CREATE TABLE IF NOT EXISTS scheduled_job_occurrences_epoch_us ("
+                "id INTEGER NOT NULL PRIMARY KEY, "
+                "job_id VARCHAR(255) NOT NULL, "
+                "run_at_epoch_us INTEGER NOT NULL, "
+                "consumed_at DATETIME NOT NULL, "
+                "CONSTRAINT uix_scheduled_job_occurrence_key "
+                "UNIQUE (job_id, run_at_epoch_us))"
+                )
+            )
+        if source_exists:
+            # Re-running after an interrupted copy is safe: primary/unique
+            # keys make every source row idempotent.
+            conn.execute(
+                text(
+                    "INSERT OR IGNORE INTO scheduled_job_occurrences_epoch_us "
+                    "(id, job_id, run_at_epoch_us, consumed_at) "
+                    "SELECT id, job_id, "
+                    "CAST(strftime('%s', substr(run_date, 1, 19)) AS INTEGER) * 1000000 + "
+                    "CASE WHEN instr(run_date, '.') > 0 "
+                    "THEN CAST(substr(run_date || '000000', instr(run_date, '.') + 1, 6) AS INTEGER) "
+                    "ELSE 0 END, "
+                    "consumed_at FROM scheduled_job_occurrences"
+                )
+            )
+            source_count = conn.execute(
+                text("SELECT COUNT(*) FROM scheduled_job_occurrences")
+            ).scalar_one()
+            target_count = conn.execute(
+                text("SELECT COUNT(*) FROM scheduled_job_occurrences_epoch_us")
+            ).scalar_one()
+            if source_count != target_count:
+                raise RuntimeError(
+                    "scheduled occurrence migration copy is incomplete: "
+                    f"source={source_count}, target={target_count}"
+                )
+            conn.execute(text("DROP TABLE scheduled_job_occurrences"))
+        conn.execute(
+            text(
+                "ALTER TABLE scheduled_job_occurrences_epoch_us "
+                "RENAME TO scheduled_job_occurrences"
+            )
+        )
+        return
+    if conn.dialect.name == "mysql":
+        if not source_exists_initially:
+            _create_scheduled_job_occurrences(conn)
+            return
+        # MySQL DDL implicitly commits. Every phase is therefore discovered
+        # from schema state and individually retryable after interruption.
+        inspector = inspect(conn)
+        columns = {
+            column["name"]: column
+            for column in inspector.get_columns("scheduled_job_occurrences")
+        }
+        if "run_at_epoch_us" not in columns:
+            conn.execute(
+                text(
+                    "ALTER TABLE scheduled_job_occurrences "
+                    "ADD COLUMN run_at_epoch_us BIGINT NULL"
+                )
+            )
+
+        inspector = inspect(conn)
+        columns = {
+            column["name"]: column
+            for column in inspector.get_columns("scheduled_job_occurrences")
+        }
+        if "run_date" in columns:
+            # The legacy DATETIME stored a UTC wall clock without timezone.
+            # TIMESTAMPDIFF compares two DATETIME values directly and is not
+            # affected by the MySQL connection/session timezone.
+            conn.execute(
+                text(
+                    "UPDATE scheduled_job_occurrences SET run_at_epoch_us = "
+                    "TIMESTAMPDIFF(MICROSECOND, "
+                    "CAST('1970-01-01 00:00:00' AS DATETIME), run_date) "
+                    "WHERE run_at_epoch_us IS NULL"
+                )
+            )
+
+            inspector = inspect(conn)
+            for constraint in inspector.get_unique_constraints(
+                "scheduled_job_occurrences"
+            ):
+                if constraint.get("column_names") == [
+                    "job_id",
+                    "run_date",
+                ]:
+                    name = constraint.get("name")
+                    if name:
+                        conn.exec_driver_sql(
+                            "ALTER TABLE scheduled_job_occurrences "
+                            f"DROP INDEX `{name.replace('`', '``')}`"
+                        )
+            conn.execute(
+                text(
+                    "ALTER TABLE scheduled_job_occurrences "
+                    "DROP COLUMN run_date, "
+                    "MODIFY run_at_epoch_us BIGINT NOT NULL"
+                )
+            )
+        elif columns["run_at_epoch_us"].get("nullable", True):
+            conn.execute(
+                text(
+                    "ALTER TABLE scheduled_job_occurrences "
+                    "MODIFY run_at_epoch_us BIGINT NOT NULL"
+                )
+            )
+
+        inspector = inspect(conn)
+        if not any(
+            constraint.get("column_names") == ["job_id", "run_at_epoch_us"]
+            for constraint in inspector.get_unique_constraints(
+                "scheduled_job_occurrences"
+            )
+        ):
+            conn.execute(
+                text(
+                    "ALTER TABLE scheduled_job_occurrences "
+                    "ADD CONSTRAINT uix_scheduled_job_occurrence_key "
+                    "UNIQUE (job_id, run_at_epoch_us)"
+                )
+            )
+        return
+    raise RuntimeError(
+        "scheduled occurrence epoch-us migration does not support dialect "
+        f"{conn.dialect.name!r}"
+    )
 
 
 STARTUP_MIGRATIONS: List[StartupMigration] = [
+    StartupMigration(
+        migration_id="202608_scheduled_job_occurrences",
+        dialect=None,
+        is_applied=_scheduled_job_occurrences_exists,
+        apply=_create_scheduled_job_occurrences,
+        fatal=True,
+    ),
+    StartupMigration(
+        migration_id="202608_scheduled_job_occurrences_epoch_us",
+        dialect=None,
+        is_applied=_scheduled_job_occurrences_uses_epoch_us,
+        apply=_upgrade_scheduled_job_occurrences_to_epoch_us,
+        fatal=True,
+    ),
+    StartupMigration(
+        migration_id="202608_trade_command_receipts",
+        dialect=None,
+        is_applied=_trade_command_receipts_exists,
+        apply=_create_trade_command_receipts,
+        fatal=True,
+    ),
     StartupMigration(
         migration_id="202606_agent_checkpoint_volatility",
         dialect="sqlite",
@@ -91,7 +381,7 @@ STARTUP_MIGRATIONS: List[StartupMigration] = [
     StartupMigration(
         migration_id="202606_ai_decision_reason_text",
         dialect="mysql",
-        is_applied=_never_applied,
+        is_applied=_mysql_columns_have_types("ai_decision_logs", {"reason": "text"}),
         apply=_mysql_alter(
             "ALTER TABLE ai_decision_logs MODIFY COLUMN reason TEXT NOT NULL"
         ),
@@ -100,7 +390,14 @@ STARTUP_MIGRATIONS: List[StartupMigration] = [
     StartupMigration(
         migration_id="202606_agent_traces_longtext",
         dialect="mysql",
-        is_applied=_never_applied,
+        is_applied=_mysql_columns_have_types(
+            "agent_traces",
+            {
+                "content": "longtext",
+                "tool_calls": "longtext",
+                "tool_output": "longtext",
+            },
+        ),
         apply=_mysql_alter(
             "ALTER TABLE agent_traces "
             "MODIFY COLUMN content LONGTEXT NULL, "
@@ -127,11 +424,93 @@ def run_startup_migrations(
         if migration.dialect is not None and engine.dialect.name != migration.dialect:
             continue
         try:
-            with engine.begin() as conn:
-                if migration.is_applied(conn):
-                    logger.info("startup migration already applied: %s", migration.migration_id)
-                    continue
-                migration.apply(conn)
+            if engine.dialect.name == "sqlite":
+                # Serialize schema discovery + DDL across concurrent app
+                # startups. A deferred transaction can read stale phase state
+                # before losing the write race; BEGIN IMMEDIATE acquires the
+                # writer reservation first so every process discovers the
+                # state committed by its predecessor.
+                with engine.connect() as conn:
+                    conn.exec_driver_sql("BEGIN IMMEDIATE")
+                    try:
+                        already_applied = migration.is_applied(conn)
+                        if not already_applied:
+                            migration.apply(conn)
+                        conn.commit()
+                    except BaseException:
+                        conn.rollback()
+                        raise
+            elif engine.dialect.name == "mysql":
+                # MySQL DDL implicitly commits, so a transaction cannot close
+                # the discovery/apply TOCTOU window. A connection-scoped
+                # advisory lock survives those commits and serializes every
+                # phase across concurrently starting application instances.
+                from sqlalchemy import text
+
+                with engine.connect() as conn:
+                    database_name = (
+                        conn.exec_driver_sql("SELECT DATABASE()").scalar_one_or_none()
+                        or "default"
+                    )
+                    lock_identity = (
+                        f"{database_name}:{migration.migration_id}".encode("utf-8")
+                    )
+                    lock_name = (
+                        "open_alpha_migration_"
+                        + hashlib.sha256(lock_identity).hexdigest()[:40]
+                    )
+                    acquired = conn.execute(
+                        text("SELECT GET_LOCK(:lock_name, :timeout_seconds)"),
+                        {"lock_name": lock_name, "timeout_seconds": 30},
+                    ).scalar_one()
+                    conn.commit()
+                    if acquired != 1:
+                        raise RuntimeError(
+                            "timed out acquiring MySQL startup migration lock "
+                            f"for {migration.migration_id!r}"
+                        )
+                    operation_failed = False
+                    try:
+                        already_applied = migration.is_applied(conn)
+                        if not already_applied:
+                            migration.apply(conn)
+                        conn.commit()
+                    except BaseException:
+                        operation_failed = True
+                        conn.rollback()
+                        raise
+                    finally:
+                        try:
+                            released = conn.execute(
+                                text("SELECT RELEASE_LOCK(:lock_name)"),
+                                {"lock_name": lock_name},
+                            ).scalar_one()
+                            conn.commit()
+                            if released != 1:
+                                raise RuntimeError(
+                                    "MySQL startup migration lock was not owned "
+                                    f"for {migration.migration_id!r}"
+                                )
+                        except BaseException:
+                            if operation_failed:
+                                logger.exception(
+                                    "failed to release MySQL migration lock after "
+                                    "migration failure: %s",
+                                    migration.migration_id,
+                                )
+                            else:
+                                raise
+            else:
+                with engine.begin() as conn:
+                    already_applied = migration.is_applied(conn)
+                    if not already_applied:
+                        migration.apply(conn)
+            if already_applied:
+                logger.info(
+                    "startup migration already applied: %s",
+                    migration.migration_id,
+                )
+                continue
             applied.append(migration.migration_id)
             logger.info("startup migration applied: %s", migration.migration_id)
         except Exception as exc:

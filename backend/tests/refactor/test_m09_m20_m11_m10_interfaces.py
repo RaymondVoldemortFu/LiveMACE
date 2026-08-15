@@ -8,15 +8,24 @@ from decimal import Decimal
 from typing import Mapping
 
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from benchmark.application.decisions import DecisionRoundService, RunDecisionRound
-from benchmark.application.trading import TradeCommandGateway, TradeCommandIdempotencyStore
+from benchmark.application.trading import (
+    SynchronousTradeCommandGateway,
+    TradeCommandIdempotencyStore,
+)
 from benchmark.contracts import Market, TradeCommand
 from benchmark.infrastructure.cache import LegacyToolCacheAdapter
 from benchmark.infrastructure.market.services import DisplayMarketDataService, TradingMarketDataService
 from benchmark.infrastructure.market.symbols import infer_market, resolve_symbol_market
 from benchmark.providers import Freshness, HealthStatus, KlineQuery, KlineResult, MarketDataPort, PriceResult
 from benchmark.testing import FakeMarketDataPort as ReusableFakeMarketDataPort
+from benchmark.persistence import SqlAlchemyUnitOfWork
+from database.connection import Base
+from database.models import Account, User
 
 
 NOW = datetime(2026, 7, 20, 12, 0, tzinfo=timezone.utc)
@@ -37,8 +46,66 @@ class FakeMarketDataPort(MarketDataPort):
     def get_klines(self, query: KlineQuery) -> KlineResult:
         return KlineResult(rows=({"symbol": query.symbol, "market": query.market.value},), source=self.id, freshness=Freshness.FRESH)
 
+    def get_market_status(self, symbol, market):
+        from benchmark.providers import MarketStatusResult
+
+        return MarketStatusResult(True, self.id, NOW)
+
     def healthcheck(self) -> HealthStatus:
         return HealthStatus("ok", self.id)
+
+
+def _gateway(executor, store=None):
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    session = session_factory()
+    user = User(username="gateway-test", is_active="true")
+    session.add(user)
+    session.flush()
+    session.add(
+        Account(
+            id=1,
+            user_id=user.id,
+            name="gateway",
+            account_type="AI",
+            initial_capital=10000,
+            current_cash=10000,
+            frozen_cash=0,
+            is_active="true",
+        )
+    )
+    session.commit()
+    session.close()
+    kwargs = {}
+    if store is not None:
+        kwargs["_store"] = store
+
+    class TestUnitOfWork(SqlAlchemyUnitOfWork):
+        def _build_adapters(self):
+            super()._build_adapters()
+            operations = self.trade_operations
+
+            class TestTradeOperations:
+                def execute_trade(self, command):
+                    return executor(operations._session_provider(), command)
+
+                def __getattr__(self, name):
+                    return getattr(operations, name)
+
+            self.trade_operations = TestTradeOperations()
+
+    return (
+        SynchronousTradeCommandGateway(
+            lambda: TestUnitOfWork(session_factory),
+            **kwargs,
+        ),
+        session_factory,
+    )
 
 
 def test_m09_market_port_is_synchronous_and_returns_structured_results():
@@ -79,12 +146,12 @@ def test_m20_display_market_service_can_allow_or_reject_stale_prices():
 def test_m11_gateway_is_synchronous_and_idempotent():
     calls = []
 
-    def fake_legacy(**kwargs):
-        calls.append(kwargs)
+    def fake_legacy(session, command):
+        calls.append(command)
         return {"executed": True, "order_id": 123, "trade_id": 456}
 
 
-    gateway = TradeCommandGateway(db=object(), executor=fake_legacy)
+    gateway, _ = _gateway(fake_legacy)
     command = TradeCommand(
         account_id=1,
         operation="open",
@@ -112,12 +179,12 @@ def test_m11_gateway_is_synchronous_and_idempotent():
 def test_m11_gateway_caches_rejected_results_for_same_key():
     calls = []
 
-    def fake_legacy(**kwargs):
-        calls.append(kwargs)
+    def fake_legacy(session, command):
+        calls.append(command)
         return {"executed": False, "error": "market is closed"}
 
     store = TradeCommandIdempotencyStore()
-    gateway = TradeCommandGateway(db=object(), executor=fake_legacy, _store=store)
+    gateway, _ = _gateway(fake_legacy, store)
     command = TradeCommand(1, "open", Market.CRYPTO, "BTC", "long", "portion", Decimal("0.2"), 1, "test", "round-1:call-1")
 
     first = gateway.execute(command)
@@ -135,14 +202,14 @@ def test_m11_gateway_deduplicates_concurrent_same_key():
     release = Event()
     calls = []
 
-    def fake_legacy(**kwargs):
-        calls.append(kwargs)
+    def fake_legacy(session, command):
+        calls.append(command)
         started.set()
         release.wait(timeout=2)
         return {"executed": True, "order_id": 123, "trade_id": 456}
 
     store = TradeCommandIdempotencyStore()
-    gateway = TradeCommandGateway(db=object(), executor=fake_legacy, _store=store)
+    gateway, _ = _gateway(fake_legacy, store)
     command = TradeCommand(1, "open", Market.CRYPTO, "BTC", "long", "portion", Decimal("0.2"), 1, "test", "same-key")
 
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -157,33 +224,46 @@ def test_m11_gateway_deduplicates_concurrent_same_key():
     assert len(calls) == 1
 
 
-def test_m11_default_gateway_reuses_idempotency_store_between_instances(monkeypatch):
-    import benchmark.application.trading.gateway as gateway_module
-
+def test_m11_durable_receipt_is_reused_between_gateway_instances():
     calls = []
 
-    def fake_legacy(**kwargs):
-        calls.append(kwargs)
+    def fake_legacy(session, command):
+        calls.append(command)
         return {"executed": True, "order_id": 321}
 
-    first_gateway = gateway_module.get_default_trade_gateway(object())
-    second_gateway = gateway_module.get_default_trade_gateway(object())
-    first_gateway.executor = fake_legacy
-    second_gateway.executor = fake_legacy
+    first_gateway, session_factory = _gateway(fake_legacy)
+
+    class SecondTestUnitOfWork(SqlAlchemyUnitOfWork):
+        def _build_adapters(self):
+            super()._build_adapters()
+            operations = self.trade_operations
+
+            class TestTradeOperations:
+                def execute_trade(self, command):
+                    return fake_legacy(operations._session_provider(), command)
+
+                def __getattr__(self, name):
+                    return getattr(operations, name)
+
+            self.trade_operations = TestTradeOperations()
+
+    second_gateway = SynchronousTradeCommandGateway(
+        lambda: SecondTestUnitOfWork(session_factory)
+    )
     command = TradeCommand(1, "open", Market.CRYPTO, "BTC", "long", "portion", Decimal("0.2"), 1, "test", "shared-key")
 
     first = first_gateway.execute(command)
     second = second_gateway.execute(command)
 
-    assert first is second
+    assert first == second
     assert len(calls) == 1
 
 def test_m11_gateway_maps_rejects_to_stable_codes():
-    def fake_legacy(**kwargs):
+    def fake_legacy(session, command):
         return {"executed": False, "error": "US market is closed for AAPL"}
 
 
-    gateway = TradeCommandGateway(db=object(), executor=fake_legacy)
+    gateway, _ = _gateway(fake_legacy)
     command = TradeCommand(1, "open", Market.US, "AAPL", "long", "portion", Decimal("0.1"), 1, "test", "k")
 
     result = gateway.execute(command)
@@ -271,7 +351,7 @@ def test_m11_execute_trade_tool_uses_round_tool_call_idempotency_key(monkeypatch
                 command,
             )
 
-    monkeypatch.setattr(trading_app, "get_default_trade_gateway", lambda db: FakeGateway())
+    monkeypatch.setattr(trading_app, "get_default_trade_gateway", lambda: FakeGateway())
 
     trade_execution_tool.execute_trade_tool(
         db=object(),
@@ -304,7 +384,7 @@ def test_m11_execute_trade_tool_uses_round_tool_call_idempotency_key(monkeypatch
     ]
 
 
-def test_m11_execute_trade_tool_without_round_uses_per_call_key(monkeypatch):
+def test_m11_execute_trade_tool_without_stable_key_is_rejected(monkeypatch):
     from benchmark.contracts import TradeCommandResult
 
     monkeypatch.setenv("ALPACA_KEY", "dummy")
@@ -320,23 +400,21 @@ def test_m11_execute_trade_tool_without_round_uses_per_call_key(monkeypatch):
             captured_keys.append(command.idempotency_key)
             return TradeCommandResult(True, True, None, None, 1, 2, command)
 
-    monkeypatch.setattr(trading_app, "get_default_trade_gateway", lambda db: FakeGateway())
+    monkeypatch.setattr(trading_app, "get_default_trade_gateway", lambda: FakeGateway())
 
-    for _ in range(2):
-        trade_execution_tool.execute_trade_tool(
-            db=object(),
-            account_id=1,
-            operation="open",
-            symbol="BTC",
-            market="CRYPTO",
-            direction="long",
-            target_portion_of_balance=0.1,
-            leverage=2,
-        )
+    result = trade_execution_tool.execute_trade_tool(
+        db=object(),
+        account_id=1,
+        operation="open",
+        symbol="BTC",
+        market="CRYPTO",
+        direction="long",
+        target_portion_of_balance=0.1,
+        leverage=2,
+    )
 
-    assert captured_keys[0].startswith("tool:")
-    assert captured_keys[1].startswith("tool:")
-    assert captured_keys[0] != captured_keys[1]
+    assert result["reject_code"] == "IDEMPOTENCY_KEY_REQUIRED"
+    assert captured_keys == []
 
 
 
@@ -350,12 +428,12 @@ def test_m09_sandbox_adapter_uses_lease_container():
             self.leased = []
             self.released = []
 
-        def lease_container(self, account_id):
-            self.leased.append(account_id)
+        def lease_container(self, account_id, lease_id):
+            self.leased.append((account_id, lease_id))
             return "container-1"
 
-        def release_container(self, account_id):
-            self.released.append(account_id)
+        def release_container(self, account_id, lease_id):
+            self.released.append((account_id, lease_id))
 
     service = FakeContainerService()
     adapter = ContainerServiceSandboxAdapter(service)
@@ -364,8 +442,8 @@ def test_m09_sandbox_adapter_uses_lease_container():
     adapter.release(lease)
 
     assert lease.container_id == "container-1"
-    assert service.leased == [7]
-    assert service.released == [7]
+    assert service.leased == [(7, lease.metadata["lease_id"])]
+    assert service.released == [(7, lease.metadata["lease_id"])]
 
 
 def test_m09_sandbox_adapter_rejects_missing_container_id():
@@ -373,7 +451,7 @@ def test_m09_sandbox_adapter_rejects_missing_container_id():
     from benchmark.providers.errors import ProviderError
 
     class FakeContainerService:
-        def lease_container(self, account_id):
+        def lease_container(self, account_id, lease_id):
             return None
 
     with pytest.raises(ProviderError, match="failed to lease sandbox container"):
@@ -411,9 +489,14 @@ def test_m11_execute_trade_tool_preserves_legacy_result_fields(monkeypatch):
                 },
             )
 
-    monkeypatch.setattr(trading_app, "get_default_trade_gateway", lambda db: FakeGateway())
+    monkeypatch.setattr(trading_app, "get_default_trade_gateway", lambda: FakeGateway())
 
-    result = trade_execution_tool.execute_trade_tool(db=object(), account_id=1, operation="close_all")
+    result = trade_execution_tool.execute_trade_tool(
+        db=object(),
+        account_id=1,
+        operation="close_all",
+        idempotency_key="round-1:call-1",
+    )
 
     assert result["closed_orders"] == []
     assert result["message"] == "No positions to close."
