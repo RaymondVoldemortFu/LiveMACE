@@ -363,3 +363,7 @@ backend/eval/eval_output/
 *.sql
 *.docx
 *_report.md
+__pycache__
+*.pyc
+
+

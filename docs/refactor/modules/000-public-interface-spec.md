@@ -307,6 +307,8 @@ class ToolEventSink(Protocol):
     def emit(self, event: "ToolRuntimeEvent") -> None: ...
 ```
 
+`AgentRuntimeEvent.type` 允许：`agent.started`、`agent.completed`、`agent.failed`、`agent.cancelled`、`agent.step`。`agent.step` 对应内置 Agent 的逐步回调；`metadata` 必须包含 1-based `step_number` 和 `role`，并保留 `content`、`tool_calls`、`name`、`tool_call_id` 等消息字段。持久化到 `AgentTrace` 由 M16 完成。
+
 Provider port 与 Agent/Tool 一样采用同步接口。Provider 错误统一包含 `code`、`message`、`retryable`、`provider_id`；四字段由 `benchmark.contracts.ProviderError` 直接承载（`retryable`/`provider_id` 为 keyword-only、有默认值），provider adapter 内完成第三方异常归一化。第三方扩展可在自身实现内部使用异步 I/O，但必须同步返回 port 规定的结果，系统不负责驱动其 event loop。
 
 ## 7. Trade Command Gateway
