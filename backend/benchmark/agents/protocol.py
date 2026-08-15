@@ -146,6 +146,7 @@ class AgentRuntimeEvent:
             "agent.completed",
             "agent.failed",
             "agent.cancelled",
+            "agent.step",
         }:
             raise ValueError("unsupported Agent runtime event type")
         if self.occurred_at.tzinfo is None or self.occurred_at.utcoffset() is None:

@@ -12,7 +12,7 @@ from .tool_selector import (
     META_TOOL_NAME,
 )
 from config.agent_config import AgentConfig
-from services.agent.prompts.system_prompts import get_trade_agent_prompt
+from benchmark.builtin.prompts import render_react_prompt
 from .base import BaseAgent
 from services.time_source import now_in_tz
 
@@ -48,13 +48,39 @@ class ReActAgent(BaseAgent):
         max_steps: int = AgentConfig.MAX_STEPS,
         user_id: str = None,
         agent_name: Optional[str] = None,
+        tool_routing_enabled: Optional[bool] = None,
+        memory_enabled: Optional[bool] = None,
+        step_reminder_threshold: Optional[int] = None,
+        include_simulation_notice: Optional[bool] = None,
+        prompt_resolver=None,
     ):
         super().__init__(llm, tools, agent_name=agent_name)
         self.max_steps = max_steps
         self.user_id = user_id
-        self.tool_routing_enabled = bool(getattr(AgentConfig, "AGENT_ENABLE_TOOL_ROUTING", True))
-        # Memory tools are now registered in env_wrapper.register_default_tools()
-        # self.memory = get_memory_service()
+        self.tool_routing_enabled = (
+            bool(getattr(AgentConfig, "AGENT_ENABLE_TOOL_ROUTING", True))
+            if tool_routing_enabled is None
+            else bool(tool_routing_enabled)
+        )
+        self.memory_enabled = (
+            any(
+                tool.name in ["memory_add", "memory_search"]
+                for tool in self.tools.tools.values()
+            )
+            if memory_enabled is None
+            else bool(memory_enabled)
+        )
+        self.step_reminder_threshold = (
+            AgentConfig.STEP_REMINDER_THRESHOLD
+            if step_reminder_threshold is None
+            else int(step_reminder_threshold)
+        )
+        self.include_simulation_notice = (
+            bool(getattr(AgentConfig, "AGENT_INCLUDE_SIMULATION_NOTICE", False))
+            if include_simulation_notice is None
+            else bool(include_simulation_notice)
+        )
+        self.prompt_resolver = prompt_resolver
         ensure_tool_selector_tool(self.llm, self.tools)
 
     def set_tool_routing_enabled(self, enabled: bool):
@@ -97,6 +123,27 @@ class ReActAgent(BaseAgent):
         return decision
 
     @staticmethod
+    def _has_filled_trade(executed_trades: List[Dict[str, Any]]) -> bool:
+        """True when execute_trade actually opened or closed a position."""
+
+        for item in executed_trades:
+            if not isinstance(item, dict) or item.get("executed") is not True:
+                continue
+            operation = str(item.get("operation") or "").strip()
+            if operation == "hold":
+                continue
+            if operation == "close_all":
+                closed = item.get("closed_orders") or []
+                if isinstance(closed, (list, tuple)) and any(
+                    isinstance(order, dict) for order in closed
+                ):
+                    return True
+                continue
+            if operation in {"open", "close", "all_in"}:
+                return True
+        return False
+
+    @staticmethod
     def _is_trade_done_message(text: str) -> bool:
         if not text:
             return False
@@ -136,11 +183,11 @@ class ReActAgent(BaseAgent):
         agent_logger.info(f"Portfolio: {json.dumps(portfolio, ensure_ascii=False)}")
         agent_logger.info(f"Prices: {json.dumps(prices, ensure_ascii=False)}")
 
-        # Check if memory tools are available
-        has_memory = any(tool.name in ['memory_add', 'memory_search'] for tool in self.tools.tools.values())
-        system_prompt = get_trade_agent_prompt(
-            memory_enabled=has_memory,
+        system_prompt = render_react_prompt(
+            memory_enabled=self.memory_enabled,
             tool_routing_enabled=self.tool_routing_enabled,
+            include_simulation_notice=self.include_simulation_notice,
+            resolver=self.prompt_resolver,
         )
 
         # Get current UTC+8 time
@@ -187,7 +234,7 @@ class ReActAgent(BaseAgent):
             remaining_steps = self.max_steps - step
             request_messages = list(messages)
 
-            if remaining_steps < AgentConfig.STEP_REMINDER_THRESHOLD:
+            if remaining_steps < self.step_reminder_threshold:
                 logger.info(f"Adding step reminder (Remaining: {remaining_steps})")
                 reminder_text = (
                     f"Reminder: You have {remaining_steps} steps remaining. "
@@ -379,6 +426,7 @@ class ReActAgent(BaseAgent):
             text_content = content or ""
             if self._is_trade_done_message(text_content):
                 # Only write fallback decision if no execute_trade was called
+                has_successful_trade = self._has_filled_trade(executed_trades)
                 if not executed_trades:
                     decision = {
                         "operation": "hold",
@@ -389,6 +437,7 @@ class ReActAgent(BaseAgent):
                         "reason": f"Tool-mode terminated by token {termination_token}",
                         "protocol": "tool",
                         "executed_trades": executed_trades,
+                        "termination_reason": "hold",
                     }
                 else:
                     # execute_trade was called, don't write duplicate decision
@@ -402,6 +451,9 @@ class ReActAgent(BaseAgent):
                         "protocol": "tool",
                         "executed_trades": executed_trades,
                         "skip_logging": True,  # signal to skip AIDecisionLog
+                        "termination_reason": (
+                            "trade_done" if has_successful_trade else "hold"
+                        ),
                     }
                 logger.info(
                     f"Agent terminated tool-mode loop with token. executed_trade_calls={len(executed_trades)}"
@@ -442,5 +494,6 @@ class ReActAgent(BaseAgent):
             }
             decision["protocol"] = "tool"
             decision["executed_trades"] = executed_trades
+            decision["termination_reason"] = "max_steps"
 
         return decision

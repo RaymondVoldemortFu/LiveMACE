@@ -37,8 +37,10 @@ class FakeLLM:
         self.calls: list[dict[str, Any]] = []
         self.closed = False
 
-    def call(self, messages, tools=None):
-        self.calls.append({"messages": list(messages), "tools": tools})
+    def call(self, messages, tools=None, **kwargs):
+        recorded = {"messages": list(messages), "tools": tools}
+        recorded.update(kwargs)
+        self.calls.append(recorded)
         if not self._responses:
             raise RuntimeError("FakeLLM response script exhausted")
         response = self._responses.pop(0)

@@ -1,8 +1,8 @@
 """Deprecated compatibility facade over the public Agent registry.
 
 New extensions register through :mod:`benchmark.agents`.  This module keeps
-the old ``create_agent(agent_type, llm, tools, **kwargs)`` API stable until the
-built-in Agent adapters are migrated in M04.
+the old ``create_agent(agent_type, llm, tools, **kwargs)`` API stable until
+M10 switches production callers to ``AgentRuntime``.
 """
 
 from __future__ import annotations
@@ -19,21 +19,21 @@ from benchmark.agents import (
     ComponentNotFoundError,
     NullEventSink,
 )
+from benchmark.builtin.agents import register_builtin_agents
+from benchmark.builtin.agents.react import REACT_COMPONENT_ID, REACT_SHIM_CONFIG_KEYS
+from benchmark.builtin.prompts import get_builtin_prompt_registry
 from benchmark.infrastructure.adapters import LegacyLLMClientAdapter
-from benchmark.prompts import PromptRegistry
 from config.agent_config import AgentConfig
 
 from .base import BaseAgent
 from .llm_client import LLMClient
 from .multi_agent import MultiAgent
-from .react import ReActAgent
 from .tools import ToolRegistry
 
 
 logger = logging.getLogger(__name__)
 
-_EMPTY_PROMPT_REGISTRY = PromptRegistry()
-_EMPTY_PROMPT_REGISTRY.freeze()
+_BUILTIN_PROMPT_REGISTRY = get_builtin_prompt_registry()
 
 
 class _LegacyAgentFactory:
@@ -49,16 +49,6 @@ class _LegacyAgentFactory:
         if isinstance(llm, LegacyLLMClientAdapter):
             llm = llm.legacy_client
         return self._builder(llm, context.tools, **dict(config))
-
-
-def _build_react(llm: LLMClient, tools: ToolRegistry, **config: Any) -> BaseAgent:
-    return ReActAgent(
-        llm,
-        tools,
-        max_steps=config.get("max_steps", AgentConfig.MAX_STEPS),
-        user_id=config.get("user_id"),
-        agent_name=config.get("agent_name"),
-    )
 
 
 def _build_multi_agent(llm: LLMClient, tools: ToolRegistry, **config: Any) -> BaseAgent:
@@ -128,8 +118,8 @@ def _legacy_schema(default_max_steps: int) -> dict[str, Any]:
 
 def _create_legacy_registry() -> AgentRegistry:
     registry = AgentRegistry()
+    register_builtin_agents(registry)
     builtins = (
-        ("core.react", AgentConfig.MAX_STEPS, _build_react),
         ("core.multi-agent", 15, _build_multi_agent),
         ("core.rule-aware", AgentConfig.MAX_STEPS, _build_rule_aware),
         ("core.advanced-multi-agent", 30, _build_advanced_multi_agent),
@@ -159,6 +149,10 @@ _LEGACY_AGENT_IDS = {
 _LEGACY_REGISTRY = _create_legacy_registry()
 
 
+def _react_shim_config(kwargs: Mapping[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in kwargs.items() if key in REACT_SHIM_CONFIG_KEYS}
+
+
 def create_agent(
     agent_type: str,
     llm: LLMClient,
@@ -176,20 +170,29 @@ def create_agent(
     except ComponentNotFoundError as exc:
         raise ValueError(f"Unknown agent type: {agent_type}") from exc
 
-    report = _LEGACY_REGISTRY.validate_config(agent_id, kwargs)
+    config = _react_shim_config(kwargs) if agent_id == REACT_COMPONENT_ID else kwargs
+    report = _LEGACY_REGISTRY.validate_config(agent_id, config)
     if not report.valid:
         message = "; ".join(
             f"{issue.path or '<root>'}: {issue.message}" for issue in report.errors
         )
         raise ValueError(f"Invalid config for agent type {agent_type}: {message}")
-    return registered.factory.create(
+    created = registered.factory.create(
         AgentBuildContext(
             llm=LegacyLLMClientAdapter(llm),
             tools=tools,
-            prompts=_EMPTY_PROMPT_REGISTRY,
+            prompts=_BUILTIN_PROMPT_REGISTRY,
             events=NullEventSink(),
         ),
         report.normalized_config,
+    )
+    if isinstance(created, BaseAgent):
+        return created
+    legacy = getattr(created, "legacy_agent", None)
+    if isinstance(legacy, BaseAgent):
+        return legacy
+    raise TypeError(
+        f"factory for {agent_id} did not return a BaseAgent or an adapter with legacy_agent"
     )
 
 
