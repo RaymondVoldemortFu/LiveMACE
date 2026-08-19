@@ -346,14 +346,24 @@ def get_price_result(
 def get_last_price(symbol: str, market: str = "CRYPTO") -> float:
     result = get_price_result(symbol, market, allow_stale=True)
     if result.value is None or result.value <= 0 or result.freshness is Freshness.UNAVAILABLE:
-        raise RuntimeError(f"Unable to get market price for {symbol}.{market}: {result.error}")
+        detail = result.error or (
+            f"source={result.source}, freshness={result.freshness.value}, "
+            f"value={result.value}"
+        )
+        raise RuntimeError(f"Unable to get market price for {symbol}.{market}: {detail}")
     return float(result.value)
 
 
 def get_trading_price(symbol: str, market: str = "CRYPTO") -> float:
     result = get_price_result(symbol, market, for_trading=True, allow_stale=False)
     if result.value is None or result.value <= 0 or result.freshness is not Freshness.FRESH:
-        raise RuntimeError(f"Unable to get fresh trading price for {symbol}.{market}: {result.error}")
+        detail = result.error or (
+            f"source={result.source}, freshness={result.freshness.value}, "
+            f"value={result.value}"
+        )
+        raise RuntimeError(
+            f"Unable to get fresh trading price for {symbol}.{market}: {detail}"
+        )
     return float(result.value)
 
 
@@ -440,7 +450,7 @@ def get_kline_data(symbol: str, market: str = "CRYPTO", period: str = "1d", coun
             raise RuntimeError(result.error or f"{result.source} returned empty K-line data")
     except Exception as hl_err:
         logger.error(f"Failed to get K-line data for {key}: {hl_err}")
-        raise Exception(f"Unable to get K-line data for {key}: {hl_err}")
+        raise RuntimeError(f"Unable to get K-line data for {key}: {hl_err}") from hl_err
 
 
 def get_market_status(symbol: str, market: str = "CRYPTO") -> Dict[str, Any]:
@@ -462,7 +472,7 @@ def get_market_status(symbol: str, market: str = "CRYPTO") -> Dict[str, Any]:
         return payload
     except Exception as hl_err:
         logger.error(f"Failed to get market status: {hl_err}")
-        raise Exception(f"Unable to get market status for {key}: {hl_err}")
+        raise RuntimeError(f"Unable to get market status for {key}: {hl_err}") from hl_err
 
 
 def get_all_symbols() -> List[str]:
