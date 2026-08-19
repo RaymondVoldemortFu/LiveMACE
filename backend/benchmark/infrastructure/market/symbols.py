@@ -9,8 +9,6 @@ from services.trading_symbols import AI_TRADING_SYMBOLS
 
 
 CRYPTO_SYMBOLS = tuple(str(symbol).upper() for symbol in AI_TRADING_SYMBOLS)
-# TODO: Keep this list aligned with the previous Alpaca SUPPORTED_STOCKS constant.
-# If symbols become provider-configurable later, inject them via a MarketSymbolRegistry/adapter instead of importing Alpaca here.
 US_SYMBOLS = ("AAPL", "NVDA", "GOOGL", "META", "AMZN", "TSLA", "PG", "JNJ", "UNH", "JPM", "V", "BA", "XOM", "NEE", "AMT", "PLD", "LIN")
 
 
@@ -55,8 +53,6 @@ def validate_supported(symbol: str, market: Market) -> None:
             raise ValueError(f"Unsupported US stock symbol: {symbol}")
     if market is Market.CRYPTO and symbol in US_SYMBOLS:
         raise ValueError(f"Invalid market for symbol '{symbol}': use market='US'")
-    if market is Market.CRYPTO and symbol not in CRYPTO_SYMBOLS:
-        raise ValueError(f"Unsupported CRYPTO symbol: {symbol}")
 
 
 def infer_market(symbol: str, explicit_market: str | Market | None = None) -> Market:

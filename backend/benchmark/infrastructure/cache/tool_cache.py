@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from typing import Any, Iterator, Protocol
+from typing import Any, ContextManager, Iterator, Protocol
 
 
 class ToolCachePort(Protocol):
     def get(self, namespace: str, args: dict[str, Any], *, round_id: str | None = None) -> object: ...
     def set(self, namespace: str, args: dict[str, Any], value: object, *, ttl_seconds: int | None = None, round_id: str | None = None) -> None: ...
-    def acquire_lock(self, namespace: str, args: dict[str, Any], *, round_id: str | None = None) -> Iterator[bool]: ...
+    def acquire_lock(self, namespace: str, args: dict[str, Any], *, round_id: str | None = None) -> ContextManager[bool]: ...
 
 
 class LegacyToolCacheAdapter(ToolCachePort):

@@ -17,7 +17,7 @@ from database.models import (
     Position,
     Trade,
 )
-from .market_data import get_last_price
+from .market_data import get_trading_price as get_last_price
 from services.time_source import now_utc
 
 logger = logging.getLogger(__name__)

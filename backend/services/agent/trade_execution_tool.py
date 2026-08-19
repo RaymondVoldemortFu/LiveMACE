@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from database.models import Account, Position, AIDecisionLog
 from services.asset_calculator import calc_positions_value
-from services.market_data import get_last_price, get_market_status
+from services.market_data import get_market_status, get_trading_price as get_last_price
 from services.order_executor_leverage import place_and_execute_crypto
 from services.order_matching import create_order, check_and_execute_order
 

@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from database.connection import SessionLocal
 from database.models import Position, Account
 from services.asset_calculator import calc_positions_value
-from services.market_data import get_last_price, get_market_status
+from services.market_data import get_market_status, get_trading_price as get_last_price
 from services.order_matching import create_order, check_and_execute_order
 from services.order_executor_leverage import place_and_execute_crypto
 from services.ai_decision_service import (
@@ -26,10 +26,9 @@ from services.ai_decision_service import (
     call_agent_for_decision
 )
 from services.baselines import BuyHoldBaseline, GridBaseline, is_baseline_trading_account
+from benchmark.infrastructure.market.symbols import CRYPTO_SYMBOLS, US_SYMBOLS
 from config.agent_config import AgentConfig
 from config.market_data_config import ALPACA_US_FEED_ENABLED
-from services.alpaca_market_data import SUPPORTED_STOCKS as US_TRADING_SYMBOLS
-from services.trading_symbols import AI_TRADING_SYMBOLS
 from repositories.account_repo import get_account, list_active_ai_accounts
 from repositories.position_repo import get_position
 from services.tool_cache import tool_cache
@@ -44,7 +43,8 @@ _baseline_trade_run_lock = threading.Lock()
 _buy_hold_baseline = BuyHoldBaseline()
 _grid_baseline = GridBaseline()
 
-US_TRADING_SYMBOLS = list(US_TRADING_SYMBOLS)
+US_TRADING_SYMBOLS = list(US_SYMBOLS)
+AI_TRADING_SYMBOLS = list(CRYPTO_SYMBOLS)
 AGENT_DECISION_TYPES = {"react", "multi_agent", "advanced_multi_agent", "rule_aware"}
 _baseline_us_feed_skip_logged = False
 
