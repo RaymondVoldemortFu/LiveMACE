@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 from benchmark.agents import AgentRegistry
+from benchmark.builtin.agents.advanced_multi_agent import (
+    ADVANCED_MULTI_AGENT_DESCRIPTOR,
+    AdvancedMultiAgentFactory,
+)
 from benchmark.builtin.agents.react import REACT_DESCRIPTOR, ReActAgentFactory
 from benchmark.contracts import ExtensionRef
 
@@ -15,6 +19,7 @@ def register_builtin_agents(registry: AgentRegistry) -> None:
     if not isinstance(registry, AgentRegistry):
         raise TypeError("registry must be AgentRegistry")
     registry.register(REACT_DESCRIPTOR, ReActAgentFactory())
+    registry.register(ADVANCED_MULTI_AGENT_DESCRIPTOR, AdvancedMultiAgentFactory())
 
 
 __all__ = ["BUILTIN_AGENT_EXTENSION", "register_builtin_agents"]

@@ -3,22 +3,16 @@ import logging
 import os
 import re
 import socket
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+
+from benchmark.builtin.prompts import get_prompt_resolver, require_profile_contract
+from services.time_source import now_in_tz
 
 from .base import BaseAgent
 from .llm_client import LLMClient
-from .prompts.advanced_multi_agent_prompts import (
-    ANALYST_AGENT_PROMPT,
-    ADVANCED_EXECUTION_PROMPT,
-    CODER_AGENT_PROMPT,
-    CRITIC_AGENT_PROMPT,
-    NEWS_AGENT_PROMPT,
-    TRADING_AGENT_PROMPT,
-    Advanced_MANAGER_PROMPT,
-)
 from .tools import ToolRegistry
-from services.time_source import now_in_tz
 
 logger = logging.getLogger(__name__)
 llm_logger = logging.getLogger("llm_trace")
@@ -33,17 +27,53 @@ class AdvancedMultiAgent(BaseAgent):
     VALID_AGENTS = {"TradingAgent", "NewsAgent", "CoderAgent", "AnalystAgent", "CriticAgent"}
     TERMINATION_TOKEN = "<TRADE_DONE>"
     NEWS_AGENT_MAX_SEARCH_CALLS = 3
+    PROMPT_PROFILE_ID = "core.advanced-multi-agent.default"
 
-    def __init__(self, llm: LLMClient, tools: ToolRegistry, max_steps: int = 15, user_id: str = None):
-        super().__init__(llm, tools)
+    def __init__(
+        self,
+        llm: LLMClient,
+        tools: ToolRegistry,
+        max_steps: int = 15,
+        user_id: str = None,
+        agent_name: Optional[str] = None,
+        prompt_resolver=None,
+    ):
+        super().__init__(llm, tools, agent_name=agent_name)
         self.max_steps = max_steps
         self.user_id = user_id
+        self.prompt_resolver = get_prompt_resolver(prompt_resolver)
+        require_profile_contract(
+            self.prompt_resolver,
+            self.PROMPT_PROFILE_ID,
+            "advanced_multi_agent",
+        )
 
         self.context: List[str] = []
         self.evidence_log: List[Dict[str, Any]] = []
 
     def _agent_label(self) -> str:
         return self.agent_name or self.__class__.__name__
+
+    @staticmethod
+    def _has_filled_trade(executed_trades: List[Dict[str, Any]]) -> bool:
+        """Return whether execution actually opened or closed a position."""
+
+        for item in executed_trades:
+            if not isinstance(item, dict) or item.get("executed") is not True:
+                continue
+            operation = str(item.get("operation") or "").strip()
+            if operation == "hold":
+                continue
+            if operation == "close_all":
+                closed = item.get("closed_orders") or []
+                if isinstance(closed, (list, tuple)) and any(
+                    isinstance(order, dict) for order in closed
+                ):
+                    return True
+                continue
+            if operation in {"open", "close", "all_in"}:
+                return True
+        return False
 
     def _log_llm_trace(
         self,
@@ -346,8 +376,21 @@ class AdvancedMultiAgent(BaseAgent):
         step: int,
     ) -> List[Dict[str, str]]:
         """System: policy/schema. User: current trading task state."""
-        intro, _ = self._safe_split_once(Advanced_MANAGER_PROMPT, "Trading objective:")
-        _, protocol_and_schema = self._safe_split_once(Advanced_MANAGER_PROMPT, "Decision Protocol:")
+        rendered_prompt = self.prompt_resolver.render_slot(
+            self.PROMPT_PROFILE_ID,
+            "manager",
+            {
+                "objective": objective,
+                "portfolio": json.dumps(portfolio, ensure_ascii=False),
+                "prices": json.dumps(prices, ensure_ascii=False),
+                "evidence_book": self._format_evidence_book(),
+                "context": context_str,
+                "conflicts": self._format_conflicts(),
+                "collaboration_state": self._format_collaboration_state(step),
+            },
+        ).content
+        intro, _ = self._safe_split_once(rendered_prompt, "Trading objective:")
+        _, protocol_and_schema = self._safe_split_once(rendered_prompt, "Decision Protocol:")
 
         system_parts = [intro]
         if protocol_and_schema:
@@ -677,7 +720,12 @@ class AdvancedMultiAgent(BaseAgent):
             "Call execute_trade one or more times as needed. "
             f"When complete, output exactly: {self.TERMINATION_TOKEN}"
         )
-        return [{"role": "system", "content": ADVANCED_EXECUTION_PROMPT}, {"role": "user", "content": user_prompt}]
+        system_prompt = self.prompt_resolver.render_slot(
+            self.PROMPT_PROFILE_ID,
+            "execution",
+            {},
+        ).content
+        return [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
 
     def _run_execution_stage(
         self,
@@ -842,19 +890,19 @@ class AdvancedMultiAgent(BaseAgent):
         on_step: Optional[Callable] = None,
     ) -> str:
         if agent_name == "TradingAgent":
-            system_prompt = TRADING_AGENT_PROMPT
+            prompt_slot = "trading"
             allowed_tools = ["get_market_snapshot", "get_kline_history", "get_account_state"]
         elif agent_name == "NewsAgent":
-            system_prompt = NEWS_AGENT_PROMPT
+            prompt_slot = "news"
             allowed_tools = ["consult_search_agent"]
         elif agent_name == "CoderAgent":
-            system_prompt = CODER_AGENT_PROMPT
+            prompt_slot = "coder"
             allowed_tools = ["run_python_script", "read_file", "write_file", "execute_shell_command"]
         elif agent_name == "AnalystAgent":
-            system_prompt = ANALYST_AGENT_PROMPT
+            prompt_slot = "analyst"
             allowed_tools = []
         elif agent_name == "CriticAgent":
-            system_prompt = CRITIC_AGENT_PROMPT
+            prompt_slot = "critic"
             allowed_tools = []
         else:
             return f"Error: Unknown agent {agent_name}"
@@ -862,6 +910,17 @@ class AdvancedMultiAgent(BaseAgent):
         available_tools_names = [t["function"]["name"] for t in self.tools.openai_tools]
         valid_tools = [t for t in allowed_tools if t in available_tools_names]
 
+        variables = {"instruction": instruction}
+        if prompt_slot in {"trading", "analyst", "critic"}:
+            variables.update(
+                portfolio=json.dumps(portfolio, ensure_ascii=False),
+                prices=json.dumps(prices, ensure_ascii=False),
+            )
+        system_prompt = self.prompt_resolver.render_slot(
+            self.PROMPT_PROFILE_ID,
+            prompt_slot,
+            variables,
+        ).content
         messages = self._build_sub_agent_messages(
             agent_name=agent_name,
             prompt_template=system_prompt,
@@ -1177,6 +1236,9 @@ class AdvancedMultiAgent(BaseAgent):
                     "executed_trades": executed_trades,
                     "execution_plan": execution_plan,
                     "decision_basis": decision.get("decision_basis") or {},
+                    "termination_reason": (
+                        "trade_done" if self._has_filled_trade(executed_trades) else "hold"
+                    ),
                 }
                 self._notify_evaluator(trace_id)
                 break
@@ -1194,6 +1256,7 @@ class AdvancedMultiAgent(BaseAgent):
                 "reason": "MultiAgent Manager did not reach a conclusion within max steps.",
                 "protocol": "tool",
                 "executed_trades": executed_trades,
+                "termination_reason": "max_steps",
             }
 
         return final_decision

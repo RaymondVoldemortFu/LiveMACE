@@ -7,9 +7,9 @@ M10 switches production callers to ``AgentRuntime``.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
 import logging
 import os
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from benchmark.agents import (
@@ -20,6 +20,10 @@ from benchmark.agents import (
     NullEventSink,
 )
 from benchmark.builtin.agents import register_builtin_agents
+from benchmark.builtin.agents.advanced_multi_agent import (
+    ADVANCED_MULTI_AGENT_COMPONENT_ID,
+    ADVANCED_MULTI_AGENT_SHIM_CONFIG_KEYS,
+)
 from benchmark.builtin.agents.react import REACT_COMPONENT_ID, REACT_SHIM_CONFIG_KEYS
 from benchmark.builtin.prompts import get_builtin_prompt_registry
 from benchmark.infrastructure.adapters import LegacyLLMClientAdapter
@@ -29,7 +33,6 @@ from .base import BaseAgent
 from .llm_client import LLMClient
 from .multi_agent import MultiAgent
 from .tools import ToolRegistry
-
 
 logger = logging.getLogger(__name__)
 
@@ -85,21 +88,6 @@ def _build_rule_aware(llm: LLMClient, tools: ToolRegistry, **config: Any) -> Bas
     )
 
 
-def _build_advanced_multi_agent(
-    llm: LLMClient,
-    tools: ToolRegistry,
-    **config: Any,
-) -> BaseAgent:
-    from .multi_agent_advanced import AdvancedMultiAgent
-
-    return AdvancedMultiAgent(
-        llm,
-        tools,
-        max_steps=config.get("max_steps", 30),
-        user_id=config.get("user_id"),
-    )
-
-
 def _legacy_schema(default_max_steps: int) -> dict[str, Any]:
     return {
         "type": "object",
@@ -122,7 +110,6 @@ def _create_legacy_registry() -> AgentRegistry:
     builtins = (
         ("core.multi-agent", 15, _build_multi_agent),
         ("core.rule-aware", AgentConfig.MAX_STEPS, _build_rule_aware),
-        ("core.advanced-multi-agent", 30, _build_advanced_multi_agent),
     )
     for agent_id, default_max_steps, builder in builtins:
         registry.register(
@@ -149,8 +136,15 @@ _LEGACY_AGENT_IDS = {
 _LEGACY_REGISTRY = _create_legacy_registry()
 
 
-def _react_shim_config(kwargs: Mapping[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in kwargs.items() if key in REACT_SHIM_CONFIG_KEYS}
+def _shim_config(agent_id: str, kwargs: Mapping[str, Any]) -> dict[str, Any]:
+    key_sets = {
+        REACT_COMPONENT_ID: REACT_SHIM_CONFIG_KEYS,
+        ADVANCED_MULTI_AGENT_COMPONENT_ID: ADVANCED_MULTI_AGENT_SHIM_CONFIG_KEYS,
+    }
+    keys = key_sets.get(agent_id)
+    if keys is None:
+        return dict(kwargs)
+    return {key: value for key, value in kwargs.items() if key in keys}
 
 
 def create_agent(
@@ -170,7 +164,7 @@ def create_agent(
     except ComponentNotFoundError as exc:
         raise ValueError(f"Unknown agent type: {agent_type}") from exc
 
-    config = _react_shim_config(kwargs) if agent_id == REACT_COMPONENT_ID else kwargs
+    config = _shim_config(agent_id, kwargs)
     report = _LEGACY_REGISTRY.validate_config(agent_id, config)
     if not report.valid:
         message = "; ".join(
