@@ -115,6 +115,55 @@ def executed_trades_from_legacy(
     return tuple(refs), tuple(incomplete), tuple(errors)
 
 
+def nested_executed_trades_from_legacy(
+    items: Any,
+) -> tuple[tuple[ExecutedTradeRef, ...], tuple[JsonValue, ...], tuple[JsonValue, ...]]:
+    """Convert Rule Agent ``{args, result}`` trade records without losing order."""
+
+    if items in (None, ()):
+        return (), (), ()
+    if not isinstance(items, (list, tuple)):
+        raise AgentRuntimeError(
+            "legacy executed_trades must be a list",
+            code="LEGACY_EXECUTED_TRADES_INVALID",
+        )
+
+    refs: list[ExecutedTradeRef] = []
+    incomplete: list[JsonValue] = []
+    errors: list[JsonValue] = []
+    for item in items:
+        if not isinstance(item, Mapping):
+            incomplete.append({"raw_result": str(item)})
+            continue
+        args = item.get("args")
+        result = item.get("result")
+        if not isinstance(args, Mapping) or not isinstance(result, Mapping):
+            incomplete.append(to_jsonable(dict(item)))
+            continue
+
+        payload = dict(args)
+        payload.update(dict(result))
+        operation = str(payload.get("operation") or "").strip()
+        if operation == "hold":
+            continue
+        if operation == "close_all" and not (payload.get("closed_orders") or []):
+            continue
+        error_text = payload.get("error")
+        if error_text is not None:
+            errors.append(
+                {
+                    "operation": str(payload.get("operation") or ""),
+                    "symbol": str(payload.get("symbol") or ""),
+                    "error": str(error_text),
+                }
+            )
+        try:
+            refs.extend(_trade_refs_from_item(payload))
+        except _IncompleteTradeRef:
+            incomplete.append(to_jsonable(dict(item)))
+    return tuple(refs), tuple(incomplete), tuple(errors)
+
+
 def _trade_refs_from_item(item: dict[str, Any]) -> tuple[ExecutedTradeRef, ...]:
     operation = str(item.get("operation") or "").strip()
     if not operation:
@@ -202,6 +251,7 @@ class _IncompleteTradeRef(ValueError):
 
 __all__ = [
     "executed_trades_from_legacy",
+    "nested_executed_trades_from_legacy",
     "portfolio_from_context",
     "prices_from_context",
     "termination_from_legacy_decision",

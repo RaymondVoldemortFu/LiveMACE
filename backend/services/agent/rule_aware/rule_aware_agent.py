@@ -124,6 +124,29 @@ class RuleAwareAgent(BaseAgent):
         if "TRADE_DONE" in squashed and len(squashed) <= 32:
             return True
         return False
+
+    @staticmethod
+    def _has_filled_trade(item: Dict[str, Any]) -> bool:
+        """Return whether a nested execute_trade record represents a fill."""
+
+        if not isinstance(item, dict):
+            return False
+        result = item.get("result")
+        args = item.get("args")
+        if not isinstance(result, dict):
+            return False
+        if not result.get("executed") or result.get("error") is not None:
+            return False
+        operation = str(
+            result.get("operation")
+            or (args.get("operation") if isinstance(args, dict) else "")
+            or ""
+        ).strip().lower()
+        if operation == "hold":
+            return False
+        if operation == "close_all" and not (result.get("closed_orders") or []):
+            return False
+        return bool(operation)
     
     def run(
         self, 
@@ -179,7 +202,6 @@ class RuleAwareAgent(BaseAgent):
         ]
         
         decision = None
-        compliance_audit = None
         accumulated_content = ""  # Track accumulated assistant content across steps
         executed_trades: List[Dict] = []   # Track every execute_trade tool call
         trade_done_detected = False        # True when agent outputs <TRADE_DONE>
@@ -321,11 +343,21 @@ class RuleAwareAgent(BaseAgent):
             # ── Fallback: no decision produced at all ──
             if decision is None:
                 logger.warning("Agent did not provide decision within max steps - defaulting to HOLD")
-                decision = self._create_hold_decision("No decision made within step limit (compliance-safe default)")
+                decision = self._create_hold_decision(
+                    "No decision made within step limit (compliance-safe default)",
+                    termination_reason="max_steps",
+                )
+                decision["protocol"] = "tool"
+                decision["executed_trades"] = executed_trades
         
         except Exception as e:
             logger.error(f"Error in rule-aware agent execution: {e}", exc_info=True)
-            decision = self._create_hold_decision(f"Error: {str(e)}")
+            decision = self._create_hold_decision(
+                f"Error: {str(e)}",
+                termination_reason="llm_error",
+            )
+            decision["protocol"] = "tool"
+            decision["executed_trades"] = executed_trades
         
         # Log final decision
         agent_logger.info("=== Final Decision ===")
@@ -419,7 +451,7 @@ class RuleAwareAgent(BaseAgent):
         """
         last_trade: Optional[Dict] = None
         for t in reversed(executed_trades):
-            if isinstance(t.get("result"), dict) and t["result"].get("executed"):
+            if self._has_filled_trade(t):
                 last_trade = t
                 break
 
@@ -448,6 +480,7 @@ class RuleAwareAgent(BaseAgent):
             "leverage": leverage,
             "reason": reason,
             "executed_trades": executed_trades,
+            "termination_reason": "trade_done" if last_trade else "hold",
         }
 
         logger.info(f"Tool-mode session summary: {len(executed_trades)} trade call(s), representative={op} {sym}")
@@ -504,7 +537,12 @@ class RuleAwareAgent(BaseAgent):
         
         return decision
     
-    def _create_hold_decision(self, reason: str) -> Dict[str, Any]:
+    def _create_hold_decision(
+        self,
+        reason: str,
+        *,
+        termination_reason: str = "hold",
+    ) -> Dict[str, Any]:
         """Create a safe HOLD decision"""
         return {
             "operation": "hold",
@@ -512,7 +550,8 @@ class RuleAwareAgent(BaseAgent):
             "direction": "long",
             "target_portion_of_balance": 0.0,
             "leverage": 1,
-            "reason": reason
+            "reason": reason,
+            "termination_reason": termination_reason,
         }
     
     def _update_account_audit_stats(self, audit_result: Dict[str, Any]) -> None:
