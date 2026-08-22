@@ -27,6 +27,12 @@ from .loader import (
     load_discovered_extensions,
     load_extensions,
 )
+from .catalog import ExtensionCatalog
+from .runtime_config import (
+    AccountRuntimeConfigDTO,
+    ExtensionRuntime,
+    build_extension_runtime,
+)
 
 __all__ = [
     "MANIFEST_FILENAME",
@@ -51,4 +57,8 @@ __all__ = [
     "ExtensionLoadResult",
     "load_discovered_extensions",
     "load_extensions",
+    "ExtensionCatalog",
+    "AccountRuntimeConfigDTO",
+    "ExtensionRuntime",
+    "build_extension_runtime",
 ]

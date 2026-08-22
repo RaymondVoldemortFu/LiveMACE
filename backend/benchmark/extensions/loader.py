@@ -296,6 +296,7 @@ def _import_attribute(root: Path, entrypoint: str) -> Any:
                 raise _LoaderFailure(
                     "ENTRYPOINT_IMPORT_FAILED", "declared entrypoint module could not be imported"
                 ) from exc
+        module_file = getattr(module, "__file__", None)
     else:
         try:
             with _extension_import_path(root):
@@ -305,18 +306,25 @@ def _import_attribute(root: Path, entrypoint: str) -> Any:
                 "ENTRYPOINT_IMPORT_FAILED", "declared entrypoint module could not be imported"
             ) from exc
         module_file = getattr(module, "__file__", None)
-    if not module_file:
-        raise _LoaderFailure("ENTRYPOINT_MODULE_INVALID", "entrypoint module has no file")
-        try:
-            if not Path(module_file).resolve().is_relative_to(root):
-                if replaced_module is not None:
-                    sys.modules[module_name] = replaced_module
-                raise _LoaderFailure(
-                    "ENTRYPOINT_MODULE_OUTSIDE_ROOT",
-                    "declared entrypoint module is outside the extension root",
-                )
-        except OSError as exc:
-            raise _LoaderFailure("ENTRYPOINT_MODULE_INVALID", "entrypoint module path is invalid") from exc
+    try:
+        if not module_file:
+            raise _LoaderFailure(
+                "ENTRYPOINT_MODULE_INVALID", "entrypoint module has no file"
+            )
+        module_path = Path(module_file).resolve()
+        if not module_path.is_relative_to(root.resolve()):
+            raise _LoaderFailure(
+                "ENTRYPOINT_MODULE_OUTSIDE_ROOT",
+                "declared entrypoint module is outside the extension root",
+            )
+    except OSError as exc:
+        raise _LoaderFailure(
+            "ENTRYPOINT_MODULE_INVALID", "entrypoint module path is invalid"
+        ) from exc
+    except _LoaderFailure:
+        if replaced_module is not None:
+            sys.modules[module_name] = replaced_module
+        raise
 
     try:
         value = module
