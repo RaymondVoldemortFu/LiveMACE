@@ -15,6 +15,7 @@ wiring is resolved lazily inside factories.
 
 from benchmark.persistence.repositories import (
     AccountRepository,
+    AccountRuntimeConfigRepository,
     DecisionRepository,
     EvaluationRepository,
     OrderRepository,
@@ -36,6 +37,7 @@ from benchmark.persistence.uow import (
 
 __all__ = [
     "AccountRepository",
+    "AccountRuntimeConfigRepository",
     "PositionRepository",
     "OrderRepository",
     "TradeRepository",

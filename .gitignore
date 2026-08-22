@@ -342,6 +342,9 @@ backend/tests/providers/__pycache__/
 !backend/tests/trading/
 !backend/tests/trading/**
 backend/tests/trading/__pycache__/
+!backend/tests/accounts/
+!backend/tests/accounts/**
+backend/tests/accounts/__pycache__/
 .vscode/
 backend/.DS_Store
 

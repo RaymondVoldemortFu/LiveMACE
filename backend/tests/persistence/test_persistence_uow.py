@@ -293,6 +293,7 @@ def test_sqlite_startup_migrations_add_missing_columns_idempotently():
     assert applied == [
         "202608_scheduled_job_occurrences",
         "202608_trade_command_receipts",
+        "202608_account_runtime_configs",
         "202606_agent_checkpoint_volatility",
         "202606_account_tool_routing_enabled",
     ]

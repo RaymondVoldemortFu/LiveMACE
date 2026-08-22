@@ -1,5 +1,5 @@
-from pydantic import BaseModel
-from typing import Optional
+from pydantic import BaseModel, Field
+from typing import Any, Dict, List, Optional
 
 
 class AccountCreate(BaseModel):
@@ -46,3 +46,46 @@ class AccountOverview(BaseModel):
     account: AccountOut
     total_assets: float  # Total assets in USD
     positions_value: float  # Total positions value in USD
+
+
+class AccountExtensionConfigDTO(BaseModel):
+    """Typed account extension configuration (M12, spec §9).
+
+    Never carries secrets: API key / model / base_url stay on the account and
+    are resolved separately. This is the request/response shape for the
+    account runtime-config endpoints.
+    """
+
+    agent_id: str
+    agent_config: Dict[str, Any] = Field(default_factory=dict)
+    toolset_ids: List[str] = Field(default_factory=list)
+    disabled_tools: List[str] = Field(default_factory=list)
+    prompt_profile_id: Optional[str] = None
+    component_versions: Dict[str, str] = Field(default_factory=dict)
+
+
+class RuntimeConfigValidationIssueDTO(BaseModel):
+    """One validation diagnostic for an account runtime config."""
+
+    path: str
+    message: str
+    validator: str
+
+
+class AccountRuntimeConfigOut(BaseModel):
+    """Account runtime config plus its validation status for API responses."""
+
+    account_id: int
+    config: AccountExtensionConfigDTO
+    validation_status: str  # "valid" | "configuration_invalid"
+    validation_errors: List[RuntimeConfigValidationIssueDTO] = Field(
+        default_factory=list
+    )
+    updated_at: Optional[str] = None
+
+
+class AccountRuntimeConfigSave(BaseModel):
+    """Request body to save an account runtime config with optimistic locking."""
+
+    config: AccountExtensionConfigDTO
+    expected_updated_at: Optional[str] = None

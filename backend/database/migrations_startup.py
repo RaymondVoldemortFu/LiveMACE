@@ -105,6 +105,137 @@ def _create_trade_command_receipts(conn: Connection) -> None:
     TradeCommandReceipt.__table__.create(bind=conn, checkfirst=True)
 
 
+def _account_runtime_configs_exists(conn: Connection) -> bool:
+    from sqlalchemy import inspect
+
+    return inspect(conn).has_table("account_runtime_configs")
+
+
+def _create_account_runtime_configs(conn: Connection) -> None:
+    from database.models import AccountRuntimeConfig
+
+    AccountRuntimeConfig.__table__.create(bind=conn, checkfirst=True)
+
+
+def _account_runtime_configs_backfilled(conn: Connection) -> bool:
+    """True when every AI/legacy account already has a runtime-config row.
+
+    Idempotent guard for the data backfill: it becomes True once no account is
+    missing a config, so re-running the migration is a no-op. Manual accounts
+    (which never ran an Agent) are excluded — they carry no meaningful Agent
+    configuration to translate.
+
+    Treated as already-applied when the source columns are absent (a minimal or
+    partial ``accounts`` schema): there is nothing to translate, and the
+    backfill must not crash on a schema it cannot read.
+    """
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(conn)
+    if not inspector.has_table("account_runtime_configs") or not inspector.has_table(
+        "accounts"
+    ):
+        # Nothing to backfill against yet; treated as applied.
+        return True
+    columns = {col["name"] for col in inspector.get_columns("accounts")}
+    if not {"account_type", "agent_type"}.issubset(columns):
+        return True
+    missing = conn.execute(
+        text(
+            "SELECT COUNT(*) FROM accounts a "
+            "LEFT JOIN account_runtime_configs c ON c.account_id = a.id "
+            "WHERE c.account_id IS NULL AND a.account_type = 'AI'"
+        )
+    ).scalar_one()
+    return missing == 0
+
+
+def _backfill_account_runtime_configs(conn: Connection) -> None:
+    """Translate legacy account flags into runtime-config rows (idempotent).
+
+    Reads each AI account without a config, maps its ``agent_type`` + flags to
+    an ``AccountExtensionConfig`` via the shared mapping, records the resolved
+    component versions (so traces are reproducible), and inserts one row.
+    Accounts already carrying a config are skipped, so re-running never
+    duplicates.
+    """
+    import json
+
+    from sqlalchemy import text
+
+    from benchmark.accounts.config import config_from_legacy_account
+    from benchmark.accounts.validation import (
+        VALIDATION_STATUS_INVALID,
+        validate_extension_config,
+    )
+
+    rows = conn.execute(
+        text(
+            "SELECT a.id, a.agent_type, a.memory_enabled, a.tool_routing_enabled, "
+            "a.enable_rule_aware FROM accounts a "
+            "LEFT JOIN account_runtime_configs c ON c.account_id = a.id "
+            "WHERE c.account_id IS NULL AND a.account_type = 'AI'"
+        )
+    ).all()
+
+    for row in rows:
+        legacy = _LegacyAccountRow(
+            agent_type=row[1],
+            memory_enabled=row[2],
+            tool_routing_enabled=row[3],
+            enable_rule_aware=row[4],
+        )
+        config = config_from_legacy_account(legacy)
+        result = validate_extension_config(config)
+        stored = result.resolved_config if result.valid else config
+        conn.execute(
+            text(
+                "INSERT INTO account_runtime_configs ("
+                "account_id, agent_id, agent_version, agent_config_json, "
+                "toolset_ids_json, disabled_tools_json, prompt_profile_id, "
+                "prompt_profile_version, component_versions_json, "
+                "validation_status, validation_errors_json) VALUES ("
+                ":account_id, :agent_id, :agent_version, :agent_config_json, "
+                ":toolset_ids_json, :disabled_tools_json, :prompt_profile_id, "
+                ":prompt_profile_version, :component_versions_json, "
+                ":validation_status, :validation_errors_json)"
+            ),
+            {
+                "account_id": row[0],
+                "agent_id": stored.agent_id,
+                "agent_version": stored.agent_version,
+                "agent_config_json": json.dumps(dict(stored.agent_config)),
+                "toolset_ids_json": json.dumps(list(stored.toolset_ids)),
+                "disabled_tools_json": json.dumps(list(stored.disabled_tools)),
+                "prompt_profile_id": stored.prompt_profile_id,
+                "prompt_profile_version": stored.prompt_profile_version,
+                "component_versions_json": json.dumps(dict(stored.component_versions)),
+                "validation_status": result.status,
+                "validation_errors_json": json.dumps(
+                    [
+                        {
+                            "path": issue.path,
+                            "message": issue.message,
+                            "validator": issue.validator,
+                        }
+                        for issue in result.issues
+                    ]
+                ),
+            },
+        )
+
+
+@dataclass(frozen=True)
+class _LegacyAccountRow:
+    """Attribute view over a raw accounts row for the shared legacy mapping."""
+
+    agent_type: object
+    memory_enabled: object
+    tool_routing_enabled: object
+    enable_rule_aware: object
+
+
+
 def _scheduled_job_occurrences_exists(conn: Connection) -> bool:
     from sqlalchemy import inspect
 
@@ -359,6 +490,20 @@ STARTUP_MIGRATIONS: List[StartupMigration] = [
         is_applied=_trade_command_receipts_exists,
         apply=_create_trade_command_receipts,
         fatal=True,
+    ),
+    StartupMigration(
+        migration_id="202608_account_runtime_configs",
+        dialect=None,
+        is_applied=_account_runtime_configs_exists,
+        apply=_create_account_runtime_configs,
+        fatal=True,
+    ),
+    StartupMigration(
+        migration_id="202608_account_runtime_configs_backfill",
+        dialect=None,
+        is_applied=_account_runtime_configs_backfilled,
+        apply=_backfill_account_runtime_configs,
+        fatal=False,
     ),
     StartupMigration(
         migration_id="202606_agent_checkpoint_volatility",

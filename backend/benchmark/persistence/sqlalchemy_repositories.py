@@ -99,6 +99,49 @@ class SqlAlchemyAccountRepository(_RepositoryBase):
         return account
 
 
+class SqlAlchemyAccountRuntimeConfigRepository(_RepositoryBase):
+    """Account extension configuration persistence (M12).
+
+    Never commits; the owning UnitOfWork controls the transaction. ``upsert``
+    relies on the unique ``account_id`` constraint so a second config for the
+    same account is a conflict, not a duplicate.
+    """
+
+    def get(self, account_id: int):
+        from database.models import AccountRuntimeConfig
+
+        return (
+            self._session.query(AccountRuntimeConfig)
+            .filter(AccountRuntimeConfig.account_id == account_id)
+            .first()
+        )
+
+    def get_for_update(self, account_id: int):
+        from database.models import AccountRuntimeConfig
+
+        return (
+            self._session.query(AccountRuntimeConfig)
+            .filter(AccountRuntimeConfig.account_id == account_id)
+            .with_for_update()
+            .first()
+        )
+
+    def upsert(self, config):
+        self._session.add(config)
+        self._session.flush()
+        return config
+
+    def list_all(self):
+        from database.models import AccountRuntimeConfig
+
+        return (
+            self._session.query(AccountRuntimeConfig)
+            .order_by(AccountRuntimeConfig.account_id.asc())
+            .all()
+        )
+
+
+
 class SqlAlchemyPositionRepository(_RepositoryBase):
 
     def get(self, account_id: int, symbol: str, market: str):
