@@ -8,6 +8,8 @@ import logging
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List, Callable, Optional
 
+from benchmark.builtin.prompts import get_prompt_resolver, require_profile_contract
+from benchmark.prompts import PromptResolver
 from ..base import BaseAgent
 from ..llm_client import LLMClient
 from ..tools import ToolRegistry
@@ -19,7 +21,6 @@ from .rule_engine import RuleEngine
 from .rule_validator import RuleValidator
 from .compliance_auditor import ComplianceAuditor
 from .llm_auditor import LLMAuditor
-from .prompts import RULE_AWARE_SYSTEM_PROMPT, RULE_AWARE_REMINDER_PROMPT
 
 logger = logging.getLogger(__name__)
 llm_logger = logging.getLogger("llm_trace")
@@ -45,6 +46,7 @@ class RuleAwareAgent(BaseAgent):
         account_id: int = None,
         agent_name: str = None,
         memory_enabled: bool = False,
+        prompt_resolver: Optional[PromptResolver] = None,
     ):
         """
         Initialize Rule-Aware Agent
@@ -58,11 +60,18 @@ class RuleAwareAgent(BaseAgent):
             enable_llm_audit: Whether to enable LLM-based audit scoring
             account_id: Account ID for updating audit statistics
             agent_name: Agent display name for logging
+            prompt_resolver: Optional profile-capable Prompt resolver
         """
         super().__init__(llm, tools, agent_name=agent_name)
         self.max_steps = max_steps
         self.user_id = user_id
         self.account_id = account_id
+        self.prompt_resolver = get_prompt_resolver(prompt_resolver)
+        require_profile_contract(
+            self.prompt_resolver,
+            "core.rule-aware.default",
+            "rule_aware",
+        )
         # self.memory = get_memory_service()  # Disabled: internal memory bypasses memory_enabled flag
         
         # Rule compliance components
@@ -88,7 +97,10 @@ class RuleAwareAgent(BaseAgent):
                     api_key=audit_api_key,
                     base_url=audit_base_url
                 )
-                self.llm_auditor = LLMAuditor(audit_llm)
+                self.llm_auditor = LLMAuditor(
+                    audit_llm,
+                    prompt_resolver=self.prompt_resolver,
+                )
                 logger.info(f"LLM-based audit scoring enabled - Model: {audit_model}, Base URL: {audit_base_url or 'OpenAI Official'}")
         else:
             self.llm_auditor = None
@@ -146,12 +158,16 @@ class RuleAwareAgent(BaseAgent):
         rule_documents = self.rule_engine.format_rules_for_prompt()
         
         # Build system prompt with rules
-        system_prompt = RULE_AWARE_SYSTEM_PROMPT.format(
-            rule_documents=rule_documents,
-            current_time=current_time,
-            portfolio=json.dumps(portfolio, ensure_ascii=False, indent=2),
-            prices=json.dumps(prices, ensure_ascii=False, indent=2)
-        )
+        system_prompt = self.prompt_resolver.render_slot(
+            "core.rule-aware.default",
+            "system",
+            {
+                "rule_documents": rule_documents,
+                "current_time": current_time,
+                "portfolio": json.dumps(portfolio, ensure_ascii=False, indent=2),
+                "prices": json.dumps(prices, ensure_ascii=False, indent=2),
+            },
+        ).content
         
         # Initialize conversation
         messages: List[Dict[str, Any]] = [
@@ -174,7 +190,11 @@ class RuleAwareAgent(BaseAgent):
 
                 # Add reminder when running low on steps
                 if remaining_steps <= AgentConfig.STEP_REMINDER_THRESHOLD and remaining_steps > 1:
-                    reminder = RULE_AWARE_REMINDER_PROMPT.format(remaining_steps=remaining_steps)
+                    reminder = self.prompt_resolver.render_slot(
+                        "core.rule-aware.default",
+                        "reminder",
+                        {"remaining_steps": remaining_steps},
+                    ).content
                     messages.append({"role": "user", "content": reminder})
 
                 # Call LLM
