@@ -185,6 +185,17 @@ def test_shared_alias_dag_is_validated_in_bounded_time():
     assert perf_counter() - started < 2.0
 
 
+def test_shared_alias_dag_near_alias_limit_is_bounded():
+    started = perf_counter()
+
+    value = load_structured_text(
+        _shared_alias_dag(21), format_name="yaml", max_depth=32
+    )
+
+    assert value["root"][0] is value["root"][1]
+    assert perf_counter() - started < 2.0
+
+
 def test_recursive_yaml_alias_is_rejected():
     with pytest.raises(StructuredDataError) as caught:
         load_structured_text(

@@ -13,6 +13,20 @@ from .manifest import (
 )
 from .paths import resolve_extension_path
 from .validation import validate_extension_directory, validate_manifest
+from .discovery import (
+    ExtensionCandidate,
+    ExtensionSettings,
+    ExtensionSource,
+    discover_extensions,
+    settings_from_paths,
+)
+from .loader import (
+    ExtensionLoadRecord,
+    ExtensionLoadResult,
+    ExtensionStatus,
+    load_discovered_extensions,
+    load_extensions,
+)
 
 __all__ = [
     "MANIFEST_FILENAME",
@@ -27,4 +41,14 @@ __all__ = [
     "validate_manifest",
     "validate_extension_directory",
     "resolve_extension_path",
+    "ExtensionSource",
+    "ExtensionSettings",
+    "ExtensionCandidate",
+    "discover_extensions",
+    "settings_from_paths",
+    "ExtensionStatus",
+    "ExtensionLoadRecord",
+    "ExtensionLoadResult",
+    "load_discovered_extensions",
+    "load_extensions",
 ]
