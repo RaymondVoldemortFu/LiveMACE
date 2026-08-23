@@ -115,16 +115,19 @@ class AccountRuntimeConfigDTO:
         )
 
     def to_mapping(self) -> dict[str, JsonValue]:
-        return {
+        normalized = to_jsonable({
             "agent_id": self.agent_id,
             "agent_version": self.agent_version,
-            "agent_config": dict(self.agent_config),
+            "agent_config": self.agent_config,
             "toolset_ids": list(self.toolset_ids),
             "disabled_tools": list(self.disabled_tools),
             "prompt_profile_id": self.prompt_profile_id,
             "prompt_profile_version": self.prompt_profile_version,
-            "component_versions": dict(self.component_versions),
-        }
+            "component_versions": self.component_versions,
+        })
+        if not isinstance(normalized, dict):
+            raise TypeError("account runtime config must serialize to a JSON object")
+        return normalized
 
 
 @dataclass(frozen=True)

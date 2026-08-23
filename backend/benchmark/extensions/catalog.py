@@ -12,7 +12,6 @@ from benchmark.contracts import (
     ToolSpec,
     ValidationIssue,
     ValidationReport,
-    require_semver,
 )
 from .loader import ExtensionLoadRecord, ExtensionLoadResult
 from .runtime_config import AccountRuntimeConfigDTO
@@ -79,8 +78,18 @@ class ExtensionCatalog:
                 ),
             )
 
+        selected_agent_version = self._selected_version(
+            dto,
+            component_id=dto.agent_id,
+            explicit_version=dto.agent_version,
+            explicit_field="agent_version",
+            errors=errors,
+        )
         try:
-            registered = self._result.agents.get(dto.agent_id, dto.agent_version)
+            registered = self._result.agents.get(
+                dto.agent_id,
+                selected_agent_version,
+            )
         except BenchmarkError as exc:
             errors.append(
                 ValidationIssue(
@@ -96,7 +105,7 @@ class ExtensionCatalog:
             report = self._result.agents.validate_config(
                 dto.agent_id,
                 dto.agent_config,
-                dto.agent_version,
+                selected_agent_version,
             )
             errors.extend(
                 ValidationIssue(
@@ -110,13 +119,22 @@ class ExtensionCatalog:
             normalized_agent_config = report.normalized_config
 
         resolved_agent_version = (
-            registered.descriptor.version if registered is not None else dto.agent_version
+            registered.descriptor.version
+            if registered is not None
+            else selected_agent_version
         )
         if dto.prompt_profile_id is not None:
+            selected_profile_version = self._selected_version(
+                dto,
+                component_id=dto.prompt_profile_id,
+                explicit_version=dto.prompt_profile_version,
+                explicit_field="prompt_profile_version",
+                errors=errors,
+            )
             try:
                 profile = self._result.prompts.resolve_profile(
                     dto.prompt_profile_id,
-                    dto.prompt_profile_version,
+                    selected_profile_version,
                 )
                 resolved_profile_version = profile.descriptor.version
             except BenchmarkError as exc:
@@ -127,7 +145,7 @@ class ExtensionCatalog:
                         code=exc.code,
                     )
                 )
-                resolved_profile_version = dto.prompt_profile_version
+                resolved_profile_version = selected_profile_version
         else:
             resolved_profile_version = dto.prompt_profile_version
             if resolved_profile_version is not None:
@@ -176,7 +194,7 @@ class ExtensionCatalog:
                 )
             )
 
-        self._validate_component_versions(dto, registered, resolved_profile_version, errors)
+        self._validate_component_versions(dto, errors)
 
         normalized = dto.to_mapping()
         normalized["agent_version"] = resolved_agent_version
@@ -189,35 +207,47 @@ class ExtensionCatalog:
             normalized_config=normalized,
         )
 
+    @staticmethod
+    def _selected_version(
+        dto: AccountRuntimeConfigDTO,
+        *,
+        component_id: str,
+        explicit_version: str | None,
+        explicit_field: str,
+        errors: list[ValidationIssue],
+    ) -> str | None:
+        pinned_version = dto.component_versions.get(component_id)
+        if (
+            pinned_version is not None
+            and explicit_version is not None
+            and pinned_version != explicit_version
+        ):
+            errors.append(
+                ValidationIssue(
+                    path=f"component_versions.{component_id}",
+                    message=f"{explicit_field} and component_versions disagree",
+                    code="COMPONENT_VERSION_CONFLICT",
+                )
+            )
+        return explicit_version if explicit_version is not None else pinned_version
+
     def _validate_component_versions(
         self,
         dto: AccountRuntimeConfigDTO,
-        registered: object,
-        profile_version: str | None,
         errors: list[ValidationIssue],
     ) -> None:
-        resolved: dict[str, str] = {}
-        if registered is not None:
-            resolved[dto.agent_id] = registered.descriptor.version  # type: ignore[attr-defined]
-        if dto.prompt_profile_id is not None and profile_version is not None:
-            resolved[dto.prompt_profile_id] = profile_version
+        available: dict[str, set[str]] = {}
+        for descriptor in self._result.agents.list():
+            available.setdefault(descriptor.id, set()).add(descriptor.version)
+        for profile in self._result.prompts.list_profiles():
+            available.setdefault(profile.id, set()).add(profile.version)
         for tool in self._result.tools.list():
-            resolved[tool.name] = self._result.tools.get(tool.name).extension.version
+            extension_version = self._result.tools.get(tool.name).extension.version
+            available.setdefault(tool.name, set()).add(extension_version)
 
         for component_id, requested_version in dto.component_versions.items():
-            try:
-                require_semver(requested_version, "component version")
-            except ValueError as exc:
-                errors.append(
-                    ValidationIssue(
-                        path=f"component_versions.{component_id}",
-                        message=str(exc),
-                        code="COMPONENT_VERSION_INVALID",
-                    )
-                )
-                continue
-            actual = resolved.get(component_id)
-            if actual is None:
+            loaded_versions = available.get(component_id)
+            if loaded_versions is None:
                 errors.append(
                     ValidationIssue(
                         path=f"component_versions.{component_id}",
@@ -225,37 +255,12 @@ class ExtensionCatalog:
                         code="COMPONENT_NOT_FOUND",
                     )
                 )
-            elif actual != requested_version:
+            elif requested_version not in loaded_versions:
                 errors.append(
                     ValidationIssue(
                         path=f"component_versions.{component_id}",
                         message=f"requested version {requested_version!r} is not loaded",
                         code="COMPONENT_VERSION_UNAVAILABLE",
-                    )
-                )
-
-        agent_pin = dto.component_versions.get(dto.agent_id)
-        if agent_pin is not None and dto.agent_version is not None and agent_pin != dto.agent_version:
-            errors.append(
-                ValidationIssue(
-                    path=f"component_versions.{dto.agent_id}",
-                    message="agent_version and component_versions disagree",
-                    code="COMPONENT_VERSION_CONFLICT",
-                )
-            )
-
-        if dto.prompt_profile_id is not None:
-            profile_pin = dto.component_versions.get(dto.prompt_profile_id)
-            if (
-                profile_pin is not None
-                and dto.prompt_profile_version is not None
-                and profile_pin != dto.prompt_profile_version
-            ):
-                errors.append(
-                    ValidationIssue(
-                        path=f"component_versions.{dto.prompt_profile_id}",
-                        message="prompt_profile_version and component_versions disagree",
-                        code="COMPONENT_VERSION_CONFLICT",
                     )
                 )
 

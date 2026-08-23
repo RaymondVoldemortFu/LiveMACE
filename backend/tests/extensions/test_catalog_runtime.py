@@ -1,19 +1,109 @@
 from __future__ import annotations
 
 import importlib
+import json
 from pathlib import Path
 import sys
 
 import pytest
 
-from benchmark.contracts import ExtensionLoadError
+from benchmark.agents import AgentDescriptor, AgentRegistry
+from benchmark.contracts import (
+    ExtensionLoadError,
+    ExtensionRef,
+    PromptProfileDescriptor,
+    PromptSelection,
+    PromptSpec,
+)
 from benchmark.extensions import (
     AccountRuntimeConfigDTO,
+    ExtensionCatalog,
+    ExtensionLoadResult,
     ExtensionSettings,
     ExtensionStatus,
     build_extension_runtime,
     load_extensions,
 )
+from benchmark.prompts import PromptRegistry, PromptSourcePriority
+from benchmark.prompts.renderer import parse_template, render_template
+from benchmark.tools import ToolRegistry
+
+
+class _Factory:
+    def create(self, context, config):
+        raise AssertionError("not invoked by catalog tests")
+
+
+class _PromptProvider:
+    def __init__(self, version: str):
+        self.spec = PromptSpec("com.example.prompt", version, ())
+        self.template = parse_template(version)
+
+    def list_prompts(self):
+        return (self.spec,)
+
+    def render(self, prompt_id, variables):
+        return render_template(self.template, self.spec, variables)
+
+
+def _multi_version_catalog() -> ExtensionCatalog:
+    agents = AgentRegistry()
+    for version, generation in (("1.0.0", "legacy"), ("2.0.0", "current")):
+        agents.register(
+            AgentDescriptor(
+                "com.example.agent",
+                version,
+                {
+                    "type": "object",
+                    "properties": {
+                        "generation": {
+                            "type": "string",
+                            "default": generation,
+                        }
+                    },
+                    "additionalProperties": False,
+                },
+            ),
+            _Factory(),
+        )
+    agents.freeze()
+
+    prompts = PromptRegistry()
+    extension = ExtensionRef("com.example.prompts", "1.0.0")
+    for version in ("1.0.0", "2.0.0"):
+        prompts.register_provider(
+            extension,
+            _PromptProvider(version),
+            PromptSourcePriority.EXTERNAL,
+        )
+        prompts.register_profiles(
+            extension,
+            (
+                PromptProfileDescriptor(
+                    "com.example.profile",
+                    version,
+                    {
+                        "system": PromptSelection(
+                            "com.example.prompt",
+                            version,
+                        )
+                    },
+                ),
+            ),
+            PromptSourcePriority.EXTERNAL,
+        )
+    prompts.freeze()
+
+    tools = ToolRegistry()
+    tools.freeze()
+    return ExtensionCatalog(
+        ExtensionLoadResult(
+            records=(),
+            agents=agents,
+            tools=tools,
+            prompts=prompts,
+        )
+    )
 
 
 def test_builtin_runtime_is_catalogued_and_frozen():
@@ -64,20 +154,95 @@ def test_catalog_validates_agent_schema_profile_and_versions():
     assert report.normalized_config["agent_config"]["max_steps"] == 100
     assert report.normalized_config["agent_config"]["include_simulation_notice"] is False
 
-    invalid = catalog.validate_account_config(
+    invalid_schema = catalog.validate_account_config(
         AccountRuntimeConfigDTO(
             agent_id="core.react",
             agent_config={"unknown": True},
+        )
+    )
+    assert not invalid_schema.valid
+    assert {issue.code for issue in invalid_schema.errors} == {
+        "additionalProperties"
+    }
+
+    invalid_components = catalog.validate_account_config(
+        AccountRuntimeConfigDTO(
+            agent_id="core.react",
             prompt_profile_id="core.missing",
             component_versions={"core.react": "9.0.0"},
         )
     )
-    assert not invalid.valid
-    assert {issue.code for issue in invalid.errors} >= {
-        "additionalProperties",
+    assert not invalid_components.valid
+    assert {issue.code for issue in invalid_components.errors} >= {
+        "AGENT_NOT_FOUND",
         "PROMPT_PROFILE_NOT_FOUND",
         "COMPONENT_VERSION_UNAVAILABLE",
     }
+
+
+def test_catalog_uses_component_version_pins_for_agent_and_profile():
+    report = _multi_version_catalog().validate_account_config(
+        AccountRuntimeConfigDTO(
+            agent_id="com.example.agent",
+            prompt_profile_id="com.example.profile",
+            component_versions={
+                "com.example.agent": "1.0.0",
+                "com.example.profile": "1.0.0",
+            },
+        )
+    )
+
+    assert report.valid
+    assert report.normalized_config["agent_version"] == "1.0.0"
+    assert report.normalized_config["agent_config"]["generation"] == "legacy"
+    assert report.normalized_config["prompt_profile_version"] == "1.0.0"
+
+
+def test_catalog_reports_conflicting_explicit_and_component_versions():
+    report = _multi_version_catalog().validate_account_config(
+        AccountRuntimeConfigDTO(
+            agent_id="com.example.agent",
+            agent_version="2.0.0",
+            prompt_profile_id="com.example.profile",
+            prompt_profile_version="2.0.0",
+            component_versions={
+                "com.example.agent": "1.0.0",
+                "com.example.profile": "1.0.0",
+            },
+        )
+    )
+
+    assert not report.valid
+    assert [issue.code for issue in report.errors] == [
+        "COMPONENT_VERSION_CONFLICT",
+        "COMPONENT_VERSION_CONFLICT",
+    ]
+    assert report.normalized_config["agent_version"] == "2.0.0"
+    assert report.normalized_config["agent_config"]["generation"] == "current"
+    assert report.normalized_config["prompt_profile_version"] == "2.0.0"
+
+
+def test_runtime_config_to_mapping_deeply_restores_json_values():
+    dto = AccountRuntimeConfigDTO(
+        agent_id="com.example.agent",
+        agent_config={
+            "strategy": {
+                "windows": [5, 20],
+                "filters": [{"field": "volume", "enabled": True}],
+            }
+        },
+        toolset_ids=("com.example.tools",),
+        disabled_tools=("com.example.tools.news",),
+        component_versions={"com.example.agent": "1.0.0"},
+    )
+
+    mapping = dto.to_mapping()
+    serialized = json.dumps(mapping)
+    restored = AccountRuntimeConfigDTO.from_mapping(json.loads(serialized))
+
+    assert isinstance(mapping["agent_config"]["strategy"], dict)
+    assert isinstance(mapping["agent_config"]["strategy"]["windows"], list)
+    assert restored.to_mapping() == mapping
 
 
 def test_catalog_rejects_unknown_fields_and_tool_names():
