@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
@@ -58,6 +59,8 @@ def _agent_extension(
     module_body: str,
     *,
     extension_id: str = "com.example.agent",
+    extension_version: str = "1.0.0",
+    agent_id: str | None = None,
     python_requires: str = ">=3.10",
     python_entrypoint: str = "metadata:entrypoint",
     include_tool: bool = False,
@@ -67,8 +70,7 @@ def _agent_extension(
     schema.write_text(json.dumps({"type": "object"}), encoding="utf-8")
     (root / f"{module_name}.py").write_text(module_body, encoding="utf-8")
     tool_block = (
-        "  tools:\n"
-        f"    - provider: {module_name}:create_provider\n"
+        "  tools:\n" f"    - provider: {module_name}:create_provider\n"
         if include_tool
         else ""
     )
@@ -76,14 +78,14 @@ def _agent_extension(
         root,
         "api_version: 1\n"
         f"id: {extension_id}\n"
-        "version: 1.0.0\n"
+        f"version: {extension_version}\n"
         "name: Agent Extension\n"
         "python:\n"
         f"  requires: '{python_requires}'\n"
         f"  entrypoint: {python_entrypoint}\n"
         "components:\n"
         "  agents:\n"
-        f"    - id: {extension_id}.component\n"
+        f"    - id: {agent_id or f'{extension_id}.component'}\n"
         f"      factory: {module_name}:create_factory\n"
         "      config_schema: schema.json\n"
         f"{tool_block}",
@@ -117,9 +119,7 @@ def test_discovery_deduplicates_using_host_path_case_semantics(tmp_path):
     upper = tmp_path / "CaseExtension"
     lower = tmp_path / "caseextension"
 
-    candidates = discover_extensions(
-        ExtensionSettings(extension_roots=(lower, upper))
-    )
+    candidates = discover_extensions(ExtensionSettings(extension_roots=(lower, upper)))
 
     expected_count = len(
         {
@@ -170,7 +170,10 @@ def test_prompt_only_extension_loads_without_python(tmp_path):
 
     assert result.records[0].status == ExtensionStatus.LOADED
     assert result.prompts.frozen
-    assert result.prompts.render("com.example.system", {"name": "Ada"}).content == "hello Ada"
+    assert (
+        result.prompts.render("com.example.system", {"name": "Ada"}).content
+        == "hello Ada"
+    )
 
 
 def test_static_invalid_extension_does_not_import_declared_module(tmp_path):
@@ -227,9 +230,12 @@ def test_incompatible_python_and_capabilities_do_not_import(tmp_path):
     _prompt_extension(root, extension_id="com.example.incompatible")
     manifest = root / "alpha-arena-extension.yaml"
     manifest.write_text(
-        manifest.read_text(encoding="utf-8").replace(
-            "components:\n", "python:\n  requires: '>99'\n  entrypoint: metadata:entrypoint\ncomponents:\n"
-        ).replace(
+        manifest.read_text(encoding="utf-8")
+        .replace(
+            "components:\n",
+            "python:\n  requires: '>99'\n  entrypoint: metadata:entrypoint\ncomponents:\n",
+        )
+        .replace(
             "components:\n", "capabilities:\n  requested: [market.read]\ncomponents:\n"
         ),
         encoding="utf-8",
@@ -270,8 +276,7 @@ def test_failed_external_extension_does_not_block_valid_extension(tmp_path):
     _agent_extension(
         bad,
         "shared_module",
-        "def create_factory():\n"
-        "    return object()\n",
+        "def create_factory():\n" "    return object()\n",
         extension_id="com.example.bad",
     )
     _agent_extension(
@@ -296,6 +301,103 @@ def test_failed_external_extension_does_not_block_valid_extension(tmp_path):
     ]
 
 
+@pytest.mark.parametrize("external_version", ["0.9.0", "1.0.0", "9.0.0"])
+def test_external_extension_cannot_take_over_builtin_agent_id(
+    tmp_path, external_version
+):
+    builtin = tmp_path / "builtin"
+    external = tmp_path / "external"
+    imported = tmp_path / "external-imported.txt"
+    factory_body = (
+        "class Factory:\n"
+        "    def create(self, context, config):\n"
+        "        return None\n"
+        "def create_factory():\n"
+        "    return Factory()\n"
+    )
+    _agent_extension(
+        builtin,
+        "builtin_agent",
+        factory_body,
+        extension_id="benchmark.core",
+        agent_id="core.react",
+    )
+    _agent_extension(
+        external,
+        "external_agent",
+        "from pathlib import Path\n"
+        f"Path({str(imported)!r}).write_text('imported')\n" + factory_body,
+        extension_id="com.example.takeover",
+        extension_version=external_version,
+        agent_id="core.react",
+    )
+
+    result = load_extensions(
+        ExtensionSettings(builtin_root=builtin, extension_roots=(external,))
+    )
+
+    assert [record.status for record in result.records] == [
+        ExtensionStatus.LOADED,
+        ExtensionStatus.LOAD_FAILED,
+    ]
+    assert result.records[1].errors[0].code == "AGENT_ID_RESERVED"
+    assert result.agents.get("core.react").descriptor.version == "1.0.0"
+    assert [descriptor.version for descriptor in result.agents.list()] == ["1.0.0"]
+    assert not imported.exists()
+
+
+def test_successful_extensions_keep_isolated_module_namespaces(tmp_path):
+    module_name = "phase2_shared_entry"
+    helper_name = "phase2_shared_helper"
+    first = tmp_path / "first-extension"
+    second = tmp_path / "second-extension"
+
+    def write_extension(root: Path, extension_id: str, marker: str) -> None:
+        _agent_extension(
+            root,
+            module_name,
+            f"MARKER = {marker!r}\n"
+            "class Factory:\n"
+            "    def create(self, context, config):\n"
+            f"        import {module_name}\n"
+            f"        import {helper_name}\n"
+            f"        return {module_name}.MARKER + {helper_name}.MARKER\n"
+            "def create_factory():\n"
+            "    return Factory()\n",
+            extension_id=extension_id,
+        )
+        (root / f"{helper_name}.py").write_text(
+            f"MARKER = {marker!r}\n", encoding="utf-8"
+        )
+
+    write_extension(first, "com.example.first", "A")
+    write_extension(second, "com.example.second", "B")
+    sys.modules.pop(module_name, None)
+    sys.modules.pop(helper_name, None)
+    try:
+        result = load_extensions(ExtensionSettings(extension_roots=(second, first)))
+
+        assert [record.status for record in result.records] == [
+            ExtensionStatus.LOADED,
+            ExtensionStatus.LOADED,
+        ]
+        first_factory = result.agents.get("com.example.first.component").factory
+        second_factory = result.agents.get("com.example.second.component").factory
+        factories = [first_factory, second_factory] * 20
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            values = list(
+                executor.map(lambda factory: factory.create(None, {}), factories)
+            )
+
+        assert values == ["AA", "BB"] * 20
+        assert module_name not in sys.modules
+        assert helper_name not in sys.modules
+        assert type(first_factory).__module__ != type(second_factory).__module__
+    finally:
+        sys.modules.pop(module_name, None)
+        sys.modules.pop(helper_name, None)
+
+
 def test_unresolved_external_profile_does_not_block_valid_extension(tmp_path):
     bad = tmp_path / "bad-profile"
     good = tmp_path / "good-profile"
@@ -306,8 +408,7 @@ def test_unresolved_external_profile_does_not_block_valid_extension(tmp_path):
     )
     bad_index = bad / "prompts" / "index.yaml"
     bad_index.write_text(
-        bad_index.read_text(encoding="utf-8")
-        + "profiles:\n"
+        bad_index.read_text(encoding="utf-8") + "profiles:\n"
         "  - id: com.example.bad-profile.default\n"
         "    version: 1.0.0\n"
         "    slots:\n"
@@ -360,12 +461,8 @@ def test_failed_extension_rolls_back_imported_modules(tmp_path):
         "    return Factory()\n",
         extension_id="com.example.good-module",
     )
-    (bad / f"{dependency_name}.py").write_text(
-        "MARKER = 'BAD'\n", encoding="utf-8"
-    )
-    (good / f"{dependency_name}.py").write_text(
-        "MARKER = 'GOOD'\n", encoding="utf-8"
-    )
+    (bad / f"{dependency_name}.py").write_text("MARKER = 'BAD'\n", encoding="utf-8")
+    (good / f"{dependency_name}.py").write_text("MARKER = 'GOOD'\n", encoding="utf-8")
 
     sys.modules.pop(module_name, None)
     sys.modules.pop(dependency_name, None)
@@ -378,7 +475,8 @@ def test_failed_extension_rolls_back_imported_modules(tmp_path):
         ]
         factory = result.agents.get("com.example.good-module.component").factory
         assert factory.create(None, {}) == "GOOD"
-        assert sys.modules[module_name].MARKER == "GOOD"
+        assert module_name not in sys.modules
+        assert dependency_name not in sys.modules
     finally:
         sys.modules.pop(module_name, None)
         sys.modules.pop(dependency_name, None)
@@ -489,3 +587,16 @@ def test_loader_rejects_manifest_symlink_outside_extension_root(tmp_path):
 
     assert result.records[0].status == ExtensionStatus.INVALID
     assert result.records[0].errors[0].code == "MANIFEST_PATH_INVALID"
+
+
+def test_public_load_record_sanitizes_missing_root_path(tmp_path):
+    missing = tmp_path / "private-host-root" / "missing-extension"
+
+    result = load_extensions(ExtensionSettings(extension_roots=(missing,)))
+
+    issue = result.records[0].errors[0]
+    serialized = json.dumps(result.records[0].to_dict())
+    assert issue.code == "MANIFEST_PATH_INVALID"
+    assert issue.message == "manifest path is invalid"
+    assert str(tmp_path.resolve()) not in serialized
+    assert str(missing.resolve()) not in serialized

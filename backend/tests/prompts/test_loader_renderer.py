@@ -37,9 +37,7 @@ def _write_index(root, *, file="system.txt", variables="[portfolio]", optional="
 def _shared_alias_dag(levels: int) -> str:
     lines = ["node0: &node0 [leaf]"]
     for level in range(1, levels + 1):
-        lines.append(
-            f"node{level}: &node{level} [*node{level - 1}, *node{level - 1}]"
-        )
+        lines.append(f"node{level}: &node{level} [*node{level - 1}, *node{level - 1}]")
     lines.append(f"root: *node{levels}")
     return "\n".join(lines) + "\n"
 
@@ -160,6 +158,17 @@ def test_prompt_file_cannot_escape_root(tmp_path):
 
     assert report.valid is False
     assert {issue.code for issue in report.errors} == {"PROMPT_FILE_PATH_INVALID"}
+
+
+def test_prompt_validation_sanitizes_missing_file_path(tmp_path):
+    _write_index(tmp_path, file="private/missing.txt")
+
+    report = validate_prompt_directory(tmp_path, tmp_path / "index.yaml")
+
+    assert report.valid is False
+    assert report.errors[0].code == "PROMPT_FILE_PATH_INVALID"
+    assert report.errors[0].message == "Prompt file path is invalid"
+    assert str(tmp_path.resolve()) not in report.errors[0].message
 
 
 def test_duplicate_yaml_keys_are_rejected(tmp_path):

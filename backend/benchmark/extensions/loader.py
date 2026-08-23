@@ -6,7 +6,7 @@ from collections.abc import Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import Enum
-import importlib
+import logging
 from pathlib import Path
 import sys
 from typing import Any, Iterator
@@ -41,8 +41,11 @@ from .discovery import (
     discover_extensions,
 )
 from .manifest import MANIFEST_FILENAME, ExtensionManifest, _parse_manifest
+from .module_isolation import ExtensionImportError, ExtensionModuleNamespace
 from .paths import resolve_extension_path
 from .validation import validate_manifest
+
+logger = logging.getLogger(__name__)
 
 
 class ExtensionStatus(str, Enum):
@@ -143,6 +146,7 @@ class ExtensionLoadResult:
 
 @dataclass(frozen=True)
 class _AgentContribution:
+    extension: ExtensionRef
     descriptor: AgentDescriptor
     factory: AgentFactory
 
@@ -165,7 +169,11 @@ class _PromptContribution:
 
 @dataclass(frozen=True)
 class _ExtensionContribution:
+    extension: ExtensionRef
     source: ExtensionSource
+    module_namespace: ExtensionModuleNamespace | None = field(
+        default=None, repr=False, compare=False
+    )
     agents: tuple[_AgentContribution, ...] = ()
     tools: tuple[_ToolContribution, ...] = ()
     prompts: tuple[_PromptContribution, ...] = ()
@@ -217,17 +225,28 @@ def _preflight(
             candidate.root, MANIFEST_FILENAME, must_exist=False
         )
     except (OSError, ValueError) as exc:
+        logger.debug("extension manifest path resolution failed", exc_info=exc)
         return None, _record(
             candidate,
             status=ExtensionStatus.INVALID,
-            errors=(_issue("MANIFEST_PATH_INVALID", str(exc), "manifest"),),
+            errors=(
+                _issue(
+                    "MANIFEST_PATH_INVALID",
+                    "manifest path is invalid",
+                    "manifest",
+                ),
+            ),
         )
     manifest, parse_errors = _parse_manifest(manifest_path)
     if manifest is None:
-        return None, _record(candidate, status=ExtensionStatus.INVALID, errors=parse_errors)
+        return None, _record(
+            candidate, status=ExtensionStatus.INVALID, errors=parse_errors
+        )
 
     if manifest.id in settings.disabled_extensions:
-        return manifest, _record(candidate, status=ExtensionStatus.DISABLED, manifest=manifest)
+        return manifest, _record(
+            candidate, status=ExtensionStatus.DISABLED, manifest=manifest
+        )
 
     report = validate_manifest(manifest, candidate.root)
     if not report.valid:
@@ -272,19 +291,6 @@ def _preflight(
 
 
 @contextmanager
-def _extension_import_path(root: Path) -> Iterator[None]:
-    root_text = str(root)
-    sys.path.insert(0, root_text)
-    try:
-        yield
-    finally:
-        try:
-            sys.path.remove(root_text)
-        except ValueError:
-            pass
-
-
-@contextmanager
 def _module_import_transaction() -> Iterator[None]:
     modules_before = dict(sys.modules)
     try:
@@ -298,79 +304,27 @@ def _module_import_transaction() -> Iterator[None]:
         raise
 
 
-def _import_attribute(root: Path, entrypoint: str) -> Any:
+def _import_attribute(namespace: ExtensionModuleNamespace, entrypoint: str) -> Any:
     module_name, attribute_path = entrypoint.split(":", 1)
-    existing = sys.modules.get(module_name)
-    replaced_module = None
-    if existing is not None:
-        module_file = getattr(existing, "__file__", None)
-        if not module_file:
-            raise _LoaderFailure("ENTRYPOINT_MODULE_INVALID", "entrypoint module has no file")
-        try:
-            existing_is_local = Path(module_file).resolve().is_relative_to(root)
-        except OSError as exc:
-            raise _LoaderFailure("ENTRYPOINT_MODULE_INVALID", "entrypoint module path is invalid") from exc
-        if existing_is_local:
-            module = existing
-        else:
-            replaced_module = existing
-            del sys.modules[module_name]
-            try:
-                with _extension_import_path(root):
-                    module = importlib.import_module(module_name)
-            except Exception as exc:
-                sys.modules[module_name] = replaced_module
-                raise _LoaderFailure(
-                    "ENTRYPOINT_IMPORT_FAILED", "declared entrypoint module could not be imported"
-                ) from exc
-        module_file = getattr(module, "__file__", None)
-    else:
-        try:
-            with _extension_import_path(root):
-                module = importlib.import_module(module_name)
-        except Exception as exc:
-            raise _LoaderFailure(
-                "ENTRYPOINT_IMPORT_FAILED", "declared entrypoint module could not be imported"
-            ) from exc
-        module_file = getattr(module, "__file__", None)
     try:
-        if not module_file:
-            raise _LoaderFailure(
-                "ENTRYPOINT_MODULE_INVALID", "entrypoint module has no file"
-            )
-        module_path = Path(module_file).resolve()
-        if not module_path.is_relative_to(root.resolve()):
-            raise _LoaderFailure(
-                "ENTRYPOINT_MODULE_OUTSIDE_ROOT",
-                "declared entrypoint module is outside the extension root",
-            )
-    except OSError as exc:
-        raise _LoaderFailure(
-            "ENTRYPOINT_MODULE_INVALID", "entrypoint module path is invalid"
-        ) from exc
-    except _LoaderFailure:
-        if replaced_module is not None:
-            sys.modules[module_name] = replaced_module
-        raise
+        module = namespace.import_module(module_name)
+    except ExtensionImportError as exc:
+        raise _LoaderFailure(exc.code, str(exc)) from exc
 
-    try:
-        value = module
-        for part in attribute_path.split("."):
-            try:
-                value = getattr(value, part)
-            except AttributeError as exc:
-                raise _LoaderFailure(
-                    "ENTRYPOINT_ATTRIBUTE_MISSING",
-                    "declared entrypoint attribute is missing",
-                ) from exc
-        if not callable(value):
+    value = module
+    for part in attribute_path.split("."):
+        try:
+            value = getattr(value, part)
+        except AttributeError as exc:
             raise _LoaderFailure(
-                "ENTRYPOINT_NOT_CALLABLE", "declared entrypoint is not callable"
-            )
-        return value
-    finally:
-        if replaced_module is not None:
-            sys.modules[module_name] = replaced_module
+                "ENTRYPOINT_ATTRIBUTE_MISSING",
+                "declared entrypoint attribute is missing",
+            ) from exc
+    if not callable(value):
+        raise _LoaderFailure(
+            "ENTRYPOINT_NOT_CALLABLE", "declared entrypoint is not callable"
+        )
+    return value
 
 
 def _load_schema(root: Path, relative_path: str) -> Mapping[str, Any]:
@@ -380,22 +334,29 @@ def _load_schema(root: Path, relative_path: str) -> Mapping[str, Any]:
         path = resolve_extension_path(root, relative_path)
         raw = load_structured_file(path)
         if not isinstance(raw, Mapping):
-            raise _LoaderFailure("CONFIG_SCHEMA_INVALID", "agent config schema must be an object")
+            raise _LoaderFailure(
+                "CONFIG_SCHEMA_INVALID", "agent config schema must be an object"
+            )
         validator_type = validators.validator_for(raw, default=Draft202012Validator)
         validator_type.check_schema(raw)
         return raw
     except _LoaderFailure:
         raise
     except StructuredDataError as exc:
-        raise _LoaderFailure(f"CONFIG_SCHEMA_{exc.code}", "agent config schema could not be loaded") from exc
+        raise _LoaderFailure(
+            f"CONFIG_SCHEMA_{exc.code}", "agent config schema could not be loaded"
+        ) from exc
     except (OSError, ValueError, SchemaError) as exc:
-        raise _LoaderFailure("CONFIG_SCHEMA_INVALID", "agent config schema is invalid") from exc
+        raise _LoaderFailure(
+            "CONFIG_SCHEMA_INVALID", "agent config schema is invalid"
+        ) from exc
 
 
 def _load_contribution(
     candidate: ExtensionCandidate,
     manifest: ExtensionManifest,
     allowed_capabilities: frozenset[str],
+    module_namespace: ExtensionModuleNamespace | None,
 ) -> _ExtensionContribution:
     agents: list[_AgentContribution] = []
     tools: list[_ToolContribution] = []
@@ -405,18 +366,27 @@ def _load_contribution(
         if candidate.source is ExtensionSource.BUILTIN
         else PromptSourcePriority.EXTERNAL
     )
+    if (
+        manifest.components.agents or manifest.components.tools
+    ) and module_namespace is None:
+        raise RuntimeError("Python components require an extension module namespace")
 
     for component in manifest.components.agents:
         schema = _load_schema(candidate.root, component.config_schema)
-        factory_callable = _import_attribute(candidate.root, component.factory)
+        factory_callable = _import_attribute(module_namespace, component.factory)
         try:
             factory = factory_callable()
         except Exception as exc:
-            raise _LoaderFailure("AGENT_FACTORY_FAILED", "agent factory could not be created") from exc
+            raise _LoaderFailure(
+                "AGENT_FACTORY_FAILED", "agent factory could not be created"
+            ) from exc
         if not isinstance(factory, AgentFactory):
-            raise _LoaderFailure("AGENT_FACTORY_INVALID", "agent factory does not implement create()")
+            raise _LoaderFailure(
+                "AGENT_FACTORY_INVALID", "agent factory does not implement create()"
+            )
         agents.append(
             _AgentContribution(
+                extension=manifest.ref,
                 descriptor=AgentDescriptor(
                     id=component.id,
                     version=manifest.version,
@@ -428,20 +398,22 @@ def _load_contribution(
 
     extension = manifest.ref
     for component in manifest.components.tools:
-        provider_callable = _import_attribute(candidate.root, component.provider)
+        provider_callable = _import_attribute(module_namespace, component.provider)
         try:
             provider = provider_callable()
         except Exception as exc:
-            raise _LoaderFailure("TOOL_PROVIDER_FAILED", "tool provider could not be created") from exc
+            raise _LoaderFailure(
+                "TOOL_PROVIDER_FAILED", "tool provider could not be created"
+            ) from exc
         if not isinstance(provider, ToolProvider):
-            raise _LoaderFailure("TOOL_PROVIDER_INVALID", "tool provider does not implement list_tools()")
+            raise _LoaderFailure(
+                "TOOL_PROVIDER_INVALID", "tool provider does not implement list_tools()"
+            )
         tools.append(
             _ToolContribution(
                 extension=extension,
                 provider=provider,
-                requested_capabilities=frozenset(
-                    manifest.capabilities.requested
-                ),
+                requested_capabilities=frozenset(manifest.capabilities.requested),
                 allowed_capabilities=allowed_capabilities,
             )
         )
@@ -452,7 +424,9 @@ def _load_contribution(
         try:
             loaded = load_prompt_directory(prompt_root, index_path)
         except BenchmarkError as exc:
-            raise _LoaderFailure(exc.code, "Prompt directory could not be loaded") from exc
+            raise _LoaderFailure(
+                exc.code, "Prompt directory could not be loaded"
+            ) from exc
         prompts.append(
             _PromptContribution(
                 extension=extension,
@@ -463,7 +437,9 @@ def _load_contribution(
         )
 
     return _ExtensionContribution(
+        extension=manifest.ref,
         source=candidate.source,
+        module_namespace=module_namespace,
         agents=tuple(agents),
         tools=tuple(tools),
         prompts=tuple(prompts),
@@ -537,6 +513,45 @@ def _failure_record(
     )
 
 
+def _reserved_builtin_agent_ids(
+    preflight: Sequence[
+        tuple[ExtensionCandidate, ExtensionManifest | None, ExtensionLoadRecord | None]
+    ],
+) -> frozenset[str]:
+    return frozenset(
+        component.id
+        for candidate, manifest, _record_value in preflight
+        if candidate.source is ExtensionSource.BUILTIN and manifest is not None
+        for component in manifest.components.agents
+    )
+
+
+def _validate_agent_ownership(
+    candidate: ExtensionCandidate,
+    manifest: ExtensionManifest,
+    builtin_agent_ids: frozenset[str],
+) -> None:
+    if candidate.source is ExtensionSource.BUILTIN:
+        return
+    if any(
+        component.id.startswith("core.") or component.id in builtin_agent_ids
+        for component in manifest.components.agents
+    ):
+        raise _LoaderFailure(
+            "AGENT_ID_RESERVED",
+            "external extensions cannot register reserved Agent ids",
+        )
+
+
+def _builtin_module_prefix(root: Path) -> str | None:
+    parts: list[str] = []
+    current = root
+    while (current / "__init__.py").is_file():
+        parts.append(current.name)
+        current = current.parent
+    return ".".join(reversed(parts)) or None
+
+
 def _fatal_builtin(records: Sequence[ExtensionLoadRecord]) -> None:
     details = {"records": [record.to_dict() for record in records]}
     raise ExtensionLoadError(
@@ -575,6 +590,7 @@ def load_discovered_extensions(
     if builtin_failures:
         _fatal_builtin(builtin_failures)
 
+    builtin_agent_ids = _reserved_builtin_agent_ids(preflight)
     accepted: list[_ExtensionContribution] = []
     staged_registries: tuple[AgentRegistry, ToolRegistry, PromptRegistry] | None = None
     for index, (candidate, manifest, preflight_record) in enumerate(preflight):
@@ -582,28 +598,52 @@ def load_discovered_extensions(
             continue
         if manifest is None:
             continue
+        module_namespace: ExtensionModuleNamespace | None = None
         try:
             with _module_import_transaction():
+                _validate_agent_ownership(candidate, manifest, builtin_agent_ids)
+                if manifest.components.agents or manifest.components.tools:
+                    module_namespace = ExtensionModuleNamespace(
+                        candidate.root,
+                        module_prefix=(
+                            _builtin_module_prefix(candidate.root)
+                            if candidate.source is ExtensionSource.BUILTIN
+                            else None
+                        ),
+                    )
+                if module_namespace is not None:
+                    module_namespace.install()
                 contribution = _load_contribution(
-                    candidate, manifest, settings.allowed_capabilities
+                    candidate,
+                    manifest,
+                    settings.allowed_capabilities,
+                    module_namespace,
                 )
                 candidate_registries = _build_frozen_registries(
                     [*accepted, contribution]
                 )
         except _LoaderFailure as exc:
+            if module_namespace is not None:
+                module_namespace.uninstall()
             failure = _failure_record(candidate, manifest, exc.code)
             record_by_index[index] = failure
             if candidate.source is ExtensionSource.BUILTIN:
                 _fatal_builtin(tuple(record_by_index.values()))
             continue
         except BenchmarkError as exc:
+            if module_namespace is not None:
+                module_namespace.uninstall()
             failure = _failure_record(candidate, manifest, exc.code)
             record_by_index[index] = failure
             if candidate.source is ExtensionSource.BUILTIN:
                 _fatal_builtin(tuple(record_by_index.values()))
             continue
         except Exception:
-            failure = _failure_record(candidate, manifest, "COMPONENT_REGISTRATION_FAILED")
+            if module_namespace is not None:
+                module_namespace.uninstall()
+            failure = _failure_record(
+                candidate, manifest, "COMPONENT_REGISTRATION_FAILED"
+            )
             record_by_index[index] = failure
             if candidate.source is ExtensionSource.BUILTIN:
                 _fatal_builtin(tuple(record_by_index.values()))
