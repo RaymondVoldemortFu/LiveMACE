@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+import os
 from pathlib import Path
 from typing import Iterable
 
@@ -66,6 +67,15 @@ def _normalized_root(root: Path) -> Path:
     return root.expanduser().resolve(strict=False)
 
 
+def _root_key(root: Path) -> str:
+    return os.path.normcase(str(root))
+
+
+def _root_sort_key(root: Path) -> tuple[str, str]:
+    root_text = str(root)
+    return os.path.normcase(root_text), root_text
+
+
 def _candidate(root: Path, source: ExtensionSource) -> ExtensionCandidate:
     normalized = _normalized_root(root)
     return ExtensionCandidate(normalized, normalized / MANIFEST_FILENAME, source)
@@ -82,7 +92,7 @@ def discover_extensions(settings: ExtensionSettings) -> tuple[ExtensionCandidate
 
     def add(root: Path, source: ExtensionSource) -> None:
         candidate = _candidate(root, source)
-        key = str(candidate.root).casefold()
+        key = _root_key(candidate.root)
         if key in seen_roots:
             return
         seen_roots.add(key)
@@ -93,7 +103,7 @@ def discover_extensions(settings: ExtensionSettings) -> tuple[ExtensionCandidate
 
     external_roots = sorted(
         (_normalized_root(root) for root in settings.extension_roots),
-        key=lambda path: str(path).casefold(),
+        key=_root_sort_key,
     )
     for root in external_roots:
         add(root, ExtensionSource.EXTERNAL)

@@ -22,6 +22,7 @@ from benchmark.contracts import (
     ExtensionRef,
     JsonValue,
     PromptProfileDescriptor,
+    ToolSpec,
     ValidationIssue,
     to_jsonable,
 )
@@ -39,7 +40,7 @@ from .discovery import (
     ExtensionSource,
     discover_extensions,
 )
-from .manifest import ExtensionManifest, _parse_manifest
+from .manifest import MANIFEST_FILENAME, ExtensionManifest, _parse_manifest
 from .paths import resolve_extension_path
 from .validation import validate_manifest
 
@@ -150,6 +151,8 @@ class _AgentContribution:
 class _ToolContribution:
     extension: ExtensionRef
     provider: ToolProvider
+    requested_capabilities: frozenset[str]
+    allowed_capabilities: frozenset[str]
 
 
 @dataclass(frozen=True)
@@ -209,7 +212,17 @@ def _preflight(
     candidate: ExtensionCandidate,
     settings: ExtensionSettings,
 ) -> tuple[ExtensionManifest | None, ExtensionLoadRecord | None]:
-    manifest, parse_errors = _parse_manifest(candidate.manifest_path)
+    try:
+        manifest_path = resolve_extension_path(
+            candidate.root, MANIFEST_FILENAME, must_exist=False
+        )
+    except (OSError, ValueError) as exc:
+        return None, _record(
+            candidate,
+            status=ExtensionStatus.INVALID,
+            errors=(_issue("MANIFEST_PATH_INVALID", str(exc), "manifest"),),
+        )
+    manifest, parse_errors = _parse_manifest(manifest_path)
     if manifest is None:
         return None, _record(candidate, status=ExtensionStatus.INVALID, errors=parse_errors)
 
@@ -269,6 +282,20 @@ def _extension_import_path(root: Path) -> Iterator[None]:
             sys.path.remove(root_text)
         except ValueError:
             pass
+
+
+@contextmanager
+def _module_import_transaction() -> Iterator[None]:
+    modules_before = dict(sys.modules)
+    try:
+        yield
+    except BaseException:
+        for module_name in set(sys.modules).difference(modules_before):
+            sys.modules.pop(module_name, None)
+        for module_name, module in modules_before.items():
+            if sys.modules.get(module_name) is not module:
+                sys.modules[module_name] = module
+        raise
 
 
 def _import_attribute(root: Path, entrypoint: str) -> Any:
@@ -368,6 +395,7 @@ def _load_schema(root: Path, relative_path: str) -> Mapping[str, Any]:
 def _load_contribution(
     candidate: ExtensionCandidate,
     manifest: ExtensionManifest,
+    allowed_capabilities: frozenset[str],
 ) -> _ExtensionContribution:
     agents: list[_AgentContribution] = []
     tools: list[_ToolContribution] = []
@@ -407,7 +435,16 @@ def _load_contribution(
             raise _LoaderFailure("TOOL_PROVIDER_FAILED", "tool provider could not be created") from exc
         if not isinstance(provider, ToolProvider):
             raise _LoaderFailure("TOOL_PROVIDER_INVALID", "tool provider does not implement list_tools()")
-        tools.append(_ToolContribution(extension=extension, provider=provider))
+        tools.append(
+            _ToolContribution(
+                extension=extension,
+                provider=provider,
+                requested_capabilities=frozenset(
+                    manifest.capabilities.requested
+                ),
+                allowed_capabilities=allowed_capabilities,
+            )
+        )
 
     for component in manifest.components.prompts:
         prompt_root = resolve_extension_path(candidate.root, component.directory)
@@ -443,10 +480,47 @@ def _build_registries(
         for item in contribution.agents:
             agents.register(item.descriptor, item.factory)
         for item in contribution.tools:
+            existing_names = {spec.name for spec in tools.list()}
             tools.register_provider(item.extension, item.provider)
+            registered_specs = tuple(
+                spec for spec in tools.list() if spec.name not in existing_names
+            )
+            _validate_tool_capabilities(registered_specs, item)
         for item in contribution.prompts:
             prompts.register_provider(item.extension, item.provider, item.priority)
             prompts.register_profiles(item.extension, item.profiles, item.priority)
+    return agents, tools, prompts
+
+
+def _validate_tool_capabilities(
+    specs: Sequence[ToolSpec],
+    contribution: _ToolContribution,
+) -> None:
+    for spec in specs:
+        required = frozenset(spec.required_capabilities)
+        undeclared = sorted(required.difference(contribution.requested_capabilities))
+        if undeclared:
+            raise _LoaderFailure(
+                "TOOL_CAPABILITY_UNDECLARED",
+                f"Tool {spec.name} requires undeclared capabilities: "
+                + ", ".join(undeclared),
+            )
+        disallowed = sorted(required.difference(contribution.allowed_capabilities))
+        if disallowed:
+            raise _LoaderFailure(
+                "TOOL_CAPABILITY_NOT_ALLOWED",
+                f"Tool {spec.name} requires disallowed capabilities: "
+                + ", ".join(disallowed),
+            )
+
+
+def _build_frozen_registries(
+    contributions: Sequence[_ExtensionContribution],
+) -> tuple[AgentRegistry, ToolRegistry, PromptRegistry]:
+    agents, tools, prompts = _build_registries(contributions)
+    agents.freeze()
+    tools.freeze()
+    prompts.freeze()
     return agents, tools, prompts
 
 
@@ -502,14 +576,20 @@ def load_discovered_extensions(
         _fatal_builtin(builtin_failures)
 
     accepted: list[_ExtensionContribution] = []
+    staged_registries: tuple[AgentRegistry, ToolRegistry, PromptRegistry] | None = None
     for index, (candidate, manifest, preflight_record) in enumerate(preflight):
         if preflight_record is not None:
             continue
         if manifest is None:
             continue
         try:
-            contribution = _load_contribution(candidate, manifest)
-            _build_registries([*accepted, contribution])
+            with _module_import_transaction():
+                contribution = _load_contribution(
+                    candidate, manifest, settings.allowed_capabilities
+                )
+                candidate_registries = _build_frozen_registries(
+                    [*accepted, contribution]
+                )
         except _LoaderFailure as exc:
             failure = _failure_record(candidate, manifest, exc.code)
             record_by_index[index] = failure
@@ -530,21 +610,14 @@ def load_discovered_extensions(
             continue
 
         accepted.append(contribution)
+        staged_registries = candidate_registries
         record_by_index[index] = _record(
             candidate, status=ExtensionStatus.LOADED, manifest=manifest
         )
 
-    try:
-        agents, tools, prompts = _build_registries(accepted)
-        agents.freeze()
-        tools.freeze()
-        prompts.freeze()
-    except BenchmarkError as exc:
-        raise ExtensionLoadError(
-            "extension staging could not be frozen",
-            code="EXTENSION_STAGING_FAILED",
-            details={"error_code": exc.code},
-        ) from exc
+    if staged_registries is None:
+        staged_registries = _build_frozen_registries(())
+    agents, tools, prompts = staged_registries
 
     return ExtensionLoadResult(
         records=tuple(record_by_index[index] for index in range(len(candidates))),
