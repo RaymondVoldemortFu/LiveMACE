@@ -20,8 +20,16 @@ from benchmark.builtin.agents.rule_aware import (
     RuleAwareAgentFactory,
 )
 from benchmark.builtin.prompts import get_builtin_prompt_registry
-from benchmark.contracts import ComponentConfigError, Market, TerminationReason
+from benchmark.contracts import (
+    Market,
+    SideEffect,
+    TerminationReason,
+    ToolResult,
+    ToolSpec,
+)
 from benchmark.infrastructure.adapters import LegacyLLMClientAdapter
+from benchmark.providers import LLMResponse, LLMToolCall
+from benchmark.testing import FakeLLMClientPort
 from services.agent.factory import create_agent
 from services.agent.rule_aware.rule_aware_agent import RuleAwareAgent
 from services.agent.tools import Tool, ToolRegistry
@@ -73,6 +81,13 @@ def _trade_registry():
 
 
 def _create_adapter(llm, tools=None, events=None, **config):
+    values = _factory_config(**config)
+    return RuleAwareAgentFactory().create(
+        _build_context(llm, tools or _trade_registry(), events), values
+    )
+
+
+def _factory_config(**config):
     values = {
         "max_steps": 3,
         "user_id": None,
@@ -82,9 +97,7 @@ def _create_adapter(llm, tools=None, events=None, **config):
         "enable_llm_audit": False,
     }
     values.update(config)
-    return RuleAwareAgentFactory().create(
-        _build_context(llm, tools or _trade_registry(), events), values
-    )
+    return values
 
 
 def _disable_audit(monkeypatch):
@@ -98,7 +111,9 @@ def _disable_audit(monkeypatch):
 def test_rule_aware_registers_once_and_legacy_shim_remains():
     registry = AgentRegistry()
     register_builtin_agents(registry)
-    descriptors = [item for item in registry.list() if item.id == RULE_AWARE_COMPONENT_ID]
+    descriptors = [
+        item for item in registry.list() if item.id == RULE_AWARE_COMPONENT_ID
+    ]
     assert [(item.id, item.version) for item in descriptors] == [
         (RULE_AWARE_COMPONENT_ID, RULE_AWARE_VERSION)
     ]
@@ -114,24 +129,207 @@ def test_rule_aware_registers_once_and_legacy_shim_remains():
     assert isinstance(agent, RuleAwareAgent)
 
 
-def test_rule_aware_rejects_public_tool_invoker_only():
-    context = _build_context(
-        FakeLLM([FakeLLMResponse("<TRADE_DONE>")]),
-        FakeToolInvoker(),
+def test_rule_aware_builds_and_runs_with_public_ports(monkeypatch):
+    _disable_audit(monkeypatch)
+    llm = FakeLLMClientPort((LLMResponse("<TRADE_DONE>"),))
+    tools = FakeToolInvoker()
+    context = AgentBuildContext(
+        llm=llm,
+        tools=tools,
+        prompts=get_builtin_prompt_registry(),
+        events=NullEventSink(),
     )
-    with pytest.raises(ComponentConfigError) as caught:
-        RuleAwareAgentFactory().create(
-            context,
-            {
-                "max_steps": 1,
-                "user_id": None,
-                "account_id": None,
-                "agent_name": None,
-                "rule_docs_path": None,
-                "enable_llm_audit": False,
+    agent = RuleAwareAgentFactory().create(context, _factory_config(max_steps=1))
+
+    result = agent.run(make_decision_context())
+
+    assert result.termination_reason is TerminationReason.HOLD
+    assert len(llm.requests) == 1
+    assert llm.requests[0].model == "default"
+    assert llm.requests[0].tools == ()
+    assert tools.calls == []
+
+
+def test_rule_aware_uses_public_tool_results_and_explicit_specs(monkeypatch):
+    _disable_audit(monkeypatch)
+
+    class PublicTradeInvoker:
+        def __init__(self):
+            self.calls = []
+
+        def list_specs(self):
+            return (
+                ToolSpec(
+                    name="core.execute_trade",
+                    description="test trade",
+                    input_schema={"type": "object", "properties": {}},
+                    output_schema={"type": "object"},
+                    side_effect=SideEffect.TRADING_WRITE,
+                ),
+            )
+
+        def call(self, name, arguments):
+            self.calls.append((name, dict(arguments)))
+            return ToolResult(
+                ok=True,
+                value={
+                    "executed": True,
+                    "operation": arguments["operation"],
+                    "symbol": arguments["symbol"],
+                    "market": arguments["market"],
+                    "order_id": 7,
+                    "trade_id": 8,
+                },
+            )
+
+    llm = FakeLLMClientPort(
+        (
+            LLMResponse(
+                "",
+                tool_calls=(
+                    LLMToolCall(
+                        id="call-public-1",
+                        name="core.execute_trade",
+                        arguments={
+                            "operation": "open",
+                            "symbol": "BTC",
+                            "market": "CRYPTO",
+                        },
+                    ),
+                ),
+            ),
+            LLMResponse("<TRADE_DONE>"),
+        )
+    )
+    tools = PublicTradeInvoker()
+    context = AgentBuildContext(
+        llm=llm,
+        tools=tools,
+        prompts=get_builtin_prompt_registry(),
+        events=NullEventSink(),
+    )
+    agent = RuleAwareAgentFactory().create(context, _factory_config(max_steps=2))
+
+    result = agent.run(make_decision_context())
+
+    assert result.termination_reason is TerminationReason.TRADE_DONE
+    assert [(trade.symbol, trade.executed) for trade in result.executed_trades] == [
+        ("BTC", True)
+    ]
+    assert tools.calls == [
+        (
+            "core.execute_trade",
+            {"operation": "open", "symbol": "BTC", "market": "CRYPTO"},
+        )
+    ]
+    assert llm.requests[0].tools[0]["function"]["name"] == "execute_trade"
+
+
+def test_rule_aware_public_tool_rejection_is_unexecuted(monkeypatch):
+    _disable_audit(monkeypatch)
+
+    class RejectingTradeInvoker:
+        def __init__(self):
+            self.calls = []
+
+        def call(self, name, arguments):
+            self.calls.append((name, dict(arguments)))
+            return ToolResult(
+                ok=False,
+                error_code="BROKER_REJECTED",
+                error_message="broker rejected order",
+            )
+
+    llm = FakeLLMClientPort(
+        (
+            LLMResponse(
+                "",
+                tool_calls=(
+                    LLMToolCall(
+                        id="call-rejected-1",
+                        name="core.execute_trade",
+                        arguments={
+                            "operation": "open",
+                            "symbol": "BTC",
+                            "market": "CRYPTO",
+                        },
+                    ),
+                ),
+            ),
+            LLMResponse("<TRADE_DONE>"),
+        )
+    )
+    tools = RejectingTradeInvoker()
+    agent = RuleAwareAgentFactory().create(
+        AgentBuildContext(
+            llm=llm,
+            tools=tools,
+            prompts=get_builtin_prompt_registry(),
+            events=NullEventSink(),
+        ),
+        _factory_config(max_steps=2),
+    )
+
+    result = agent.run(make_decision_context())
+
+    assert result.termination_reason is TerminationReason.HOLD
+    assert len(result.executed_trades) == 1
+    assert result.executed_trades[0].executed is False
+    assert result.executed_trades[0].reject_code == "BROKER_REJECTED"
+    assert result.metadata["trade_errors"][0]["error"] == "broker rejected order"
+    assert tools.calls[0][0] == "core.execute_trade"
+    assert "decision_round_id" not in tools.calls[0][1]
+    assert "tool_call_id" not in tools.calls[0][1]
+
+
+def test_rule_aware_legacy_shim_keeps_trade_runtime_ids(monkeypatch):
+    _disable_audit(monkeypatch)
+    calls = []
+    registry = ToolRegistry()
+    registry.register(
+        Tool(
+            name="execute_trade",
+            description="legacy trade",
+            parameters={"type": "object", "properties": {}},
+            func=lambda **arguments: calls.append(arguments)
+            or {
+                "executed": True,
+                "operation": arguments["operation"],
+                "symbol": arguments["symbol"],
+                "market": arguments["market"],
             },
         )
-    assert caught.value.code == "RULE_AWARE_LEGACY_TOOL_REGISTRY_REQUIRED"
+    )
+    adapter = _create_adapter(
+        FakeLLM(
+            [
+                FakeLLMResponse(
+                    None,
+                    [
+                        FakeToolCall(
+                            "call-legacy-1",
+                            "execute_trade",
+                            json.dumps(
+                                {
+                                    "operation": "open",
+                                    "symbol": "BTC",
+                                    "market": "CRYPTO",
+                                }
+                            ),
+                        )
+                    ],
+                ),
+                FakeLLMResponse("<TRADE_DONE>"),
+            ]
+        ),
+        tools=registry,
+        max_steps=2,
+    )
+
+    adapter.run(make_decision_context())
+
+    assert calls[0]["decision_round_id"] == "round-react"
+    assert calls[0]["tool_call_id"] == "call-legacy-1"
 
 
 def test_nested_trade_conversion_preserves_order_and_no_defaults():
@@ -211,7 +409,11 @@ def test_rule_aware_tool_exception_is_reported_as_unexecuted(monkeypatch):
                             "call-1",
                             "execute_trade",
                             json.dumps(
-                                {"operation": "open", "symbol": "BTC", "market": "CRYPTO"}
+                                {
+                                    "operation": "open",
+                                    "symbol": "BTC",
+                                    "market": "CRYPTO",
+                                }
                             ),
                         )
                     ],
@@ -240,7 +442,9 @@ def test_rule_aware_runtime_emits_steps_and_preserves_two_trades(monkeypatch):
                     FakeToolCall(
                         "call-1",
                         "execute_trade",
-                        json.dumps({"operation": "open", "symbol": "BTC", "market": "CRYPTO"}),
+                        json.dumps(
+                            {"operation": "open", "symbol": "BTC", "market": "CRYPTO"}
+                        ),
                     )
                 ],
             ),
@@ -250,7 +454,9 @@ def test_rule_aware_runtime_emits_steps_and_preserves_two_trades(monkeypatch):
                     FakeToolCall(
                         "call-2",
                         "execute_trade",
-                        json.dumps({"operation": "open", "symbol": "AAPL", "market": "US"}),
+                        json.dumps(
+                            {"operation": "open", "symbol": "AAPL", "market": "US"}
+                        ),
                     )
                 ],
             ),
@@ -265,9 +471,7 @@ def test_rule_aware_runtime_emits_steps_and_preserves_two_trades(monkeypatch):
     assert result.termination_reason is TerminationReason.TRADE_DONE
     assert [item.symbol for item in result.executed_trades] == ["BTC", "AAPL"]
     assert [event.type for event in events.events] == (
-        ["agent.started"]
-        + ["agent.step"] * 5
-        + ["agent.completed"]
+        ["agent.started"] + ["agent.step"] * 5 + ["agent.completed"]
     )
     steps = [event for event in events.events if event.type == "agent.step"]
     assert [event.metadata["step_number"] for event in steps] == [1, 2, 3, 4, 5]
@@ -286,7 +490,11 @@ def test_rule_aware_max_steps_keeps_previous_trade(monkeypatch):
                             "call-1",
                             "execute_trade",
                             json.dumps(
-                                {"operation": "open", "symbol": "BTC", "market": "CRYPTO"}
+                                {
+                                    "operation": "open",
+                                    "symbol": "BTC",
+                                    "market": "CRYPTO",
+                                }
                             ),
                         )
                     ],
@@ -314,7 +522,11 @@ def test_rule_aware_llm_error_keeps_previous_trade(monkeypatch):
                             "call-1",
                             "execute_trade",
                             json.dumps(
-                                {"operation": "open", "symbol": "BTC", "market": "CRYPTO"}
+                                {
+                                    "operation": "open",
+                                    "symbol": "BTC",
+                                    "market": "CRYPTO",
+                                }
                             ),
                         )
                     ],
@@ -338,9 +550,7 @@ def test_rule_aware_adapter_runs_in_calling_thread(monkeypatch):
             thread_ids.append(get_ident())
             return super().call(messages, tools, **kwargs)
 
-    adapter = _create_adapter(
-        ThreadLLM([FakeLLMResponse("<TRADE_DONE>")]), max_steps=1
-    )
+    adapter = _create_adapter(ThreadLLM([FakeLLMResponse("<TRADE_DONE>")]), max_steps=1)
     result = adapter.run(make_decision_context())
     assert result.termination_reason is TerminationReason.HOLD
     assert thread_ids == [get_ident()]

@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
+import json
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
-from benchmark.agents import AgentBuildContext, AgentDescriptor, AgentRuntimeEvent, EventSink
+from benchmark.agents import (
+    AgentBuildContext,
+    AgentDescriptor,
+    AgentRuntimeEvent,
+    EventSink,
+)
 from benchmark.builtin.agents._legacy_context import (
     nested_executed_trades_from_legacy,
     portfolio_from_context,
@@ -17,15 +24,19 @@ from benchmark.builtin.prompts import get_prompt_resolver
 from benchmark.contracts import (
     AgentRunResult,
     AgentRuntimeError,
-    ComponentConfigError,
     DecisionContext,
+    JsonValue,
+    ToolResult,
+    ToolRuntimeError,
     to_jsonable,
 )
+from benchmark.providers import LLMClientPort, LLMRequest, LLMResponse, LLMToolCall
+from benchmark.tools import ToolInvoker, ToolSpecSource, openai_tool_schema
 from config.agent_config import AgentConfig
+from services.agent.llm_client import LLMClient
 from services.agent.rule_aware.rule_aware_agent import RuleAwareAgent
 from services.agent.rule_aware.rule_engine import RuleEngine
 from services.agent.tools import ToolRegistry
-
 
 RULE_AWARE_COMPONENT_ID = "core.rule-aware"
 RULE_AWARE_VERSION = "1.0.0"
@@ -33,7 +44,11 @@ RULE_AWARE_CONFIG_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
     "properties": {
-        "max_steps": {"type": "integer", "minimum": 1, "default": AgentConfig.MAX_STEPS},
+        "max_steps": {
+            "type": "integer",
+            "minimum": 1,
+            "default": AgentConfig.MAX_STEPS,
+        },
         "user_id": {"type": ["string", "integer", "null"], "default": None},
         "account_id": {"type": ["integer", "null"], "minimum": 1, "default": None},
         "agent_name": {"type": ["string", "null"], "default": None},
@@ -60,17 +75,201 @@ def _default_rule_documents_path() -> str:
     return str(Path(__file__).resolve().parents[3] / "config" / "rules")
 
 
-def _unwrap_legacy_llm(llm: Any) -> Any:
-    legacy = getattr(llm, "legacy_client", None)
-    if legacy is not None and callable(getattr(legacy, "call", None)):
-        return legacy
-    if callable(getattr(llm, "call", None)):
-        return llm
-    raise ComponentConfigError(
-        "core.rule-aware adapter requires a legacy LLMClient (call()) "
-        "or LegacyLLMClientAdapter",
-        code="RULE_AWARE_LEGACY_LLM_REQUIRED",
+_LEGACY_TO_PUBLIC_TOOL_NAMES = {
+    "execute_trade": "core.execute_trade",
+    "get_market_snapshot": "core.market_snapshot",
+    "get_kline_history": "core.kline_history",
+    "get_account_state": "core.account_state",
+    "get_history_decisions": "core.decision_history",
+    "memory_add": "core.memory_add",
+    "memory_search": "core.memory_search",
+    "consult_search_agent": "core.search",
+}
+_PUBLIC_TO_LEGACY_TOOL_NAMES = {
+    public: legacy for legacy, public in _LEGACY_TO_PUBLIC_TOOL_NAMES.items()
+}
+_RUNTIME_TOOL_ARGUMENTS = frozenset(
+    {"idempotency_key", "decision_round_id", "tool_call_id"}
+)
+
+
+@dataclass(frozen=True)
+class _LegacyLLMMessage:
+    content: str
+    tool_calls: list[dict[str, JsonValue]]
+    assistant_message: dict[str, JsonValue]
+
+
+class _PublicLLMBridge:
+    """Expose the legacy loop surface while invoking only LLMClientPort.complete()."""
+
+    def __init__(self, llm: LLMClientPort) -> None:
+        self._llm = llm
+        configured_model = getattr(llm, "model", None)
+        self.model = (
+            configured_model
+            if isinstance(configured_model, str) and configured_model.strip()
+            else "default"
+        )
+
+    def call(
+        self,
+        messages: Sequence[Mapping[str, JsonValue]],
+        tools: Sequence[Mapping[str, JsonValue]] | None = None,
+        **_: Any,
+    ) -> _LegacyLLMMessage:
+        response = self._llm.complete(
+            LLMRequest(
+                messages=tuple(dict(message) for message in messages),
+                model=self.model,
+                tools=tuple(dict(tool) for tool in (tools or ())),
+            )
+        )
+        if not isinstance(response, LLMResponse):
+            raise AgentRuntimeError(
+                "LLMClientPort.complete() must return LLMResponse",
+                code="RULE_AWARE_LLM_RESULT_INVALID",
+            )
+        tool_calls = _legacy_tool_calls(response)
+        assistant_message = _assistant_message(response, tool_calls)
+        return _LegacyLLMMessage(response.content, tool_calls, assistant_message)
+
+    @staticmethod
+    def build_assistant_message_dict(
+        response: _LegacyLLMMessage,
+    ) -> dict[str, JsonValue]:
+        return dict(response.assistant_message)
+
+    def is_gemini_model(self) -> bool:
+        return LLMClient.is_gemini_model_name(self.model)
+
+
+class _PublicToolBridge:
+    """Expose the legacy registry surface while invoking only ToolInvoker.call()."""
+
+    def __init__(
+        self,
+        tools: ToolInvoker,
+        model_tools: Sequence[Mapping[str, JsonValue]],
+    ) -> None:
+        self._tools = tools
+        self.openai_tools = [dict(tool) for tool in model_tools]
+
+    def get(self, name: str):
+        public_name = _public_tool_name(name)
+
+        def invoke(**arguments: Any) -> JsonValue:
+            if isinstance(self._tools, ToolRegistry):
+                public_arguments = dict(arguments)
+            else:
+                public_arguments = {
+                    key: value
+                    for key, value in arguments.items()
+                    if key not in _RUNTIME_TOOL_ARGUMENTS
+                }
+            try:
+                result = self._tools.call(public_name, public_arguments)
+            except ToolRuntimeError as exc:
+                if isinstance(self._tools, ToolRegistry) and isinstance(
+                    exc.__cause__, Exception
+                ):
+                    raise exc.__cause__
+                raise
+            if not isinstance(result, ToolResult):
+                raise AgentRuntimeError(
+                    "ToolInvoker.call() must return ToolResult",
+                    code="RULE_AWARE_TOOL_RESULT_INVALID",
+                    details={"tool_name": public_name},
+                )
+            if result.ok:
+                return to_jsonable(result.value)
+            payload: dict[str, JsonValue] = {
+                "error": result.error_message
+                or result.error_code
+                or "Tool call failed",
+                "error_code": result.error_code,
+                "retryable": result.retryable,
+            }
+            if public_name == "core.execute_trade":
+                payload["executed"] = False
+                payload["reject_code"] = result.error_code
+            return payload
+
+        return invoke
+
+
+def _legacy_tool_calls(response: LLMResponse) -> list[dict[str, JsonValue]]:
+    raw_calls = response.raw.get("tool_calls")
+    raw_sequence = raw_calls if isinstance(raw_calls, (list, tuple)) else ()
+    return [
+        _legacy_tool_call(
+            tool_call, raw_sequence[index] if index < len(raw_sequence) else None
+        )
+        for index, tool_call in enumerate(response.tool_calls)
+    ]
+
+
+def _legacy_tool_call(
+    tool_call: LLMToolCall,
+    raw: JsonValue,
+) -> dict[str, JsonValue]:
+    payload = dict(raw) if isinstance(raw, Mapping) else {}
+    raw_function = payload.get("function")
+    function = dict(raw_function) if isinstance(raw_function, Mapping) else {}
+    function["name"] = _legacy_tool_name(tool_call.name)
+    function["arguments"] = json.dumps(
+        to_jsonable(tool_call.arguments),
+        ensure_ascii=False,
+        separators=(",", ":"),
     )
+    payload["id"] = tool_call.id
+    payload["type"] = str(payload.get("type") or "function")
+    payload["function"] = function
+    return to_jsonable(payload)
+
+
+def _assistant_message(
+    response: LLMResponse,
+    tool_calls: list[dict[str, JsonValue]],
+) -> dict[str, JsonValue]:
+    message = dict(response.raw)
+    message["role"] = "assistant"
+    message["content"] = response.content
+    if tool_calls:
+        message["tool_calls"] = tool_calls
+    else:
+        message.pop("tool_calls", None)
+    return to_jsonable(message)
+
+
+def _public_tool_name(name: str) -> str:
+    normalized = name.rsplit(":", 1)[-1]
+    return _LEGACY_TO_PUBLIC_TOOL_NAMES.get(normalized, normalized)
+
+
+def _legacy_tool_name(name: str) -> str:
+    return _PUBLIC_TO_LEGACY_TOOL_NAMES.get(name, name)
+
+
+def _model_tools(tools: ToolInvoker) -> tuple[dict[str, JsonValue], ...]:
+    if isinstance(tools, ToolSpecSource):
+        schemas = (openai_tool_schema(spec) for spec in tools.list_specs())
+    elif isinstance(tools, ToolRegistry):
+        schemas = iter(tools.openai_tools)
+    else:
+        return ()
+    normalized: list[dict[str, JsonValue]] = []
+    for schema in schemas:
+        payload = to_jsonable(schema)
+        function = payload.get("function")
+        if not isinstance(function, dict):
+            raise AgentRuntimeError(
+                "Tool schema must contain a function object",
+                code="RULE_AWARE_TOOL_SCHEMA_INVALID",
+            )
+        function["name"] = _legacy_tool_name(str(function.get("name") or ""))
+        normalized.append(payload)
+    return tuple(normalized)
 
 
 class RuleAwareAgentAdapter:
@@ -170,7 +369,9 @@ def _jsonable_field(value: Any, field_name: str) -> Any:
         ) from exc
 
 
-def _step_event_metadata(step_number: int, message: Mapping[str, Any]) -> dict[str, Any]:
+def _step_event_metadata(
+    step_number: int, message: Mapping[str, Any]
+) -> dict[str, Any]:
     role = message.get("role")
     if not isinstance(role, str) or not role:
         raise AgentRuntimeError(
@@ -201,18 +402,11 @@ class RuleAwareAgentFactory:
     ) -> RuleAwareAgentAdapter:
         if not isinstance(context, AgentBuildContext):
             raise TypeError("context must be AgentBuildContext")
-        if not isinstance(context.tools, ToolRegistry):
-            raise ComponentConfigError(
-                "core.rule-aware currently requires services.agent.tools.ToolRegistry; "
-                "public ToolInvoker-only construction is owned by M06",
-                code="RULE_AWARE_LEGACY_TOOL_REGISTRY_REQUIRED",
-            )
-        llm = _unwrap_legacy_llm(context.llm)
         rule_docs_path = config.get("rule_docs_path") or _default_rule_documents_path()
         rule_engine = RuleEngine(str(rule_docs_path))
         agent = RuleAwareAgent(
-            llm,
-            context.tools,
+            _PublicLLMBridge(context.llm),
+            _PublicToolBridge(context.tools, _model_tools(context.tools)),
             rule_engine,
             max_steps=int(config["max_steps"]),
             user_id=config.get("user_id"),

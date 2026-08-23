@@ -11,6 +11,7 @@ M05 已建立公开的同步 Tool Runtime。第三方扩展可以只依赖
 `benchmark.tools` 公开：
 
 - `Tool`、`ToolProvider`、`ToolInvoker` 同步 Protocol；
+- 可选只读 `ToolSpecSource`，供内置 Agent 从授权后的运行时视图生成模型工具 schema；
 - `ToolRegistry`、`ToolView`、`SynchronousToolInvoker`；
 - `RegisteredTool`、`ToolRuntimeEvent`、`ToolEventSink`；
 - `ToolSpec`、`ToolContext`、`ToolResult`、`SideEffect` 的稳定 re-export；
