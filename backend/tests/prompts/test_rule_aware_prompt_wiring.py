@@ -13,7 +13,6 @@ from services.agent.rule_aware.rule_engine import RuleEngine
 from services.agent.tools import ToolRegistry
 from tests.fakes import FakeLLM, FakeLLMResponse
 
-
 RULE_DOCUMENTS = "## R0\nR0-01: Keep leverage <= 2"
 PORTFOLIO = {
     "account_id": 7,
@@ -168,9 +167,12 @@ def test_auditor_default_messages_match_pre_migration_hash():
     assert result["final_normalized_score"] == 0.75
 
 
-def test_auditor_uses_injected_profile_slot():
+def test_auditor_uses_injected_profile_slots():
     resolver = _OverrideResolver(
-        {("core.compliance-audit.default", "system"): "custom audit system"}
+        {
+            ("core.compliance-audit.default", "system"): "custom audit system",
+            ("core.compliance-audit.default", "user"): "custom audit user",
+        }
     )
     llm = FakeLLM([FakeLLMResponse(_audit_response())])
     auditor = LLMAuditor(llm, prompt_resolver=resolver)
@@ -185,6 +187,15 @@ def test_auditor_uses_injected_profile_slot():
         "role": "system",
         "content": "custom audit system",
     }
+    assert llm.calls[0]["messages"][1] == {
+        "role": "user",
+        "content": "custom audit user",
+    }
     assert [call[:2] for call in resolver.calls] == [
-        ("core.compliance-audit.default", "system")
+        ("core.compliance-audit.default", "system"),
+        ("core.compliance-audit.default", "user"),
     ]
+    user_variables = resolver.calls[1][2]
+    assert user_variables["rules"] == RULE_DOCUMENTS
+    assert "Cash: $10,000.00" in user_variables["market_state"]
+    assert user_variables["agent_output"] == "Checked R0-01 and held."

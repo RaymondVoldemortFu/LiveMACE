@@ -79,24 +79,6 @@ class LLMAuditor:
 {json.dumps(prices, indent=2)}
 """
 
-            # Build user prompt
-            user_prompt = f"""## Rules Documentation
-{rules}
-
-## Market State
-{market_state_text}
-
-## Agent Output to Audit
-{agent_output}
-
----
-
-Please audit the above agent output and provide scores for:
-1. Rule Coverage & Awareness
-2. Conflict Handling & Priority
-
-Return ONLY valid JSON with no markdown formatting."""
-
             # Call LLM
             messages = [
                 {
@@ -107,7 +89,18 @@ Return ONLY valid JSON with no markdown formatting."""
                         {},
                     ).content,
                 },
-                {"role": "user", "content": user_prompt},
+                {
+                    "role": "user",
+                    "content": self.prompt_resolver.render_slot(
+                        "core.compliance-audit.default",
+                        "user",
+                        {
+                            "rules": rules,
+                            "market_state": market_state_text,
+                            "agent_output": agent_output,
+                        },
+                    ).content.removesuffix("\n"),
+                },
             ]
 
             response = self.llm_client.call(messages)
