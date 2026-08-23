@@ -20,6 +20,10 @@ from benchmark.agents import (
 )
 from benchmark.builtin.agents import register_builtin_agents
 from benchmark.builtin.agents.react import REACT_COMPONENT_ID, REACT_SHIM_CONFIG_KEYS
+from benchmark.builtin.agents.rule_aware import (
+    RULE_AWARE_COMPONENT_ID,
+    RULE_AWARE_SHIM_CONFIG_KEYS,
+)
 from benchmark.builtin.prompts import get_builtin_prompt_registry
 from benchmark.infrastructure.adapters import LegacyLLMClientAdapter
 
@@ -122,8 +126,17 @@ _LEGACY_AGENT_IDS = {
 _LEGACY_REGISTRY = _create_legacy_registry()
 
 
-def _react_shim_config(kwargs: Mapping[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in kwargs.items() if key in REACT_SHIM_CONFIG_KEYS}
+_SHIM_CONFIG_KEYS = {
+    REACT_COMPONENT_ID: REACT_SHIM_CONFIG_KEYS,
+    RULE_AWARE_COMPONENT_ID: RULE_AWARE_SHIM_CONFIG_KEYS,
+}
+
+
+def _shim_config(agent_id: str, kwargs: Mapping[str, Any]) -> dict[str, Any]:
+    allowed_keys = _SHIM_CONFIG_KEYS.get(agent_id)
+    if allowed_keys is None:
+        return dict(kwargs)
+    return {key: value for key, value in kwargs.items() if key in allowed_keys}
 
 
 def create_agent(
@@ -143,7 +156,7 @@ def create_agent(
     except ComponentNotFoundError as exc:
         raise ValueError(f"Unknown agent type: {agent_type}") from exc
 
-    config = _react_shim_config(kwargs) if agent_id == REACT_COMPONENT_ID else kwargs
+    config = _shim_config(agent_id, kwargs)
     report = _LEGACY_REGISTRY.validate_config(agent_id, config)
     if not report.valid:
         message = "; ".join(

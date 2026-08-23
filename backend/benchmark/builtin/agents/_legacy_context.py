@@ -172,7 +172,7 @@ def _trade_refs_from_item(item: dict[str, Any]) -> tuple[ExecutedTradeRef, ...]:
         closed = item.get("closed_orders") or []
         if not isinstance(closed, (list, tuple)):
             raise _IncompleteTradeRef("closed_orders must be a list")
-        executed = bool(item.get("executed", True))
+        executed = _is_explicitly_executed(item)
         reject_code = _reject_code(item, executed)
         refs: list[ExecutedTradeRef] = []
         for order in closed:
@@ -201,7 +201,7 @@ def _trade_ref(item: Mapping[str, Any]) -> ExecutedTradeRef:
     if not operation or not symbol:
         raise _IncompleteTradeRef("operation and symbol are required")
     market = _parse_market(item.get("market"))
-    executed = bool(item.get("executed", True))
+    executed = _is_explicitly_executed(item)
     return ExecutedTradeRef(
         operation=operation,
         symbol=symbol,
@@ -220,6 +220,10 @@ def _reject_code(item: Mapping[str, Any], executed: bool) -> str | None:
     if not executed and item.get("error") is not None:
         return "TRADE_REJECTED"
     return None
+
+
+def _is_explicitly_executed(item: Mapping[str, Any]) -> bool:
+    return item.get("executed") is True and item.get("error") is None
 
 
 def _parse_market(value: Any) -> Market:

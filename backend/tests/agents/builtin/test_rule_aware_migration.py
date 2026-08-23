@@ -95,7 +95,7 @@ def _disable_audit(monkeypatch):
     )
 
 
-def test_rule_aware_registers_once_and_legacy_shim_remains(monkeypatch):
+def test_rule_aware_registers_once_and_legacy_shim_remains():
     registry = AgentRegistry()
     register_builtin_agents(registry)
     descriptors = [item for item in registry.list() if item.id == RULE_AWARE_COMPONENT_ID]
@@ -109,6 +109,7 @@ def test_rule_aware_registers_once_and_legacy_shim_remains(monkeypatch):
         ToolRegistry(),
         max_steps=1,
         account_id=1,
+        legacy_unused_option=True,
     )
     assert isinstance(agent, RuleAwareAgent)
 
@@ -155,6 +156,78 @@ def test_nested_trade_conversion_preserves_order_and_no_defaults():
     ]
     assert incomplete[0]["args"]["operation"] == "open"
     assert errors[0]["error"] == "missing market"
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        {"error": "Tool execution failed: broker unavailable"},
+        {"operation": "open", "symbol": "BTC", "market": "CRYPTO"},
+        {
+            "executed": True,
+            "operation": "open",
+            "symbol": "BTC",
+            "market": "CRYPTO",
+            "error": "broker reported an inconsistent result",
+        },
+    ],
+)
+def test_nested_trade_conversion_requires_explicit_error_free_execution(result):
+    refs, incomplete, _ = nested_executed_trades_from_legacy(
+        [
+            {
+                "args": {"operation": "open", "symbol": "BTC", "market": "CRYPTO"},
+                "result": result,
+            }
+        ]
+    )
+    assert incomplete == ()
+    assert len(refs) == 1
+    assert refs[0].executed is False
+
+
+def test_rule_aware_tool_exception_is_reported_as_unexecuted(monkeypatch):
+    _disable_audit(monkeypatch)
+
+    def execute_trade(**kwargs):
+        raise RuntimeError("broker unavailable")
+
+    registry = ToolRegistry()
+    registry.register(
+        Tool(
+            name="execute_trade",
+            description="failing trade",
+            parameters={"type": "object", "properties": {}},
+            func=execute_trade,
+        )
+    )
+    adapter = _create_adapter(
+        FakeLLM(
+            [
+                FakeLLMResponse(
+                    None,
+                    [
+                        FakeToolCall(
+                            "call-1",
+                            "execute_trade",
+                            json.dumps(
+                                {"operation": "open", "symbol": "BTC", "market": "CRYPTO"}
+                            ),
+                        )
+                    ],
+                ),
+                FakeLLMResponse("<TRADE_DONE>"),
+            ]
+        ),
+        tools=registry,
+    )
+    result = adapter.run(make_decision_context())
+
+    assert result.termination_reason is TerminationReason.HOLD
+    assert len(result.executed_trades) == 1
+    assert result.executed_trades[0].executed is False
+    assert result.executed_trades[0].reject_code == "TRADE_REJECTED"
+    assert result.metadata["trade_errors"][0]["error"].endswith("broker unavailable")
 
 
 def test_rule_aware_runtime_emits_steps_and_preserves_two_trades(monkeypatch):
