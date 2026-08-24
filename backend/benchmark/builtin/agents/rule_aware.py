@@ -88,8 +88,8 @@ _LEGACY_TO_PUBLIC_TOOL_NAMES = {
 _PUBLIC_TO_LEGACY_TOOL_NAMES = {
     public: legacy for legacy, public in _LEGACY_TO_PUBLIC_TOOL_NAMES.items()
 }
-_RUNTIME_TOOL_ARGUMENTS = frozenset(
-    {"idempotency_key", "decision_round_id", "tool_call_id"}
+_LEGACY_TRADE_RUNTIME_ARGUMENTS = frozenset(
+    {"decision_round_id", "tool_call_id"}
 )
 
 
@@ -109,7 +109,7 @@ class _PublicLLMBridge:
         self.model = (
             configured_model
             if isinstance(configured_model, str) and configured_model.strip()
-            else "default"
+            else None
         )
 
     def call(
@@ -159,13 +159,15 @@ class _PublicToolBridge:
         public_name = _public_tool_name(name)
 
         def invoke(**arguments: Any) -> JsonValue:
-            if isinstance(self._tools, ToolRegistry):
-                public_arguments = dict(arguments)
-            else:
+            public_arguments = dict(arguments)
+            if (
+                not isinstance(self._tools, ToolRegistry)
+                and public_name == "core.execute_trade"
+            ):
                 public_arguments = {
                     key: value
                     for key, value in arguments.items()
-                    if key not in _RUNTIME_TOOL_ARGUMENTS
+                    if key not in _LEGACY_TRADE_RUNTIME_ARGUMENTS
                 }
             try:
                 result = self._tools.call(public_name, public_arguments)

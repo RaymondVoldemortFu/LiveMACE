@@ -147,6 +147,17 @@ def test_llm_adapter_forwards_options_and_removes_sdk_objects():
     assert client.kwargs["timeout"] == 3.0
 
 
+def test_llm_adapter_uses_bound_model_when_request_model_is_omitted():
+    client = FakeLegacyLLM()
+    adapter = LegacyLLMClientAdapter(client)
+
+    adapter.complete(LLMRequest(messages=()))
+
+    assert client.kwargs is not None
+    with pytest.raises(ValueError, match="model"):
+        LLMRequest(messages=(), model=" ")
+
+
 def test_llm_adapter_rejects_model_mismatch_and_bad_tool_arguments():
     adapter = LegacyLLMClientAdapter(FakeLegacyLLM())
     with pytest.raises(ProviderError) as mismatch:

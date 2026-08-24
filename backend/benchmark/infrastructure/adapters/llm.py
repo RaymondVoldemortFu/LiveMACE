@@ -45,7 +45,11 @@ class LegacyLLMClientAdapter(LLMClientPort):
         if not isinstance(request, LLMRequest):
             raise TypeError("request must be LLMRequest")
         configured_model = getattr(self._client, "model", None)
-        if configured_model and request.model != configured_model:
+        if (
+            configured_model
+            and request.model is not None
+            and request.model != configured_model
+        ):
             raise ProviderError(
                 "LLM request model does not match the configured client",
                 code="LLM_MODEL_MISMATCH",

@@ -298,6 +298,8 @@ class SandboxPort(Protocol):
     def healthcheck(self) -> "HealthStatus": ...
 ```
 
+`LLMRequest.model` 为 `str | None`；`None` 表示使用 `LLMClientPort` 已绑定的模型。只有显式提供非空模型时，Provider adapter 才校验请求模型与绑定模型是否一致。Agent 不得依赖 Port 未公开声明的模型属性，也不得构造占位模型名。
+
 事件下沉接口按运行时分为两套，事件负载类型不同，不设统一 `RuntimeEvent`：
 
 ```python

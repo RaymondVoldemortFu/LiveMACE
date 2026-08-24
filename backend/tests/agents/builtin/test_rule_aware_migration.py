@@ -145,7 +145,7 @@ def test_rule_aware_builds_and_runs_with_public_ports(monkeypatch):
 
     assert result.termination_reason is TerminationReason.HOLD
     assert len(llm.requests) == 1
-    assert llm.requests[0].model == "default"
+    assert llm.requests[0].model is None
     assert llm.requests[0].tools == ()
     assert tools.calls == []
 
@@ -280,6 +280,67 @@ def test_rule_aware_public_tool_rejection_is_unexecuted(monkeypatch):
     assert tools.calls[0][0] == "core.execute_trade"
     assert "decision_round_id" not in tools.calls[0][1]
     assert "tool_call_id" not in tools.calls[0][1]
+
+
+@pytest.mark.parametrize(
+    "argument_name",
+    ["idempotency_key", "decision_round_id", "tool_call_id"],
+)
+def test_rule_aware_preserves_third_party_tool_arguments(monkeypatch, argument_name):
+    _disable_audit(monkeypatch)
+
+    class PublicToolInvoker:
+        def __init__(self):
+            self.calls = []
+
+        def list_specs(self):
+            return (
+                ToolSpec(
+                    name="third_party.echo",
+                    description="echo a required argument",
+                    input_schema={
+                        "type": "object",
+                        "properties": {argument_name: {"type": "string"}},
+                        "required": [argument_name],
+                    },
+                    output_schema={"type": "object"},
+                    side_effect=SideEffect.READ_ONLY,
+                ),
+            )
+
+        def call(self, name, arguments):
+            self.calls.append((name, dict(arguments)))
+            return ToolResult(ok=True, value={"received": dict(arguments)})
+
+    llm = FakeLLMClientPort(
+        (
+            LLMResponse(
+                "",
+                tool_calls=(
+                    LLMToolCall(
+                        id="call-third-party-1",
+                        name="third_party.echo",
+                        arguments={argument_name: "model-value"},
+                    ),
+                ),
+            ),
+            LLMResponse("<TRADE_DONE>"),
+        )
+    )
+    tools = PublicToolInvoker()
+    agent = RuleAwareAgentFactory().create(
+        AgentBuildContext(
+            llm=llm,
+            tools=tools,
+            prompts=get_builtin_prompt_registry(),
+            events=NullEventSink(),
+        ),
+        _factory_config(max_steps=2),
+    )
+
+    agent.run(make_decision_context())
+
+    assert tools.calls == [("third_party.echo", {argument_name: "model-value"})]
 
 
 def test_rule_aware_legacy_shim_keeps_trade_runtime_ids(monkeypatch):
