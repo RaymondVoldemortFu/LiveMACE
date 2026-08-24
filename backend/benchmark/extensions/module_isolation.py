@@ -196,11 +196,11 @@ class ExtensionModuleNamespace:
         name: str,
         globals: dict[str, Any] | None = None,
         locals: dict[str, Any] | None = None,
-        fromlist: tuple[str, ...] | list[str] = (),
+        fromlist: tuple[str, ...] | list[str] | None = (),
         level: int = 0,
     ) -> ModuleType:
-        if level == 0 and name == "importlib":
-            return self._importlib_proxy
+        if level == 0 and (name == "importlib" or name.startswith("importlib.")):
+            return self._import_importlib(name, globals, locals, fromlist)
         if level != 0 or self.resolve_module(name) is None:
             return builtins.__import__(name, globals, locals, fromlist, level)
 
@@ -215,6 +215,33 @@ class ExtensionModuleNamespace:
             return module
         top_level_name = relative_name.split(".", 1)[0]
         return sys.modules[f"{self.name}.{top_level_name}"]
+
+    def _import_importlib(
+        self,
+        name: str,
+        globals: dict[str, Any] | None,
+        locals: dict[str, Any] | None,
+        fromlist: tuple[str, ...] | list[str] | None,
+    ) -> ModuleType:
+        imported = builtins.__import__(name, globals, locals, fromlist, 0)
+        if name == "importlib":
+            for item in fromlist or ():
+                if item in {"*", "import_module"}:
+                    continue
+                try:
+                    value = getattr(imported, item)
+                except AttributeError:
+                    continue
+                setattr(self._importlib_proxy, item, value)
+            return self._importlib_proxy
+        if fromlist:
+            return imported
+
+        child_name = name.split(".", 2)[1]
+        child = sys.modules.get(f"importlib.{child_name}")
+        if child is not None:
+            setattr(self._importlib_proxy, child_name, child)
+        return self._importlib_proxy
 
     def _dynamic_import_module(
         self,

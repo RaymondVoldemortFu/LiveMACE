@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import importlib
 import json
 import os
 from pathlib import Path
@@ -501,24 +502,35 @@ def test_dynamic_imports_use_each_extension_private_namespace(tmp_path):
     helper_name = "dynamic_shared_helper"
     first = tmp_path / "dynamic-first"
     second = tmp_path / "dynamic-second"
+    standard_import_module = importlib.import_module
 
     def write_extension(root: Path, extension_id: str, marker: str) -> None:
         _agent_extension(
             root,
             module_name,
-            "import importlib\n"
-            "from importlib import import_module\n"
+            "import importlib.util\n"
+            "import importlib.resources\n"
+            "from importlib import import_module, resources\n"
+            "from importlib.util import find_spec\n"
             "class Factory:\n"
             "    def create(self, context, config):\n"
+            "        import importlib as plain_importlib\n"
             f"        package = importlib.import_module({package_name!r})\n"
             f"        late = import_module({f'{package_name}.late'!r})\n"
             f"        helper = importlib.import_module({helper_name!r})\n"
             "        json_module = import_module('json')\n"
+            "        plain_json_module = plain_importlib.import_module('json')\n"
+            "        json_spec = find_spec('json')\n"
             "        return (\n"
             "            package.MARKER,\n"
             "            late.MARKER,\n"
             "            helper.MARKER,\n"
             "            json_module.__name__,\n"
+            "            importlib.util.__name__,\n"
+            "            importlib.resources.__name__,\n"
+            "            resources.__name__,\n"
+            "            json_spec.name,\n"
+            "            plain_json_module.__name__,\n"
             "        )\n"
             "def create_factory():\n"
             "    return Factory()\n",
@@ -550,10 +562,34 @@ def test_dynamic_imports_use_each_extension_private_namespace(tmp_path):
     with ThreadPoolExecutor(max_workers=8) as executor:
         values = list(executor.map(lambda factory: factory.create(None, {}), factories))
 
-    assert values == [("A", "A", "A", "json"), ("B", "B", "B", "json")] * 20
+    assert values == [
+        (
+            "A",
+            "A",
+            "A",
+            "json",
+            "importlib.util",
+            "importlib.resources",
+            "importlib.resources",
+            "json",
+            "json",
+        ),
+        (
+            "B",
+            "B",
+            "B",
+            "json",
+            "importlib.util",
+            "importlib.resources",
+            "importlib.resources",
+            "json",
+            "json",
+        ),
+    ] * 20
     assert package_name not in sys.modules
     assert f"{package_name}.late" not in sys.modules
     assert helper_name not in sys.modules
+    assert importlib.import_module is standard_import_module
 
 
 def test_unresolved_external_profile_does_not_block_valid_extension(tmp_path):
