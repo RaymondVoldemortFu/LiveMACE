@@ -53,7 +53,9 @@ class SentimentTool:
 - Tool 名称必须是小写 ASCII namespaced identifier；输入和输出 schema 使用匹配
   schema draft 的 `jsonschema` validator 检查。
 - timeout 上限、副作用和 capability 组合在注册时校验。
-- `core.*` namespace 默认只允许 `benchmark.core` 内置扩展注册。
+- 普通 `register_provider()` 路径一律拒绝 `core.*` namespace；宿主 loader 仅对
+  discovery source 为 `BUILTIN` 的 contribution 使用显式
+  `register_builtin_provider()` 路径，Manifest 声明的扩展 ID 不构成信任依据。
 - `trading.write` 默认只允许 `core.execute_trade`。管理员可以在构建 Registry 时
   显式加入额外的完整 Tool 名称。
 - Registry freeze 幂等；冻结后只读。账户 capability 和 active Tool 选择保存在

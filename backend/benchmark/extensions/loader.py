@@ -154,6 +154,7 @@ class _AgentContribution:
 @dataclass(frozen=True)
 class _ToolContribution:
     extension: ExtensionRef
+    source: ExtensionSource
     provider: ToolProvider
     requested_capabilities: frozenset[str]
     allowed_capabilities: frozenset[str]
@@ -412,6 +413,7 @@ def _load_contribution(
         tools.append(
             _ToolContribution(
                 extension=extension,
+                source=candidate.source,
                 provider=provider,
                 requested_capabilities=frozenset(manifest.capabilities.requested),
                 allowed_capabilities=allowed_capabilities,
@@ -457,7 +459,10 @@ def _build_registries(
             agents.register(item.descriptor, item.factory)
         for item in contribution.tools:
             existing_names = {spec.name for spec in tools.list()}
-            tools.register_provider(item.extension, item.provider)
+            if item.source is ExtensionSource.BUILTIN:
+                tools.register_builtin_provider(item.extension, item.provider)
+            else:
+                tools.register_provider(item.extension, item.provider)
             registered_specs = tuple(
                 spec for spec in tools.list() if spec.name not in existing_names
             )

@@ -29,17 +29,13 @@ class ToolRegistry:
         self,
         *,
         trading_write_allowlist: Iterable[str] = ("core.execute_trade",),
-        core_namespace_extensions: Iterable[str] = ("benchmark.core",),
     ) -> None:
         self._entries: dict[str, RegisteredTool] = {}
         self._frozen = False
         self._lock = RLock()
         self._trading_write_allowlist = frozenset(trading_write_allowlist)
-        self._core_namespace_extensions = frozenset(core_namespace_extensions)
         for name in self._trading_write_allowlist:
             require_identifier(name, "trading Tool allowlist entry")
-        for extension_id in self._core_namespace_extensions:
-            require_identifier(extension_id, "core namespace extension id")
 
     @property
     def frozen(self) -> bool:
@@ -56,6 +52,26 @@ class ToolRegistry:
         self,
         extension: ExtensionRef,
         provider: ToolProvider,
+    ) -> None:
+        """Validate and atomically register all Tools from one extension."""
+
+        self._register_provider(extension, provider, allow_core_namespace=False)
+
+    def register_builtin_provider(
+        self,
+        extension: ExtensionRef,
+        provider: ToolProvider,
+    ) -> None:
+        """Register a provider trusted by host-controlled built-in discovery."""
+
+        self._register_provider(extension, provider, allow_core_namespace=True)
+
+    def _register_provider(
+        self,
+        extension: ExtensionRef,
+        provider: ToolProvider,
+        *,
+        allow_core_namespace: bool,
     ) -> None:
         """Validate and atomically register all Tools from one extension."""
 
@@ -77,10 +93,7 @@ class ToolRegistry:
         for tool in tools:
             spec = self._validate_tool(tool)
             name = spec.name
-            if (
-                name.startswith("core.")
-                and extension.id not in self._core_namespace_extensions
-            ):
+            if name.startswith("core.") and not allow_core_namespace:
                 raise ComponentConfigError(
                     "The core.* Tool namespace is reserved for built-in extensions",
                     code="TOOL_CORE_NAMESPACE_FORBIDDEN",

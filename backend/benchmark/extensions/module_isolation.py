@@ -102,6 +102,10 @@ class ExtensionModuleNamespace:
         module_builtins = dict(vars(builtins))
         module_builtins["__import__"] = self._import
         self.module_builtins = module_builtins
+        importlib_proxy = ModuleType("importlib")
+        importlib_proxy.__dict__.update(vars(importlib))
+        importlib_proxy.import_module = self._dynamic_import_module
+        self._importlib_proxy = importlib_proxy
 
     def install(self) -> None:
         if self._installed:
@@ -195,6 +199,8 @@ class ExtensionModuleNamespace:
         fromlist: tuple[str, ...] | list[str] = (),
         level: int = 0,
     ) -> ModuleType:
+        if level == 0 and name == "importlib":
+            return self._importlib_proxy
         if level != 0 or self.resolve_module(name) is None:
             return builtins.__import__(name, globals, locals, fromlist, level)
 
@@ -209,6 +215,35 @@ class ExtensionModuleNamespace:
             return module
         top_level_name = relative_name.split(".", 1)[0]
         return sys.modules[f"{self.name}.{top_level_name}"]
+
+    def _dynamic_import_module(
+        self,
+        name: str,
+        package: str | None = None,
+    ) -> ModuleType:
+        private_prefix = f"{self.name}."
+        if name == self.name or name.startswith(private_prefix):
+            return importlib.import_module(name, package)
+
+        if name.startswith("."):
+            private_package = self._private_package_name(package)
+            return importlib.import_module(name, private_package or package)
+
+        if self.resolve_module(name) is not None:
+            relative_name = self._relative_name(name)
+            return importlib.import_module(f"{self.name}.{relative_name}")
+        return importlib.import_module(name, package)
+
+    def _private_package_name(self, package: str | None) -> str | None:
+        if not package:
+            return None
+        if package == self.name or package.startswith(f"{self.name}."):
+            return package
+        resolved = self.resolve_module(package)
+        if resolved is None or not resolved[1]:
+            return None
+        relative_name = self._relative_name(package)
+        return f"{self.name}.{relative_name}"
 
     def _relative_name(self, module_name: str) -> str:
         prefix = self.module_prefix
