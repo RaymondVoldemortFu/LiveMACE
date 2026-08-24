@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import builtins
 import importlib
+from importlib import resources as _stdlib_resources
 from importlib.abc import MetaPathFinder
 from importlib.machinery import ModuleSpec, SourceFileLoader
+from importlib import util as _stdlib_util
 from importlib.util import find_spec, spec_from_file_location
 from pathlib import Path
 import sys
@@ -105,6 +107,21 @@ class ExtensionModuleNamespace:
         importlib_proxy = ModuleType("importlib")
         importlib_proxy.__dict__.update(vars(importlib))
         importlib_proxy.import_module = self._dynamic_import_module
+        self._importlib_util_proxy = ModuleType("importlib.util")
+        self._importlib_util_proxy.__dict__.update(vars(_stdlib_util))
+        self._importlib_util_proxy.find_spec = self._find_spec
+        self._importlib_resources_proxy = ModuleType("importlib.resources")
+        self._importlib_resources_proxy.__dict__.update(vars(_stdlib_resources))
+        self._importlib_resources_proxy.files = self._resources_files
+        self._importlib_resources_proxy.open_binary = self._resources_open_binary
+        self._importlib_resources_proxy.open_text = self._resources_open_text
+        self._importlib_resources_proxy.read_binary = self._resources_read_binary
+        self._importlib_resources_proxy.read_text = self._resources_read_text
+        self._importlib_resources_proxy.contents = self._resources_contents
+        self._importlib_resources_proxy.is_resource = self._resources_is_resource
+        self._importlib_resources_proxy.path = self._resources_path
+        importlib_proxy.util = self._importlib_util_proxy
+        importlib_proxy.resources = self._importlib_resources_proxy
         self._importlib_proxy = importlib_proxy
 
     def install(self) -> None:
@@ -228,20 +245,102 @@ class ExtensionModuleNamespace:
             for item in fromlist or ():
                 if item in {"*", "import_module"}:
                     continue
+                if item == "util":
+                    setattr(self._importlib_proxy, item, self._importlib_util_proxy)
+                    continue
+                if item == "resources":
+                    setattr(
+                        self._importlib_proxy, item, self._importlib_resources_proxy
+                    )
+                    continue
                 try:
                     value = getattr(imported, item)
                 except AttributeError:
                     continue
                 setattr(self._importlib_proxy, item, value)
             return self._importlib_proxy
+        child_name = name.split(".", 2)[1]
         if fromlist:
+            child_module = {
+                "util": self._importlib_util_proxy,
+                "resources": self._importlib_resources_proxy,
+            }.get(child_name)
+            if child_module is not None:
+                setattr(self._importlib_proxy, child_name, child_module)
+                return child_module
             return imported
 
-        child_name = name.split(".", 2)[1]
-        child = sys.modules.get(f"importlib.{child_name}")
+        child = {
+            "util": self._importlib_util_proxy,
+            "resources": self._importlib_resources_proxy,
+        }.get(child_name) or sys.modules.get(f"importlib.{child_name}")
         if child is not None:
             setattr(self._importlib_proxy, child_name, child)
         return self._importlib_proxy
+
+    def _find_spec(
+        self,
+        name: str,
+        package: str | None = None,
+    ) -> ModuleSpec | None:
+        """Resolve extension-local names through this namespace's finder."""
+        if name.startswith("."):
+            private_package = self._private_package_name(package)
+            if private_package is not None:
+                name = importlib.util.resolve_name(name, private_package)
+        if self.resolve_module(name) is not None:
+            relative_name = self._relative_name(name)
+            return _stdlib_util.find_spec(f"{self.name}.{relative_name}")
+        return _stdlib_util.find_spec(name, package)
+
+    def _resource_anchor(self, anchor: Any) -> Any:
+        if isinstance(anchor, str) and self.resolve_module(anchor) is not None:
+            return self._dynamic_import_module(anchor)
+        if isinstance(anchor, ModuleType) and (
+            anchor.__name__ == self.name or anchor.__name__.startswith(f"{self.name}.")
+        ):
+            return anchor
+        return anchor
+
+    def _resources_files(self, anchor: Any) -> Any:
+        return _stdlib_resources.files(self._resource_anchor(anchor))
+
+    def _resources_open_binary(self, anchor: Any, *path_names: str):
+        return _stdlib_resources.open_binary(self._resource_anchor(anchor), *path_names)
+
+    def _resources_open_text(
+        self,
+        anchor: Any,
+        *path_names: str,
+        encoding: str = "utf-8",
+        errors: str = "strict",
+    ):
+        return _stdlib_resources.open_text(
+            self._resource_anchor(anchor), *path_names, encoding=encoding, errors=errors
+        )
+
+    def _resources_read_binary(self, anchor: Any, *path_names: str) -> bytes:
+        return _stdlib_resources.read_binary(self._resource_anchor(anchor), *path_names)
+
+    def _resources_read_text(
+        self,
+        anchor: Any,
+        *path_names: str,
+        encoding: str = "utf-8",
+        errors: str = "strict",
+    ) -> str:
+        return _stdlib_resources.read_text(
+            self._resource_anchor(anchor), *path_names, encoding=encoding, errors=errors
+        )
+
+    def _resources_contents(self, anchor: Any):
+        return _stdlib_resources.contents(self._resource_anchor(anchor))
+
+    def _resources_is_resource(self, anchor: Any, name: str) -> bool:
+        return _stdlib_resources.is_resource(self._resource_anchor(anchor), name)
+
+    def _resources_path(self, anchor: Any, *path_names: str):
+        return _stdlib_resources.path(self._resource_anchor(anchor), *path_names)
 
     def _dynamic_import_module(
         self,

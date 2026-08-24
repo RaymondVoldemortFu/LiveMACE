@@ -515,6 +515,9 @@ def test_dynamic_imports_use_each_extension_private_namespace(tmp_path):
             "class Factory:\n"
             "    def create(self, context, config):\n"
             "        import importlib as plain_importlib\n"
+            f"        local_spec = find_spec({f'{package_name}.late'!r})\n"
+            f"        resource_text = importlib.resources.files({package_name!r}).joinpath('late.py').read_text()\n"
+            f"        resource_text_alias = resources.files({package_name!r}).joinpath('late.py').read_text()\n"
             f"        package = importlib.import_module({package_name!r})\n"
             f"        late = import_module({f'{package_name}.late'!r})\n"
             f"        helper = importlib.import_module({helper_name!r})\n"
@@ -531,6 +534,9 @@ def test_dynamic_imports_use_each_extension_private_namespace(tmp_path):
             "            resources.__name__,\n"
             "            json_spec.name,\n"
             "            plain_json_module.__name__,\n"
+            "            local_spec.name.startswith('_alpha_arena_extension_'),\n"
+            "            resource_text,\n"
+            "            resource_text_alias,\n"
             "        )\n"
             "def create_factory():\n"
             "    return Factory()\n",
@@ -538,12 +544,8 @@ def test_dynamic_imports_use_each_extension_private_namespace(tmp_path):
         )
         package = root / package_name
         package.mkdir()
-        (package / "__init__.py").write_text(
-            f"MARKER = {marker!r}\n", encoding="utf-8"
-        )
-        (package / "late.py").write_text(
-            f"MARKER = {marker!r}\n", encoding="utf-8"
-        )
+        (package / "__init__.py").write_text(f"MARKER = {marker!r}\n", encoding="utf-8")
+        (package / "late.py").write_text(f"MARKER = {marker!r}\n", encoding="utf-8")
         (root / f"{helper_name}.py").write_text(
             f"MARKER = {marker!r}\n", encoding="utf-8"
         )
@@ -562,30 +564,40 @@ def test_dynamic_imports_use_each_extension_private_namespace(tmp_path):
     with ThreadPoolExecutor(max_workers=8) as executor:
         values = list(executor.map(lambda factory: factory.create(None, {}), factories))
 
-    assert values == [
-        (
-            "A",
-            "A",
-            "A",
-            "json",
-            "importlib.util",
-            "importlib.resources",
-            "importlib.resources",
-            "json",
-            "json",
-        ),
-        (
-            "B",
-            "B",
-            "B",
-            "json",
-            "importlib.util",
-            "importlib.resources",
-            "importlib.resources",
-            "json",
-            "json",
-        ),
-    ] * 20
+    assert (
+        values
+        == [
+            (
+                "A",
+                "A",
+                "A",
+                "json",
+                "importlib.util",
+                "importlib.resources",
+                "importlib.resources",
+                "json",
+                "json",
+                True,
+                "MARKER = 'A'\n",
+                "MARKER = 'A'\n",
+            ),
+            (
+                "B",
+                "B",
+                "B",
+                "json",
+                "importlib.util",
+                "importlib.resources",
+                "importlib.resources",
+                "json",
+                "json",
+                True,
+                "MARKER = 'B'\n",
+                "MARKER = 'B'\n",
+            ),
+        ]
+        * 20
+    )
     assert package_name not in sys.modules
     assert f"{package_name}.late" not in sys.modules
     assert helper_name not in sys.modules
