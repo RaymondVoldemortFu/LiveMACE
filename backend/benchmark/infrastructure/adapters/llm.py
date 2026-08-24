@@ -110,6 +110,12 @@ class LegacyLLMClientAdapter(LLMClientPort):
         except Exception as exc:
             raise _llm_failure(self.id, "complete", exc) from exc
 
+    def requires_post_tool_user_message(self) -> bool:
+        """Expose the legacy Gemini continuation requirement at the adapter boundary."""
+
+        checker = getattr(self._client, "is_gemini_model", None)
+        return bool(checker()) if callable(checker) else False
+
     def healthcheck(self) -> HealthStatus:
         tester = getattr(self._client, "test_connection", None)
         if not callable(tester):

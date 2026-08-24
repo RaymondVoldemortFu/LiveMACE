@@ -260,10 +260,40 @@ def test_rule_aware_uses_public_tool_results_and_explicit_specs(monkeypatch):
     ]
     assert llm.requests[0].tools[0]["function"]["name"] == "execute_trade"
     assert [request.model for request in llm.requests] == [None, None]
-    assert llm.requests[1].messages[-1] == (
-        LLMClient.gemini_post_tool_user_message()
+    assert llm.requests[1].messages[-1]["role"] == "tool"
+    assert llm.requests[1].messages[-1] != LLMClient.gemini_post_tool_user_message()
+
+
+def test_rule_aware_legacy_gemini_adapter_keeps_continuation(monkeypatch):
+    _disable_audit(monkeypatch)
+
+    class GeminiLegacyLLM(FakeLLM):
+        def is_gemini_model(self) -> bool:
+            return True
+
+    llm = GeminiLegacyLLM(
+        [
+            FakeLLMResponse(
+                None,
+                [
+                    FakeToolCall(
+                        "call-gemini-1",
+                        "execute_trade",
+                        json.dumps(
+                            {"operation": "open", "symbol": "BTC", "market": "CRYPTO"}
+                        ),
+                    )
+                ],
+            ),
+            FakeLLMResponse("<TRADE_DONE>"),
+        ],
+        model="gemini-2.5-flash",
     )
-    assert llm.requests[1].messages[-2]["role"] == "tool"
+    adapter = _create_adapter(llm, max_steps=2)
+
+    adapter.run(make_decision_context())
+
+    assert llm.calls[1]["messages"][-1] == LLMClient.gemini_post_tool_user_message()
 
 
 def test_rule_aware_public_tool_rejection_is_unexecuted(monkeypatch):

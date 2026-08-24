@@ -133,9 +133,9 @@ class _PublicLLMBridge:
     ) -> dict[str, JsonValue]:
         return dict(response.assistant_message)
 
-    @staticmethod
-    def requires_post_tool_user_message() -> bool:
-        return True
+    def requires_post_tool_user_message(self) -> bool:
+        capability = getattr(self._llm, "requires_post_tool_user_message", None)
+        return bool(capability()) if callable(capability) else False
 
 
 class _PublicToolBridge:

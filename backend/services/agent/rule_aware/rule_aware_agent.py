@@ -373,7 +373,8 @@ class RuleAwareAgent(BaseAgent):
         )
         if callable(requirement):
             return bool(requirement())
-        return self.llm.is_gemini_model()
+        legacy_gemini_check = getattr(self.llm, "is_gemini_model", None)
+        return bool(legacy_gemini_check()) if callable(legacy_gemini_check) else False
 
     def _attach_compliance_audit(
         self,
