@@ -324,7 +324,7 @@ class RuleAwareAgent(BaseAgent):
                         messages.append(warn_msg)
                         if on_step:
                             on_step(dict(warn_msg))
-                    if self.llm.is_gemini_model() and tool_results:
+                    if tool_results and self._requires_post_tool_user_message():
                         messages.append(LLMClient.gemini_post_tool_user_message())
                     # Reset accumulated content after tool calls
                     accumulated_content = ""
@@ -364,6 +364,16 @@ class RuleAwareAgent(BaseAgent):
         agent_logger.info(json.dumps(decision, ensure_ascii=False, indent=2))
         
         return decision
+
+    def _requires_post_tool_user_message(self) -> bool:
+        requirement = getattr(
+            self.llm,
+            "requires_post_tool_user_message",
+            None,
+        )
+        if callable(requirement):
+            return bool(requirement())
+        return self.llm.is_gemini_model()
 
     def _attach_compliance_audit(
         self,

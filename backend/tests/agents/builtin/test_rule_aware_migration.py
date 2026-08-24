@@ -31,6 +31,7 @@ from benchmark.infrastructure.adapters import LegacyLLMClientAdapter
 from benchmark.providers import LLMResponse, LLMToolCall
 from benchmark.testing import FakeLLMClientPort
 from services.agent.factory import create_agent
+from services.agent.llm_client import LLMClient
 from services.agent.rule_aware.rule_aware_agent import RuleAwareAgent
 from services.agent.tools import Tool, ToolRegistry
 from tests.agents.builtin.conftest import make_decision_context
@@ -150,6 +151,41 @@ def test_rule_aware_builds_and_runs_with_public_ports(monkeypatch):
     assert tools.calls == []
 
 
+def test_rule_aware_never_reads_public_port_model_property(monkeypatch):
+    _disable_audit(monkeypatch)
+
+    class ProtectedModelPort:
+        def __init__(self):
+            self.requests = []
+            self.model_reads = 0
+
+        @property
+        def model(self):
+            self.model_reads += 1
+            raise AssertionError("model is not part of LLMClientPort")
+
+        def complete(self, request):
+            self.requests.append(request)
+            return LLMResponse("<TRADE_DONE>")
+
+    llm = ProtectedModelPort()
+    agent = RuleAwareAgentFactory().create(
+        AgentBuildContext(
+            llm=llm,
+            tools=FakeToolInvoker(),
+            prompts=get_builtin_prompt_registry(),
+            events=NullEventSink(),
+        ),
+        _factory_config(max_steps=1),
+    )
+
+    result = agent.run(make_decision_context())
+
+    assert result.termination_reason is TerminationReason.HOLD
+    assert llm.model_reads == 0
+    assert [request.model for request in llm.requests] == [None]
+
+
 def test_rule_aware_uses_public_tool_results_and_explicit_specs(monkeypatch):
     _disable_audit(monkeypatch)
 
@@ -223,6 +259,11 @@ def test_rule_aware_uses_public_tool_results_and_explicit_specs(monkeypatch):
         )
     ]
     assert llm.requests[0].tools[0]["function"]["name"] == "execute_trade"
+    assert [request.model for request in llm.requests] == [None, None]
+    assert llm.requests[1].messages[-1] == (
+        LLMClient.gemini_post_tool_user_message()
+    )
+    assert llm.requests[1].messages[-2]["role"] == "tool"
 
 
 def test_rule_aware_public_tool_rejection_is_unexecuted(monkeypatch):

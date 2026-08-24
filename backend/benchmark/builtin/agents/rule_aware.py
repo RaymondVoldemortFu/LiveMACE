@@ -33,7 +33,6 @@ from benchmark.contracts import (
 from benchmark.providers import LLMClientPort, LLMRequest, LLMResponse, LLMToolCall
 from benchmark.tools import ToolInvoker, ToolSpecSource, openai_tool_schema
 from config.agent_config import AgentConfig
-from services.agent.llm_client import LLMClient
 from services.agent.rule_aware.rule_aware_agent import RuleAwareAgent
 from services.agent.rule_aware.rule_engine import RuleEngine
 from services.agent.tools import ToolRegistry
@@ -105,12 +104,6 @@ class _PublicLLMBridge:
 
     def __init__(self, llm: LLMClientPort) -> None:
         self._llm = llm
-        configured_model = getattr(llm, "model", None)
-        self.model = (
-            configured_model
-            if isinstance(configured_model, str) and configured_model.strip()
-            else None
-        )
 
     def call(
         self,
@@ -121,7 +114,7 @@ class _PublicLLMBridge:
         response = self._llm.complete(
             LLMRequest(
                 messages=tuple(dict(message) for message in messages),
-                model=self.model,
+                model=None,
                 tools=tuple(dict(tool) for tool in (tools or ())),
             )
         )
@@ -140,8 +133,9 @@ class _PublicLLMBridge:
     ) -> dict[str, JsonValue]:
         return dict(response.assistant_message)
 
-    def is_gemini_model(self) -> bool:
-        return LLMClient.is_gemini_model_name(self.model)
+    @staticmethod
+    def requires_post_tool_user_message() -> bool:
+        return True
 
 
 class _PublicToolBridge:
