@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 import importlib
+from importlib import resources as stdlib_resources
+from inspect import signature
 import json
 import os
 from pathlib import Path
@@ -516,6 +518,7 @@ def test_dynamic_imports_use_each_extension_private_namespace(tmp_path):
             "    def create(self, context, config):\n"
             "        import importlib as plain_importlib\n"
             f"        local_spec = find_spec({f'{package_name}.late'!r})\n"
+            f"        missing_spec = find_spec({f'{package_name}.missing'!r})\n"
             f"        resource_text = importlib.resources.files({package_name!r}).joinpath('late.py').read_text()\n"
             f"        resource_text_alias = resources.files({package_name!r}).joinpath('late.py').read_text()\n"
             f"        package = importlib.import_module({package_name!r})\n"
@@ -535,6 +538,7 @@ def test_dynamic_imports_use_each_extension_private_namespace(tmp_path):
             "            json_spec.name,\n"
             "            plain_json_module.__name__,\n"
             "            local_spec.name.startswith('_alpha_arena_extension_'),\n"
+            "            missing_spec is None,\n"
             "            resource_text,\n"
             "            resource_text_alias,\n"
             "        )\n"
@@ -578,6 +582,7 @@ def test_dynamic_imports_use_each_extension_private_namespace(tmp_path):
                 "json",
                 "json",
                 True,
+                True,
                 "MARKER = 'A'\n",
                 "MARKER = 'A'\n",
             ),
@@ -592,6 +597,7 @@ def test_dynamic_imports_use_each_extension_private_namespace(tmp_path):
                 "json",
                 "json",
                 True,
+                True,
                 "MARKER = 'B'\n",
                 "MARKER = 'B'\n",
             ),
@@ -602,6 +608,74 @@ def test_dynamic_imports_use_each_extension_private_namespace(tmp_path):
     assert f"{package_name}.late" not in sys.modules
     assert helper_name not in sys.modules
     assert importlib.import_module is standard_import_module
+
+
+def test_importlib_resource_proxy_preserves_runtime_call_contract(tmp_path):
+    module_name = "resource_contract_entry"
+    package_name = "resource_contract_package"
+    root = tmp_path / "resource-contract"
+    try:
+        signature(stdlib_resources.files).bind()
+    except TypeError:
+        supports_implicit_files = False
+    else:
+        supports_implicit_files = True
+    _agent_extension(
+        root,
+        module_name,
+        "from importlib import resources\n"
+        "from inspect import signature\n"
+        "class Factory:\n"
+        "    def create(self, context, config):\n"
+        f"        keyword_text = resources.files(package={package_name!r}).joinpath('payload.txt').read_text()\n"
+        f"        with resources.open_text({package_name!r}, 'payload.txt', 'utf-8') as stream:\n"
+        "            open_text_value = stream.read()\n"
+        f"        read_text_value = resources.read_text({package_name!r}, 'payload.txt', 'utf-8')\n"
+        f"        if {supports_implicit_files!r}:\n"
+        "            implicit_text = resources.files().joinpath('entry-resource.txt').read_text()\n"
+        "            explicit_none_text = resources.files(anchor=None).joinpath('entry-resource.txt').read_text()\n"
+        "        else:\n"
+        "            try:\n"
+        "                resources.files()\n"
+        "            except TypeError:\n"
+        "                implicit_text = None\n"
+        "            else:\n"
+        "                implicit_text = 'unexpected-success'\n"
+        "            explicit_none_text = None\n"
+        "        return {\n"
+        "            'keyword_text': keyword_text,\n"
+        "            'open_text_value': open_text_value,\n"
+        "            'read_text_value': read_text_value,\n"
+        "            'implicit_text': implicit_text,\n"
+        "            'explicit_none_text': explicit_none_text,\n"
+        "            'files_signature': str(signature(resources.files)),\n"
+        "            'open_text_signature': str(signature(resources.open_text)),\n"
+        "        }\n"
+        "def create_factory():\n"
+        "    return Factory()\n",
+        extension_id="com.example.resource-contract",
+    )
+    package = root / package_name
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "payload.txt").write_text("package payload", encoding="utf-8")
+    (root / "entry-resource.txt").write_text("entry payload", encoding="utf-8")
+
+    result = load_extensions(ExtensionSettings(extension_roots=(root,)))
+
+    assert result.records[0].status is ExtensionStatus.LOADED
+    factory = result.agents.get("com.example.resource-contract.component").factory
+    value = factory.create(None, {})
+    assert value == {
+        "keyword_text": "package payload",
+        "open_text_value": "package payload",
+        "read_text_value": "package payload",
+        "implicit_text": "entry payload" if supports_implicit_files else None,
+        "explicit_none_text": "entry payload" if supports_implicit_files else None,
+        "files_signature": str(signature(stdlib_resources.files)),
+        "open_text_signature": str(signature(stdlib_resources.open_text)),
+    }
+    assert package_name not in sys.modules
 
 
 def test_unresolved_external_profile_does_not_block_valid_extension(tmp_path):

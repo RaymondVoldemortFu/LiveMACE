@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import builtins
+from collections.abc import Callable
+from functools import wraps
 import importlib
 from importlib import resources as _stdlib_resources
 from importlib.abc import MetaPathFinder
 from importlib.machinery import ModuleSpec, SourceFileLoader
 from importlib import util as _stdlib_util
 from importlib.util import find_spec, spec_from_file_location
+from inspect import signature
 from pathlib import Path
 import sys
 from threading import RLock
@@ -93,6 +96,14 @@ class _ExtensionModuleFinder(MetaPathFinder):
 _FINDER = _ExtensionModuleFinder()
 
 
+def _accepts_no_arguments(function: Callable[..., Any]) -> bool:
+    try:
+        signature(function).bind()
+    except TypeError:
+        return False
+    return True
+
+
 class ExtensionModuleNamespace:
     """One extension root exposed under a unique import namespace."""
 
@@ -112,14 +123,27 @@ class ExtensionModuleNamespace:
         self._importlib_util_proxy.find_spec = self._find_spec
         self._importlib_resources_proxy = ModuleType("importlib.resources")
         self._importlib_resources_proxy.__dict__.update(vars(_stdlib_resources))
-        self._importlib_resources_proxy.files = self._resources_files
-        self._importlib_resources_proxy.open_binary = self._resources_open_binary
-        self._importlib_resources_proxy.open_text = self._resources_open_text
-        self._importlib_resources_proxy.read_binary = self._resources_read_binary
-        self._importlib_resources_proxy.read_text = self._resources_read_text
-        self._importlib_resources_proxy.contents = self._resources_contents
-        self._importlib_resources_proxy.is_resource = self._resources_is_resource
-        self._importlib_resources_proxy.path = self._resources_path
+        for function_name in (
+            "files",
+            "open_binary",
+            "open_text",
+            "read_binary",
+            "read_text",
+            "contents",
+            "is_resource",
+            "path",
+        ):
+            function = getattr(_stdlib_resources, function_name)
+            setattr(
+                self._importlib_resources_proxy,
+                function_name,
+                self._resource_function_proxy(
+                    function,
+                    infer_anchor=(
+                        function_name == "files" and _accepts_no_arguments(function)
+                    ),
+                ),
+            )
         importlib_proxy.util = self._importlib_util_proxy
         importlib_proxy.resources = self._importlib_resources_proxy
         self._importlib_proxy = importlib_proxy
@@ -218,11 +242,12 @@ class ExtensionModuleNamespace:
     ) -> ModuleType:
         if level == 0 and (name == "importlib" or name.startswith("importlib.")):
             return self._import_importlib(name, globals, locals, fromlist)
-        if level != 0 or self.resolve_module(name) is None:
+        private_name = self._private_module_name(name) if level == 0 else None
+        if private_name is None:
             return builtins.__import__(name, globals, locals, fromlist, level)
 
         relative_name = self._relative_name(name)
-        module = importlib.import_module(f"{self.name}.{relative_name}")
+        module = importlib.import_module(private_name)
         if fromlist:
             for item in fromlist:
                 child_name = f"{name}.{item}"
@@ -288,59 +313,73 @@ class ExtensionModuleNamespace:
             private_package = self._private_package_name(package)
             if private_package is not None:
                 name = importlib.util.resolve_name(name, private_package)
-        if self.resolve_module(name) is not None:
-            relative_name = self._relative_name(name)
-            return _stdlib_util.find_spec(f"{self.name}.{relative_name}")
+        private_name = self._private_module_name(name)
+        if private_name is not None:
+            return _stdlib_util.find_spec(private_name)
         return _stdlib_util.find_spec(name, package)
 
     def _resource_anchor(self, anchor: Any) -> Any:
-        if isinstance(anchor, str) and self.resolve_module(anchor) is not None:
-            return self._dynamic_import_module(anchor)
+        if isinstance(anchor, str):
+            private_name = self._private_module_name(anchor)
+            if private_name is not None:
+                return importlib.import_module(private_name)
         if isinstance(anchor, ModuleType) and (
             anchor.__name__ == self.name or anchor.__name__.startswith(f"{self.name}.")
         ):
             return anchor
         return anchor
 
-    def _resources_files(self, anchor: Any) -> Any:
-        return _stdlib_resources.files(self._resource_anchor(anchor))
-
-    def _resources_open_binary(self, anchor: Any, *path_names: str):
-        return _stdlib_resources.open_binary(self._resource_anchor(anchor), *path_names)
-
-    def _resources_open_text(
+    def _resource_function_proxy(
         self,
-        anchor: Any,
-        *path_names: str,
-        encoding: str = "utf-8",
-        errors: str = "strict",
-    ):
-        return _stdlib_resources.open_text(
-            self._resource_anchor(anchor), *path_names, encoding=encoding, errors=errors
-        )
+        function: Callable[..., Any],
+        *,
+        infer_anchor: bool,
+    ) -> Callable[..., Any]:
+        @wraps(function)
+        def proxy(*args: Any, **kwargs: Any) -> Any:
+            mapped_args = args
+            mapped_kwargs = kwargs
+            if args:
+                anchor = args[0]
+                if infer_anchor and anchor is None:
+                    anchor = self._resource_caller_anchor()
+                mapped_args = (self._resource_anchor(anchor), *args[1:])
+            elif "anchor" in kwargs:
+                mapped_kwargs = dict(kwargs)
+                anchor = kwargs["anchor"]
+                if infer_anchor and anchor is None:
+                    anchor = self._resource_caller_anchor()
+                mapped_kwargs["anchor"] = self._resource_anchor(anchor)
+            elif "package" in kwargs:
+                mapped_kwargs = dict(kwargs)
+                anchor = kwargs["package"]
+                if infer_anchor and anchor is None:
+                    anchor = self._resource_caller_anchor()
+                mapped_kwargs["package"] = self._resource_anchor(anchor)
+            elif infer_anchor:
+                caller_anchor = self._resource_caller_anchor()
+                if caller_anchor is not None:
+                    mapped_args = (caller_anchor,)
+            return function(*mapped_args, **mapped_kwargs)
 
-    def _resources_read_binary(self, anchor: Any, *path_names: str) -> bytes:
-        return _stdlib_resources.read_binary(self._resource_anchor(anchor), *path_names)
+        return proxy
 
-    def _resources_read_text(
-        self,
-        anchor: Any,
-        *path_names: str,
-        encoding: str = "utf-8",
-        errors: str = "strict",
-    ) -> str:
-        return _stdlib_resources.read_text(
-            self._resource_anchor(anchor), *path_names, encoding=encoding, errors=errors
-        )
-
-    def _resources_contents(self, anchor: Any):
-        return _stdlib_resources.contents(self._resource_anchor(anchor))
-
-    def _resources_is_resource(self, anchor: Any, name: str) -> bool:
-        return _stdlib_resources.is_resource(self._resource_anchor(anchor), name)
-
-    def _resources_path(self, anchor: Any, *path_names: str):
-        return _stdlib_resources.path(self._resource_anchor(anchor), *path_names)
+    def _resource_caller_anchor(self) -> ModuleType | None:
+        frame = sys._getframe(1)
+        try:
+            private_prefix = f"{self.name}."
+            while frame is not None:
+                module_name = frame.f_globals.get("__name__")
+                if isinstance(module_name, str) and (
+                    module_name == self.name or module_name.startswith(private_prefix)
+                ):
+                    module = sys.modules.get(module_name)
+                    if isinstance(module, ModuleType):
+                        return module
+                frame = frame.f_back
+            return None
+        finally:
+            del frame
 
     def _dynamic_import_module(
         self,
@@ -355,21 +394,37 @@ class ExtensionModuleNamespace:
             private_package = self._private_package_name(package)
             return importlib.import_module(name, private_package or package)
 
-        if self.resolve_module(name) is not None:
-            relative_name = self._relative_name(name)
-            return importlib.import_module(f"{self.name}.{relative_name}")
+        private_name = self._private_module_name(name)
+        if private_name is not None:
+            return importlib.import_module(private_name)
         return importlib.import_module(name, package)
+
+    def _private_module_name(self, module_name: str) -> str | None:
+        if not module_name or module_name.startswith("."):
+            return None
+        private_prefix = f"{self.name}."
+        if module_name == self.name or module_name.startswith(private_prefix):
+            return module_name
+
+        relative_name = self._relative_name(module_name)
+        top_level_name = relative_name.partition(".")[0]
+        if self.resolve_module(top_level_name) is None:
+            return None
+        return f"{self.name}.{relative_name}"
 
     def _private_package_name(self, package: str | None) -> str | None:
         if not package:
             return None
-        if package == self.name or package.startswith(f"{self.name}."):
+        if package == self.name:
             return package
-        resolved = self.resolve_module(package)
+        private_name = self._private_module_name(package)
+        if private_name is None:
+            return None
+        relative_name = private_name[len(self.name) + 1 :]
+        resolved = self.resolve_module(relative_name)
         if resolved is None or not resolved[1]:
             return None
-        relative_name = self._relative_name(package)
-        return f"{self.name}.{relative_name}"
+        return private_name
 
     def _relative_name(self, module_name: str) -> str:
         prefix = self.module_prefix
