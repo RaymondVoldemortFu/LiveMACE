@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "max_steps": {"type": "integer", "minimum": 1, "default": 100},
+    "user_id": {"type": ["string", "integer", "null"], "default": null},
+    "account_id": {"type": ["integer", "null"], "minimum": 1, "default": null},
+    "agent_name": {"type": ["string", "null"], "default": null},
+    "rule_docs_path": {"type": ["string", "null"], "default": null},
+    "enable_llm_audit": {"type": "boolean", "default": false}
+  }
+}

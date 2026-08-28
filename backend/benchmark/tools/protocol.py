@@ -49,6 +49,13 @@ class ToolInvoker(Protocol):
 
 
 @runtime_checkable
+class ToolSpecSource(Protocol):
+    """Optional read-only source for model-facing Tool descriptions."""
+
+    def list_specs(self) -> Sequence[ToolSpec]: ...
+
+
+@runtime_checkable
 class ToolCache(Protocol):
     """Minimal cache port used by the Tool runtime."""
 
@@ -153,6 +160,7 @@ __all__ = [
     "Tool",
     "ToolProvider",
     "ToolInvoker",
+    "ToolSpecSource",
     "ToolCache",
     "ToolEventSink",
     "RegisteredTool",

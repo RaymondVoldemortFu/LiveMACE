@@ -16,6 +16,8 @@
 
 `MemoryStorePort.search()` 和 `add()` 必须显式接收 `Market`，且不提供默认市场。不同市场的记忆必须使用不同 namespace；`delete_all(account_id)` 保持删除该账户所有市场记忆的语义。
 
+`LLMRequest.model` 是可选字段：`None` 表示使用 `LLMClientPort` 已绑定的模型；显式提供非空模型时，adapter 必须继续校验其与绑定模型一致，不得构造占位模型名。
+
 ## TODO
 
 - [x] 定义 LLM request/response/tool-call DTO，隔离 OpenAI SDK object。

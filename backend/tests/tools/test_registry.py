@@ -135,7 +135,9 @@ def test_core_trade_is_invisible_without_trading_capability(extension):
     )
     tool = FunctionTool(spec, lambda context, arguments: ToolResult(ok=True, value=1))
     registry = ToolRegistry()
-    registry.register_provider(ExtensionRef("benchmark.core", "1.0.0"), Provider(tool))
+    registry.register_builtin_provider(
+        ExtensionRef("benchmark.core", "1.0.0"), Provider(tool)
+    )
 
     assert registry.list(frozenset()) == ()
     assert registry.view(frozenset()).list() == ()
@@ -145,7 +147,14 @@ def test_core_trade_is_invisible_without_trading_capability(extension):
     assert registry.view(frozenset({TRADING_WRITE})).list() == (spec,)
 
 
-def test_core_namespace_is_reserved_for_builtin_extension(extension):
+@pytest.mark.parametrize(
+    "extension",
+    [
+        ExtensionRef("com.example.extension", "1.0.0"),
+        ExtensionRef("benchmark.core", "9.0.0"),
+    ],
+)
+def test_regular_registration_cannot_claim_core_namespace(extension):
     tool = FunctionTool(
         make_spec("core.market_snapshot"),
         lambda context, arguments: ToolResult(ok=True, value=1),
@@ -153,6 +162,19 @@ def test_core_namespace_is_reserved_for_builtin_extension(extension):
     with pytest.raises(ComponentConfigError) as caught:
         ToolRegistry().register_provider(extension, Provider(tool))
     assert caught.value.code == "TOOL_CORE_NAMESPACE_FORBIDDEN"
+
+
+def test_builtin_registration_can_claim_core_namespace():
+    extension = ExtensionRef("benchmark.core", "1.0.0")
+    tool = FunctionTool(
+        make_spec("core.market_snapshot"),
+        lambda context, arguments: ToolResult(ok=True, value=1),
+    )
+    registry = ToolRegistry()
+
+    registry.register_builtin_provider(extension, Provider(tool))
+
+    assert registry.get("core.market_snapshot").extension == extension
 
 
 def test_tool_view_filters_selection_and_capabilities_without_mutating_registry(

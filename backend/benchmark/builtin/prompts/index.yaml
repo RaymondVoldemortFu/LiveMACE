@@ -169,6 +169,13 @@ prompts:
   version: 1.0.0
   file: compliance-audit/system.txt
   required_variables: []
+- id: core.compliance-audit.user
+  version: 1.0.0
+  file: compliance-audit/user.txt
+  required_variables:
+  - rules
+  - market_state
+  - agent_output
 profiles:
 - id: core.react.default
   version: 1.0.0
@@ -323,4 +330,6 @@ profiles:
   slots:
     system:
       prompt_id: core.compliance-audit.system
+    user:
+      prompt_id: core.compliance-audit.user
 

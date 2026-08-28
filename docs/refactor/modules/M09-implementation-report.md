@@ -16,6 +16,8 @@ M09 已提供完整的同步 Provider 边界：
 
 `LLMClient` 的 retry、Gemini schema/tool-call normalization、Grok token 参数和 timeout guardrail 仍由原实现负责；adapter 只做 DTO 转换和边界校验。
 
+`LLMRequest.model=None` 表示沿用 Port 已绑定的模型。显式给出模型时，legacy adapter 仍执行稳定的模型一致性校验；Agent 不需要读取公共 Port 未声明的实现属性，也不会发送占位模型名。
+
 Provider healthcheck 执行只读、同步的底层 probe，并采用统一的合作式 timeout；失败返回 `unavailable`，没有可用 probe 返回 `degraded`，不再因 adapter 已构造就无条件报告 `ok`。Market adapter 对非有限或非正价格返回 `value=None/Freshness.UNAVAILABLE`，`PriceResult` 本身也拒绝非有限 Decimal。
 
 ## 测试系统

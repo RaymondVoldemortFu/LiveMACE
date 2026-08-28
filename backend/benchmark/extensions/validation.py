@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Mapping
 
@@ -13,6 +14,8 @@ from benchmark.prompts import parse_prompt_directory
 
 from .manifest import MANIFEST_FILENAME, ExtensionManifest, _parse_manifest
 from .paths import resolve_extension_path
+
+logger = logging.getLogger(__name__)
 
 
 def _issue(path: str, message: str, code: str, validator: str = "") -> ValidationIssue:
@@ -45,7 +48,14 @@ def _validate_config_schema(
             ),
         )
     except (OSError, ValueError) as exc:
-        return (_issue(issue_path, str(exc), "CONFIG_SCHEMA_PATH_INVALID"),)
+        logger.debug("extension config schema path validation failed", exc_info=exc)
+        return (
+            _issue(
+                issue_path,
+                "config schema path is invalid",
+                "CONFIG_SCHEMA_PATH_INVALID",
+            ),
+        )
     return ()
 
 
@@ -60,9 +70,12 @@ def validate_manifest(
         if not root.is_dir():
             raise ValueError("extension root must be a directory")
     except (OSError, ValueError) as exc:
+        logger.debug("extension root validation failed", exc_info=exc)
         return ValidationReport(
             valid=False,
-            errors=(_issue("root", str(exc), "EXTENSION_ROOT_INVALID"),),
+            errors=(
+                _issue("root", "extension root is invalid", "EXTENSION_ROOT_INVALID"),
+            ),
         )
 
     seen_agents: set[str] = set()
@@ -92,8 +105,13 @@ def validate_manifest(
             if not prompt_root.is_dir():
                 raise ValueError("Prompt directory must be a directory")
         except (OSError, ValueError) as exc:
+            logger.debug("extension Prompt directory validation failed", exc_info=exc)
             errors.append(
-                _issue(f"{prefix}.directory", str(exc), "PROMPT_DIRECTORY_INVALID")
+                _issue(
+                    f"{prefix}.directory",
+                    "Prompt directory is invalid",
+                    "PROMPT_DIRECTORY_INVALID",
+                )
             )
             continue
         try:
@@ -103,8 +121,13 @@ def validate_manifest(
                     "Prompt index must be inside its declared Prompt directory"
                 )
         except (OSError, ValueError) as exc:
+            logger.debug("extension Prompt index validation failed", exc_info=exc)
             errors.append(
-                _issue(f"{prefix}.index", str(exc), "PROMPT_INDEX_PATH_INVALID")
+                _issue(
+                    f"{prefix}.index",
+                    "Prompt index path is invalid",
+                    "PROMPT_INDEX_PATH_INVALID",
+                )
             )
             continue
         directory_data, prompt_errors = parse_prompt_directory(prompt_root, index_path)
@@ -157,9 +180,12 @@ def validate_extension_directory(root: Path) -> ValidationReport:
         if not extension_root.is_dir():
             raise ValueError("extension root must be a directory")
     except (OSError, ValueError) as exc:
+        logger.debug("extension directory validation failed", exc_info=exc)
         return ValidationReport(
             valid=False,
-            errors=(_issue("root", str(exc), "EXTENSION_ROOT_INVALID"),),
+            errors=(
+                _issue("root", "extension root is invalid", "EXTENSION_ROOT_INVALID"),
+            ),
         )
     try:
         # Same controlled resolution as every other extension resource: a
@@ -169,9 +195,12 @@ def validate_extension_directory(root: Path) -> ValidationReport:
             extension_root, MANIFEST_FILENAME, must_exist=False
         )
     except (OSError, ValueError) as exc:
+        logger.debug("extension manifest path validation failed", exc_info=exc)
         return ValidationReport(
             valid=False,
-            errors=(_issue("manifest", str(exc), "MANIFEST_PATH_INVALID"),),
+            errors=(
+                _issue("manifest", "manifest path is invalid", "MANIFEST_PATH_INVALID"),
+            ),
         )
     manifest, parse_errors = _parse_manifest(manifest_path)
     if manifest is None:

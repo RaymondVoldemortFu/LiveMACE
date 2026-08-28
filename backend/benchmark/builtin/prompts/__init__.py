@@ -125,6 +125,7 @@ PROFILE_CONTRACTS = MappingProxyType(
         ),
         "compliance_audit": _contract(
             system=(),
+            user=("rules", "market_state", "agent_output"),
         ),
     }
 )

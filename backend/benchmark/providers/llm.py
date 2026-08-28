@@ -27,7 +27,7 @@ class LLMToolCall:
 @dataclass(frozen=True)
 class LLMRequest:
     messages: tuple[Mapping[str, JsonValue], ...]
-    model: str
+    model: str | None = None
     tools: tuple[Mapping[str, JsonValue], ...] = ()
     temperature: float | None = None
     max_tokens: int | None = None
@@ -36,7 +36,8 @@ class LLMRequest:
     def __post_init__(self) -> None:
         if not isinstance(self.messages, tuple):
             raise TypeError("messages must be a tuple")
-        _require_non_empty(self.model, "model")
+        if self.model is not None:
+            _require_non_empty(self.model, "model")
         if not isinstance(self.tools, tuple):
             raise TypeError("tools must be a tuple")
         if self.temperature is not None and (

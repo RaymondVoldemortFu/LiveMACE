@@ -8,6 +8,8 @@ import logging
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List, Callable, Optional
 
+from benchmark.builtin.prompts import get_prompt_resolver, require_profile_contract
+from benchmark.prompts import PromptResolver
 from ..base import BaseAgent
 from ..llm_client import LLMClient
 from ..tools import ToolRegistry
@@ -19,7 +21,6 @@ from .rule_engine import RuleEngine
 from .rule_validator import RuleValidator
 from .compliance_auditor import ComplianceAuditor
 from .llm_auditor import LLMAuditor
-from .prompts import RULE_AWARE_SYSTEM_PROMPT, RULE_AWARE_REMINDER_PROMPT
 
 logger = logging.getLogger(__name__)
 llm_logger = logging.getLogger("llm_trace")
@@ -45,6 +46,7 @@ class RuleAwareAgent(BaseAgent):
         account_id: int = None,
         agent_name: str = None,
         memory_enabled: bool = False,
+        prompt_resolver: Optional[PromptResolver] = None,
     ):
         """
         Initialize Rule-Aware Agent
@@ -58,11 +60,18 @@ class RuleAwareAgent(BaseAgent):
             enable_llm_audit: Whether to enable LLM-based audit scoring
             account_id: Account ID for updating audit statistics
             agent_name: Agent display name for logging
+            prompt_resolver: Optional profile-capable Prompt resolver
         """
         super().__init__(llm, tools, agent_name=agent_name)
         self.max_steps = max_steps
         self.user_id = user_id
         self.account_id = account_id
+        self.prompt_resolver = get_prompt_resolver(prompt_resolver)
+        require_profile_contract(
+            self.prompt_resolver,
+            "core.rule-aware.default",
+            "rule_aware",
+        )
         # self.memory = get_memory_service()  # Disabled: internal memory bypasses memory_enabled flag
         
         # Rule compliance components
@@ -88,7 +97,10 @@ class RuleAwareAgent(BaseAgent):
                     api_key=audit_api_key,
                     base_url=audit_base_url
                 )
-                self.llm_auditor = LLMAuditor(audit_llm)
+                self.llm_auditor = LLMAuditor(
+                    audit_llm,
+                    prompt_resolver=self.prompt_resolver,
+                )
                 logger.info(f"LLM-based audit scoring enabled - Model: {audit_model}, Base URL: {audit_base_url or 'OpenAI Official'}")
         else:
             self.llm_auditor = None
@@ -112,6 +124,29 @@ class RuleAwareAgent(BaseAgent):
         if "TRADE_DONE" in squashed and len(squashed) <= 32:
             return True
         return False
+
+    @staticmethod
+    def _has_filled_trade(item: Dict[str, Any]) -> bool:
+        """Return whether a nested execute_trade record represents a fill."""
+
+        if not isinstance(item, dict):
+            return False
+        result = item.get("result")
+        args = item.get("args")
+        if not isinstance(result, dict):
+            return False
+        if not result.get("executed") or result.get("error") is not None:
+            return False
+        operation = str(
+            result.get("operation")
+            or (args.get("operation") if isinstance(args, dict) else "")
+            or ""
+        ).strip().lower()
+        if operation == "hold":
+            return False
+        if operation == "close_all" and not (result.get("closed_orders") or []):
+            return False
+        return bool(operation)
     
     def run(
         self, 
@@ -146,12 +181,16 @@ class RuleAwareAgent(BaseAgent):
         rule_documents = self.rule_engine.format_rules_for_prompt()
         
         # Build system prompt with rules
-        system_prompt = RULE_AWARE_SYSTEM_PROMPT.format(
-            rule_documents=rule_documents,
-            current_time=current_time,
-            portfolio=json.dumps(portfolio, ensure_ascii=False, indent=2),
-            prices=json.dumps(prices, ensure_ascii=False, indent=2)
-        )
+        system_prompt = self.prompt_resolver.render_slot(
+            "core.rule-aware.default",
+            "system",
+            {
+                "rule_documents": rule_documents,
+                "current_time": current_time,
+                "portfolio": json.dumps(portfolio, ensure_ascii=False, indent=2),
+                "prices": json.dumps(prices, ensure_ascii=False, indent=2),
+            },
+        ).content
         
         # Initialize conversation
         messages: List[Dict[str, Any]] = [
@@ -163,7 +202,6 @@ class RuleAwareAgent(BaseAgent):
         ]
         
         decision = None
-        compliance_audit = None
         accumulated_content = ""  # Track accumulated assistant content across steps
         executed_trades: List[Dict] = []   # Track every execute_trade tool call
         trade_done_detected = False        # True when agent outputs <TRADE_DONE>
@@ -174,7 +212,11 @@ class RuleAwareAgent(BaseAgent):
 
                 # Add reminder when running low on steps
                 if remaining_steps <= AgentConfig.STEP_REMINDER_THRESHOLD and remaining_steps > 1:
-                    reminder = RULE_AWARE_REMINDER_PROMPT.format(remaining_steps=remaining_steps)
+                    reminder = self.prompt_resolver.render_slot(
+                        "core.rule-aware.default",
+                        "reminder",
+                        {"remaining_steps": remaining_steps},
+                    ).content
                     messages.append({"role": "user", "content": reminder})
 
                 # Call LLM
@@ -282,7 +324,7 @@ class RuleAwareAgent(BaseAgent):
                         messages.append(warn_msg)
                         if on_step:
                             on_step(dict(warn_msg))
-                    if self.llm.is_gemini_model() and tool_results:
+                    if tool_results and self._requires_post_tool_user_message():
                         messages.append(LLMClient.gemini_post_tool_user_message())
                     # Reset accumulated content after tool calls
                     accumulated_content = ""
@@ -301,17 +343,38 @@ class RuleAwareAgent(BaseAgent):
             # ── Fallback: no decision produced at all ──
             if decision is None:
                 logger.warning("Agent did not provide decision within max steps - defaulting to HOLD")
-                decision = self._create_hold_decision("No decision made within step limit (compliance-safe default)")
+                decision = self._create_hold_decision(
+                    "No decision made within step limit (compliance-safe default)",
+                    termination_reason="max_steps",
+                )
+                decision["protocol"] = "tool"
+                decision["executed_trades"] = executed_trades
         
         except Exception as e:
             logger.error(f"Error in rule-aware agent execution: {e}", exc_info=True)
-            decision = self._create_hold_decision(f"Error: {str(e)}")
+            decision = self._create_hold_decision(
+                f"Error: {str(e)}",
+                termination_reason="llm_error",
+            )
+            decision["protocol"] = "tool"
+            decision["executed_trades"] = executed_trades
         
         # Log final decision
         agent_logger.info("=== Final Decision ===")
         agent_logger.info(json.dumps(decision, ensure_ascii=False, indent=2))
         
         return decision
+
+    def _requires_post_tool_user_message(self) -> bool:
+        requirement = getattr(
+            self.llm,
+            "requires_post_tool_user_message",
+            None,
+        )
+        if callable(requirement):
+            return bool(requirement())
+        legacy_gemini_check = getattr(self.llm, "is_gemini_model", None)
+        return bool(legacy_gemini_check()) if callable(legacy_gemini_check) else False
 
     def _attach_compliance_audit(
         self,
@@ -399,7 +462,7 @@ class RuleAwareAgent(BaseAgent):
         """
         last_trade: Optional[Dict] = None
         for t in reversed(executed_trades):
-            if isinstance(t.get("result"), dict) and t["result"].get("executed"):
+            if self._has_filled_trade(t):
                 last_trade = t
                 break
 
@@ -428,6 +491,7 @@ class RuleAwareAgent(BaseAgent):
             "leverage": leverage,
             "reason": reason,
             "executed_trades": executed_trades,
+            "termination_reason": "trade_done" if last_trade else "hold",
         }
 
         logger.info(f"Tool-mode session summary: {len(executed_trades)} trade call(s), representative={op} {sym}")
@@ -484,7 +548,12 @@ class RuleAwareAgent(BaseAgent):
         
         return decision
     
-    def _create_hold_decision(self, reason: str) -> Dict[str, Any]:
+    def _create_hold_decision(
+        self,
+        reason: str,
+        *,
+        termination_reason: str = "hold",
+    ) -> Dict[str, Any]:
         """Create a safe HOLD decision"""
         return {
             "operation": "hold",
@@ -492,7 +561,8 @@ class RuleAwareAgent(BaseAgent):
             "direction": "long",
             "target_portion_of_balance": 0.0,
             "leverage": 1,
-            "reason": reason
+            "reason": reason,
+            "termination_reason": termination_reason,
         }
     
     def _update_account_audit_stats(self, audit_result: Dict[str, Any]) -> None:

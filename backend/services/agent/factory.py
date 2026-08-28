@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 import logging
-import os
 from typing import Any
 
 from benchmark.agents import (
@@ -21,9 +20,12 @@ from benchmark.agents import (
 )
 from benchmark.builtin.agents import register_builtin_agents
 from benchmark.builtin.agents.react import REACT_COMPONENT_ID, REACT_SHIM_CONFIG_KEYS
+from benchmark.builtin.agents.rule_aware import (
+    RULE_AWARE_COMPONENT_ID,
+    RULE_AWARE_SHIM_CONFIG_KEYS,
+)
 from benchmark.builtin.prompts import get_builtin_prompt_registry
 from benchmark.infrastructure.adapters import LegacyLLMClientAdapter
-from config.agent_config import AgentConfig
 
 from .base import BaseAgent
 from .llm_client import LLMClient
@@ -57,30 +59,6 @@ def _build_multi_agent(llm: LLMClient, tools: ToolRegistry, **config: Any) -> Ba
         tools,
         max_steps=config.get("max_steps", 15),
         user_id=config.get("user_id"),
-        agent_name=config.get("agent_name"),
-    )
-
-
-def _build_rule_aware(llm: LLMClient, tools: ToolRegistry, **config: Any) -> BaseAgent:
-    from .rule_aware import RuleAwareAgent, RuleEngine
-
-    rule_docs_path = config.get("rule_docs_path")
-    if not rule_docs_path:
-        rule_docs_path = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-            "config",
-            "rules",
-        )
-    rule_engine = RuleEngine(rule_docs_path)
-    logger.info("Loaded %s rules for rule-aware agent", rule_engine.get_rule_summary())
-    return RuleAwareAgent(
-        llm,
-        tools,
-        rule_engine,
-        max_steps=config.get("max_steps", AgentConfig.MAX_STEPS),
-        user_id=config.get("user_id"),
-        account_id=config.get("account_id"),
-        enable_llm_audit=config.get("enable_llm_audit", False),
         agent_name=config.get("agent_name"),
     )
 
@@ -121,7 +99,6 @@ def _create_legacy_registry() -> AgentRegistry:
     register_builtin_agents(registry)
     builtins = (
         ("core.multi-agent", 15, _build_multi_agent),
-        ("core.rule-aware", AgentConfig.MAX_STEPS, _build_rule_aware),
         ("core.advanced-multi-agent", 30, _build_advanced_multi_agent),
     )
     for agent_id, default_max_steps, builder in builtins:
@@ -149,8 +126,17 @@ _LEGACY_AGENT_IDS = {
 _LEGACY_REGISTRY = _create_legacy_registry()
 
 
-def _react_shim_config(kwargs: Mapping[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in kwargs.items() if key in REACT_SHIM_CONFIG_KEYS}
+_SHIM_CONFIG_KEYS = {
+    REACT_COMPONENT_ID: REACT_SHIM_CONFIG_KEYS,
+    RULE_AWARE_COMPONENT_ID: RULE_AWARE_SHIM_CONFIG_KEYS,
+}
+
+
+def _shim_config(agent_id: str, kwargs: Mapping[str, Any]) -> dict[str, Any]:
+    allowed_keys = _SHIM_CONFIG_KEYS.get(agent_id)
+    if allowed_keys is None:
+        return dict(kwargs)
+    return {key: value for key, value in kwargs.items() if key in allowed_keys}
 
 
 def create_agent(
@@ -170,7 +156,7 @@ def create_agent(
     except ComponentNotFoundError as exc:
         raise ValueError(f"Unknown agent type: {agent_type}") from exc
 
-    config = _react_shim_config(kwargs) if agent_id == REACT_COMPONENT_ID else kwargs
+    config = _shim_config(agent_id, kwargs)
     report = _LEGACY_REGISTRY.validate_config(agent_id, config)
     if not report.valid:
         message = "; ".join(

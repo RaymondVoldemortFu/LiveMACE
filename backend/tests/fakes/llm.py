@@ -48,6 +48,14 @@ class FakeLLM:
             raise response
         return response
 
+    @staticmethod
+    def extract_text_content(response: FakeLLMResponse) -> str:
+        return response.content or ""
+
+    @staticmethod
+    def tool_call_parts(tool_call: FakeToolCall) -> tuple[str, str, str]:
+        return tool_call.id, tool_call.name, tool_call.arguments
+
     def build_assistant_message_dict(self, response: FakeLLMResponse) -> dict[str, Any]:
         message: dict[str, Any] = {"role": "assistant", "content": response.content}
         if response.tool_calls:

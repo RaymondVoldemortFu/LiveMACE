@@ -19,6 +19,7 @@ from benchmark.contracts import (
     ToolContext,
     ToolResult,
     ToolRuntimeError,
+    ToolSpec,
     to_jsonable,
 )
 
@@ -103,9 +104,11 @@ def redact_tool_value(value: JsonValue) -> JsonValue:
 
     if isinstance(value, dict):
         return {
-            key: "[REDACTED]"
-            if _normalized_sensitive_key(key) in _SENSITIVE_KEYS
-            else redact_tool_value(item)
+            key: (
+                "[REDACTED]"
+                if _normalized_sensitive_key(key) in _SENSITIVE_KEYS
+                else redact_tool_value(item)
+            )
             for key, item in value.items()
         }
     if isinstance(value, list):
@@ -171,6 +174,11 @@ class SynchronousToolInvoker:
         self._monotonic = monotonic_clock or monotonic
         self._call_id_factory = call_id_factory or (lambda: f"tool-{uuid4().hex}")
         self._redactor = redactor or redact_tool_value
+
+    def list_specs(self) -> tuple[ToolSpec, ...]:
+        """Return the active, authorized Tool specs visible to this runtime."""
+
+        return self._view.list()
 
     def call(
         self,
