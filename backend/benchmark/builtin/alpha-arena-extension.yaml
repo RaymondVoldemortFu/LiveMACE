@@ -1,0 +1,27 @@
+api_version: 1
+id: benchmark.core
+version: 1.0.0
+name: Open Alpha Arena Built-ins
+description: Built-in agents and prompt profiles shipped with the benchmark runtime.
+python:
+  requires: ">=3.10"
+  entrypoint: benchmark.builtin.agents.react:ReActAgentFactory
+components:
+  agents:
+    - id: core.react
+      factory: benchmark.builtin.agents.react:ReActAgentFactory
+      config_schema: schemas/react.json
+    - id: core.rule-aware
+      factory: benchmark.builtin.agents.rule_aware:RuleAwareAgentFactory
+      config_schema: schemas/rule-aware.json
+  prompts:
+    - directory: prompts
+      index: prompts/index.yaml
+capabilities:
+  requested:
+    - account.read
+    - market.read
+    - memory.read
+    - memory.write
+    - network.read
+    - trading.write

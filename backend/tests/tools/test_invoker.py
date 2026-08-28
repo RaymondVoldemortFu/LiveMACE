@@ -12,7 +12,12 @@ from benchmark.contracts import (
     ToolResult,
     ToolRuntimeError,
 )
-from benchmark.tools import SynchronousToolInvoker, ToolRegistry, redact_tool_value
+from benchmark.tools import (
+    SynchronousToolInvoker,
+    ToolRegistry,
+    ToolSpecSource,
+    redact_tool_value,
+)
 
 from .conftest import FunctionTool, MemoryCache, Provider, make_spec
 
@@ -62,6 +67,17 @@ def test_tool_runs_synchronously_in_caller_thread_and_receives_context(
     ]
     assert all(event.account_id == 7 for event in events.events)
     assert all(event.component == extension for event in events.events)
+
+
+def test_invoker_exposes_active_specs_through_optional_public_source(extension):
+    tool = FunctionTool(
+        make_spec(),
+        lambda context, arguments: ToolResult(ok=True, value=arguments["value"]),
+    )
+    runtime = invoker(registered(extension, tool))
+
+    assert isinstance(runtime, ToolSpecSource)
+    assert runtime.list_specs() == (tool.spec,)
 
 
 def test_capability_and_input_schema_fail_before_invoke(extension, events):

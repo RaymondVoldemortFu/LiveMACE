@@ -345,6 +345,17 @@ def test_manifest_symlink_inside_extension_root_is_allowed(tmp_path):
     assert validate_extension_directory(tmp_path).valid is True
 
 
+def test_validation_sanitizes_missing_extension_root_path(tmp_path):
+    missing = tmp_path / "private-host-root" / "missing-extension"
+
+    report = validate_extension_directory(missing)
+
+    assert report.valid is False
+    assert report.errors[0].code == "EXTENSION_ROOT_INVALID"
+    assert report.errors[0].message == "extension root is invalid"
+    assert str(tmp_path.resolve()) not in report.errors[0].message
+
+
 def test_manifest_rejects_non_json_yaml_values(tmp_path):
     _write_prompt_only_extension(tmp_path)
     manifest = tmp_path / MANIFEST_FILENAME

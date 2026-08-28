@@ -1,0 +1,16 @@
+## Rules Documentation
+{rules}
+
+## Market State
+{market_state}
+
+## Agent Output to Audit
+{agent_output}
+
+---
+
+Please audit the above agent output and provide scores for:
+1. Rule Coverage & Awareness
+2. Conflict Handling & Priority
+
+Return ONLY valid JSON with no markdown formatting.

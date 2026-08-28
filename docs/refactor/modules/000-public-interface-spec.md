@@ -187,6 +187,9 @@ class ToolProvider(Protocol):
 
 class ToolInvoker(Protocol):
     def call(self, name: str, arguments: Mapping[str, JsonValue]) -> ToolResult: ...
+
+class ToolSpecSource(Protocol):
+    def list_specs(self) -> Sequence[ToolSpec]: ...
 ```
 
 执行顺序固定为：名称解析与 capability/enabled 检查（未启用工具返回 `TOOL_NOT_ACTIVE`）-> 参数 JSON 可序列化检查 -> JSON Schema 输入校验 -> deadline 预检 -> cache 查找（`cacheable=True` 且命中时直接返回缓存结果）-> 同步 tool invoke -> invoke 后按单调时钟复检 timeout/deadline -> 输出 JSON 可序列化与 schema 校验（仅 `ok=True` 结果）-> cache 写入 -> trace/event。
@@ -201,7 +204,7 @@ class ToolInvoker(Protocol):
 
 保留 namespace `core.*`：`core.execute_trade`、`core.market_snapshot`、`core.kline_history`、`core.account_state`、`core.decision_history`、`core.memory_add`、`core.memory_search`、`core.sandbox_*`、`core.search`。第三方必须使用自己的 namespace。
 
-实现补充：`Tool`/`ToolProvider`/`ToolInvoker` Protocol 标注 `@runtime_checkable`；`benchmark.tools` 另导出 `ToolCache`、`ToolEventSink`、`RegisteredTool`、`ToolRuntimeEvent` 等运行时公开类型。
+实现补充：`Tool`/`ToolProvider`/`ToolInvoker` Protocol 标注 `@runtime_checkable`；`ToolSpecSource` 是 Agent 可选消费的只读 schema 边界，不改变只实现 `ToolInvoker.call()` 的最小契约；`benchmark.tools` 另导出 `ToolCache`、`ToolEventSink`、`RegisteredTool`、`ToolRuntimeEvent` 等运行时公开类型。
 
 ## 5. Prompt SPI
 
@@ -294,6 +297,8 @@ class SandboxPort(Protocol):
     def release(self, lease: "SandboxLease") -> None: ...
     def healthcheck(self) -> "HealthStatus": ...
 ```
+
+`LLMRequest.model` 为 `str | None`；`None` 表示使用 `LLMClientPort` 已绑定的模型。只有显式提供非空模型时，Provider adapter 才校验请求模型与绑定模型是否一致。Agent 不得依赖 Port 未公开声明的模型属性，也不得构造占位模型名。
 
 事件下沉接口按运行时分为两套，事件负载类型不同，不设统一 `RuntimeEvent`：
 

@@ -19,6 +19,7 @@ from .protocol import (
     ToolInvoker,
     ToolProvider,
     ToolRuntimeEvent,
+    ToolSpecSource,
 )
 from .registry import ToolRegistry, ToolView
 from .validation import MAX_TOOL_TIMEOUT_SECONDS, openai_tool_schema
@@ -31,6 +32,7 @@ __all__ = [
     "Tool",
     "ToolProvider",
     "ToolInvoker",
+    "ToolSpecSource",
     "ToolCache",
     "ToolEventSink",
     "RegisteredTool",

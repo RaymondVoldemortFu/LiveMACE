@@ -29,19 +29,27 @@ class LegacyLLMClientAdapter(LLMClientPort):
         "additionalProperties": False,
     }
 
-    def __init__(self, client: Any, *, provider_id: str = "core.llm.openai-compatible") -> None:
+    def __init__(
+        self, client: Any, *, provider_id: str = "core.llm.openai-compatible"
+    ) -> None:
         if not callable(getattr(client, "call", None)):
             raise TypeError("client must expose call()")
         if not isinstance(provider_id, str) or not provider_id:
             raise ValueError("provider_id must be a non-empty string")
         self._client = client
         self.id = provider_id
+        configured_model = getattr(client, "model", None)
+        self.model = configured_model if isinstance(configured_model, str) else ""
 
     def complete(self, request: LLMRequest) -> LLMResponse:
         if not isinstance(request, LLMRequest):
             raise TypeError("request must be LLMRequest")
         configured_model = getattr(self._client, "model", None)
-        if configured_model and request.model != configured_model:
+        if (
+            configured_model
+            and request.model is not None
+            and request.model != configured_model
+        ):
             raise ProviderError(
                 "LLM request model does not match the configured client",
                 code="LLM_MODEL_MISMATCH",
@@ -60,7 +68,9 @@ class LegacyLLMClientAdapter(LLMClientPort):
             )
         timeout = request.metadata.get("timeout_seconds")
         if timeout is not None and (
-            not isinstance(timeout, (int, float)) or isinstance(timeout, bool) or timeout <= 0
+            not isinstance(timeout, (int, float))
+            or isinstance(timeout, bool)
+            or timeout <= 0
         ):
             raise ProviderError(
                 "timeout_seconds must be a positive number",
@@ -81,7 +91,9 @@ class LegacyLLMClientAdapter(LLMClientPort):
                 messages=[dict(item) for item in request.messages],
                 tools=[dict(item) for item in request.tools] or None,
                 timeout=timeout,
-                response_format=None if response_format is None else dict(response_format),
+                response_format=(
+                    None if response_format is None else dict(response_format)
+                ),
                 temperature=request.temperature,
                 max_tokens=request.max_tokens,
             )
@@ -97,6 +109,12 @@ class LegacyLLMClientAdapter(LLMClientPort):
             raise
         except Exception as exc:
             raise _llm_failure(self.id, "complete", exc) from exc
+
+    def requires_post_tool_user_message(self) -> bool:
+        """Expose the legacy Gemini continuation requirement at the adapter boundary."""
+
+        checker = getattr(self._client, "is_gemini_model", None)
+        return bool(checker()) if callable(checker) else False
 
     def healthcheck(self) -> HealthStatus:
         tester = getattr(self._client, "test_connection", None)
@@ -158,7 +176,9 @@ class LegacyLLMClientAdapter(LLMClientPort):
         tool_calls = getattr(message, "tool_calls", None)
         if isinstance(message, Mapping):
             tool_calls = message.get("tool_calls")
-        normalized_calls = tuple(self._to_tool_call(item) for item in (tool_calls or ()))
+        normalized_calls = tuple(
+            self._to_tool_call(item) for item in (tool_calls or ())
+        )
         raw: Mapping[str, JsonValue] = {}
         model_dump = getattr(message, "model_dump", None)
         if callable(model_dump):
