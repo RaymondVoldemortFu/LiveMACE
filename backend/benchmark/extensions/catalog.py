@@ -6,13 +6,14 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 from benchmark.contracts import (
-    BenchmarkError,
     KNOWN_CAPABILITIES,
+    BenchmarkError,
     PromptProfileDescriptor,
     ToolSpec,
     ValidationIssue,
     ValidationReport,
 )
+
 from .loader import ExtensionLoadRecord, ExtensionLoadResult
 from .runtime_config import AccountRuntimeConfigDTO
 
@@ -44,6 +45,12 @@ class ExtensionCatalog:
 
     def list_extensions(self) -> tuple[ExtensionLoadRecord, ...]:
         return self._result.records
+
+    @property
+    def allowed_capabilities(self) -> frozenset[str]:
+        """Capabilities the host may grant, without exposing loader internals."""
+
+        return self._allowed_capabilities
 
     def list_agents(self) -> tuple:
         return self._result.agents.list()

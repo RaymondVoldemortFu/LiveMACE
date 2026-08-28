@@ -97,6 +97,8 @@ def save_runtime_config(
     config: AccountExtensionConfig,
     *,
     expected_updated_at: Optional[datetime] = None,
+    agent_registry: Any = None,
+    prompt_registry: Any = None,
 ) -> "SaveResult":
     """Validate and persist ``config`` for ``account_id``.
 
@@ -115,7 +117,11 @@ def save_runtime_config(
     existing = uow.account_runtime_configs.get_for_update(account_id)
     _assert_no_conflict(account_id, existing, expected_updated_at)
 
-    result = validate_extension_config(config)
+    result = validate_extension_config(
+        config,
+        agent_registry=agent_registry,
+        prompt_registry=prompt_registry,
+    )
     stored_config = result.resolved_config if result.valid else config
 
     row = existing if existing is not None else _new_row(account_id)

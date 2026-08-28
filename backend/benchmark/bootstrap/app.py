@@ -10,13 +10,13 @@ from __future__ import annotations
 
 import logging
 import os
-import anyio
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import List, Optional
 
-from fastapi import FastAPI
+import anyio
+from fastapi import FastAPI, Request
 
 from benchmark.bootstrap.runtime import (
     BootstrapContext,
@@ -136,8 +136,25 @@ def _register_middleware(app: FastAPI, settings: AppSettings) -> None:
 
 def _register_health(app: FastAPI) -> None:
     @app.get("/api/health")
-    async def health_check():
-        return {"status": "healthy", "message": "Trading API is running"}
+    async def health_check(request: Request):
+        handle = getattr(request.app.state, "runtime_handle", None)
+        if handle is None:
+            return {"status": "starting", "message": "Trading API is starting"}
+        return {
+            "status": "healthy" if handle.is_ready() else "degraded",
+            "message": "Trading API is running",
+            "services": handle.health(),
+        }
+
+    @app.get("/api/ready")
+    async def readiness_check(request: Request):
+        handle = getattr(request.app.state, "runtime_handle", None)
+        ready = bool(handle is not None and handle.is_ready())
+        return {
+            "ready": ready,
+            "status": "ready" if ready else "not_ready",
+            "services": handle.health() if handle is not None else {},
+        }
 
 
 def _register_static(app: FastAPI, settings: AppSettings) -> None:
@@ -158,6 +175,7 @@ def _register_routes(app: FastAPI) -> None:
     from api.config_routes import router as config_router
     from api.crypto_routes import router as crypto_router
     from api.evaluation_routes import router as evaluation_router
+    from api.extension_routes import router as extension_router
     from api.market_data_routes import router as market_data_router
     from api.memory_routes import router as memory_router
     from api.order_routes import router as order_router
@@ -176,6 +194,7 @@ def _register_routes(app: FastAPI) -> None:
     app.include_router(rule_router)
     app.include_router(compliance_router)
     app.include_router(evaluation_router)
+    app.include_router(extension_router)
     app.websocket("/ws")(websocket_endpoint)
 
 
