@@ -27,6 +27,7 @@ class AdvancedMultiAgent(BaseAgent):
     VALID_AGENTS = {"TradingAgent", "NewsAgent", "CoderAgent", "AnalystAgent", "CriticAgent"}
     TERMINATION_TOKEN = "<TRADE_DONE>"
     NEWS_AGENT_MAX_SEARCH_CALLS = 3
+    EXECUTION_MAX_STEPS = 24
     PROMPT_PROFILE_ID = "core.advanced-multi-agent.default"
 
     def __init__(
@@ -389,13 +390,10 @@ class AdvancedMultiAgent(BaseAgent):
                 "collaboration_state": self._format_collaboration_state(step),
             },
         ).content
-        intro, _ = self._safe_split_once(rendered_prompt, "Trading objective:")
-        _, protocol_and_schema = self._safe_split_once(rendered_prompt, "Decision Protocol:")
-
-        system_parts = [intro]
-        if protocol_and_schema:
-            system_parts.append(f"Decision Protocol:\n{protocol_and_schema}")
-        system_prompt = "\n\n".join([p for p in system_parts if p]).strip()
+        # The resolver may return an external override. Treat its output as an
+        # opaque prompt instead of parsing built-in English headings out of it;
+        # otherwise valid override instructions can be silently discarded.
+        system_prompt = rendered_prompt.strip()
 
         user_prompt = (
             "Current trading task state:\n"
@@ -421,14 +419,10 @@ class AdvancedMultiAgent(BaseAgent):
         prices: Dict[str, Any],
     ) -> List[Dict[str, str]]:
         """System: role/spec. User: concrete instruction + runtime context."""
-        context_marker = "Instruction:" if "Instruction:" in prompt_template else "Context:"
-        intro, _ = self._safe_split_once(prompt_template, context_marker)
-        _, schema_tail = self._safe_split_once(prompt_template, "Return ONLY JSON:")
-
-        system_parts = [intro]
-        if schema_tail:
-            system_parts.append(f"Return ONLY JSON:\n{schema_tail}")
-        system_prompt = "\n\n".join([p for p in system_parts if p]).strip()
+        # Prompt profile output is an extension boundary. Preserve the full
+        # rendered content; only the separate runtime-context message below is
+        # assembled locally.
+        system_prompt = prompt_template.strip()
 
         user_lines = [f"Current task for {agent_name}:", instruction, "", self._current_time_context()]
         if agent_name in {"TradingAgent", "NewsAgent"}:
@@ -744,7 +738,7 @@ class AdvancedMultiAgent(BaseAgent):
         executed_trades: List[Dict[str, Any]] = []
         expected_calls = self._expected_execution_calls(execution_plan)
 
-        for _ in range(24):
+        for _ in range(self.EXECUTION_MAX_STEPS):
             self._log_llm_trace(
                 current_sub_agent="ExecutionAgent",
                 phase="request",
@@ -1224,6 +1218,11 @@ class AdvancedMultiAgent(BaseAgent):
                     on_step=on_step,
                     decision_round_id=decision_round_id,
                 )
+                expected_execution_calls = self._expected_execution_calls(execution_plan)
+                execution_complete = (
+                    expected_execution_calls == 0
+                    or len(executed_trades) >= expected_execution_calls
+                )
 
                 final_decision = {
                     "operation": "hold",
@@ -1235,9 +1234,18 @@ class AdvancedMultiAgent(BaseAgent):
                     "protocol": "tool",
                     "executed_trades": executed_trades,
                     "execution_plan": execution_plan,
+                    "execution_complete": execution_complete,
+                    "expected_execution_calls": expected_execution_calls,
+                    "completed_execution_calls": len(executed_trades),
                     "decision_basis": decision.get("decision_basis") or {},
                     "termination_reason": (
-                        "trade_done" if self._has_filled_trade(executed_trades) else "hold"
+                        "max_steps"
+                        if not execution_complete
+                        else (
+                            "trade_done"
+                            if self._has_filled_trade(executed_trades)
+                            else "hold"
+                        )
                     ),
                 }
                 self._notify_evaluator(trace_id)

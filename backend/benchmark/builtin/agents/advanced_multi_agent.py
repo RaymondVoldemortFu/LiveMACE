@@ -38,7 +38,7 @@ ADVANCED_MULTI_AGENT_CONFIG_SCHEMA: dict[str, Any] = {
         "max_steps": {
             "type": "integer",
             "minimum": 1,
-            "default": 15,
+            "default": 30,
         },
         "user_id": {"type": ["string", "integer", "null"], "default": None},
         "agent_name": {"type": ["string", "null"], "default": None},
@@ -128,6 +128,13 @@ class AdvancedMultiAgentAdapter:
             "legacy_operation": str(legacy_result.get("operation") or ""),
             "step_count": len(steps),
         }
+        for key in (
+            "execution_complete",
+            "expected_execution_calls",
+            "completed_execution_calls",
+        ):
+            if key in legacy_result:
+                metadata[key] = legacy_result[key]
         if incomplete:
             metadata["incomplete_executed_trades"] = list(incomplete)
         if trade_errors:

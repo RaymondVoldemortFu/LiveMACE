@@ -7,8 +7,8 @@ M10 switches production callers to ``AgentRuntime``.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
 import logging
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from benchmark.agents import (
