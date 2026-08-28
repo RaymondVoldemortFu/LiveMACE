@@ -1,25 +1,30 @@
-from fastapi import WebSocket, WebSocketDisconnect
-from sqlalchemy.orm import Session
-from typing import Dict, Set
 import json
+import logging
+from datetime import datetime
+from typing import Dict, Set
 
-from database.connection import SessionLocal
-from repositories.user_repo import get_or_create_user, get_user
-from repositories.account_repo import get_or_create_default_account, get_account
+from fastapi import WebSocket, WebSocketDisconnect
+from pydantic import ValidationError
+from sqlalchemy.orm import Session
+
+from repositories.account_repo import get_account, get_or_create_default_account
 from repositories.order_repo import list_orders
 from repositories.position_repo import list_positions
-from services.asset_calculator import calc_positions_value, calc_positions_market_value
-from services.market_data import get_last_price
-from services.scheduler import add_account_snapshot_job, remove_account_snapshot_job
-from database.models import Trade, AIDecisionLog
-from datetime import datetime
-import logging
+from repositories.user_repo import get_or_create_user, get_user
+from schemas.websocket import parse_websocket_message
+from services.asset_calculator import calc_positions_market_value, calc_positions_value
 from services.asset_curve_cache_service import (
     get_asset_curve_cache,
     get_curve_point_limit,
     refresh_asset_curve_cache,
 )
-
+from services.market_data import get_last_price
+from services.scheduler import add_account_snapshot_job, remove_account_snapshot_job
+from services.websocket_session_service import (
+    open_websocket_session,
+    place_order,
+    recent_activity,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -104,9 +109,9 @@ class ConnectionManager:
 
 async def broadcast_asset_curve_update(timeframe: str = "1h"):
     """Broadcast asset curve updates to all connected clients"""
-    db = SessionLocal()
     try:
-        asset_curves = get_all_asset_curves_data(db, timeframe)
+        with open_websocket_session() as db:
+            asset_curves = get_all_asset_curves_data(db, timeframe)
         await manager.broadcast_to_all({
             "type": "asset_curve_update",
             "timeframe": timeframe,
@@ -114,8 +119,6 @@ async def broadcast_asset_curve_update(timeframe: str = "1h"):
         })
     except Exception as e:
         logging.error(f"Failed to broadcast asset curve update: {e}")
-    finally:
-        db.close()
 
 
 def get_all_asset_curves_data(db: Session, timeframe: str = "1h"):
@@ -140,12 +143,7 @@ async def _send_snapshot_optimized(db: Session, account_id: int):
     
     positions = list_positions(db, account_id)
     orders = list_orders(db, account_id)
-    trades = (
-        db.query(Trade).filter(Trade.account_id == account_id).order_by(Trade.trade_time.desc()).limit(10).all()  # Reduced from 20 to 10
-    )
-    ai_decisions = (
-        db.query(AIDecisionLog).filter(AIDecisionLog.account_id == account_id).order_by(AIDecisionLog.decision_time.desc()).limit(10).all()  # Reduced from 20 to 10
-    )
+    trades, ai_decisions = recent_activity(db, account_id, 10)
     
     # Calculate positions MARKET VALUE (equity) and NOTIONAL VALUE (exposure)
     positions_market_value = calc_positions_market_value(db, account_id)
@@ -292,12 +290,7 @@ async def _send_snapshot(db: Session, account_id: int):
         return
     positions = list_positions(db, account_id)
     orders = list_orders(db, account_id)
-    trades = (
-        db.query(Trade).filter(Trade.account_id == account_id).order_by(Trade.trade_time.desc()).limit(20).all()
-    )
-    ai_decisions = (
-        db.query(AIDecisionLog).filter(AIDecisionLog.account_id == account_id).order_by(AIDecisionLog.decision_time.desc()).limit(20).all()
-    )
+    trades, ai_decisions = recent_activity(db, account_id, 20)
     
     # Calculate positions MARKET VALUE (equity) and NOTIONAL VALUE (exposure)
     positions_market_value = calc_positions_market_value(db, account_id)
@@ -450,9 +443,18 @@ async def websocket_endpoint(websocket: WebSocket):
                 except:
                     break
                 continue
-            kind = msg.get("type")
-            db: Session = SessionLocal()
             try:
+                parsed = parse_websocket_message(msg)
+                msg = parsed.model_dump()
+            except ValidationError as e:
+                await websocket.send_text(json.dumps({
+                    "type": "error",
+                    "message": "invalid message",
+                    "details": e.errors(include_url=False),
+                }))
+                continue
+            kind = msg["type"]
+            with open_websocket_session() as db:
                 if kind == "bootstrap":
                     #  mode: Create or get default default user
                     username = msg.get("username", "default")
@@ -490,9 +492,18 @@ async def websocket_endpoint(websocket: WebSocket):
                             break
                         continue
                     user_id = uid
-                    manager.register(user_id, websocket)
+                    account = get_or_create_default_account(
+                        db,
+                        user_id,
+                        account_name=f"{u.username} AI Trader",
+                        initial_capital=100000,
+                    )
+                    if account_id is not None:
+                        manager.unregister(account_id, websocket)
+                    account_id = account.id
+                    manager.register(account_id, websocket)
                     try:
-                        await _send_snapshot(db, user_id)
+                        await _send_snapshot(db, account_id)
                     except Exception as e:
                         logging.error(f"Failed to send snapshot: {e}")
                         break
@@ -504,25 +515,31 @@ async def websocket_endpoint(websocket: WebSocket):
                         continue
 
                     # Unregister from current user if any
-                    if user_id is not None:
-                        manager.unregister(user_id, websocket)
+                    if account_id is not None:
+                        manager.unregister(account_id, websocket)
 
                     # Find target user
                     target_user = get_or_create_user(db, target_username, 100000.0)
                     user_id = target_user.id
 
-                    # Register to new user
-                    manager.register(user_id, websocket)
+                    account = get_or_create_default_account(
+                        db,
+                        user_id,
+                        account_name=f"{target_user.username} AI Trader",
+                        initial_capital=100000,
+                    )
+                    account_id = account.id
+                    manager.register(account_id, websocket)
 
                     # Send confirmation and snapshot
-                    await manager.send_to_account(user_id, {
+                    await manager.send_to_account(account_id, {
                         "type": "user_switched",
                         "user": {
                             "id": target_user.id,
                             "username": target_user.username
                         }
                     })
-                    await _send_snapshot(db, user_id)
+                    await _send_snapshot(db, account_id)
                 elif kind == "switch_account":
                     # Switch to different account by ID
                     target_account_id = msg.get("account_id")
@@ -587,70 +604,18 @@ async def websocket_endpoint(websocket: WebSocket):
                         continue
 
                     try:
-                        # Import the order creation service
-                        from services.order_matching import create_order
-
-                        # Get account and user object
-                        account = get_account(db, account_id)
-                        if not account:
-                            await websocket.send_text(json.dumps({"type": "error", "message": "account not found"}))
+                        result = place_order(account_id, msg)
+                        if not result.accepted:
+                            await websocket.send_text(json.dumps({
+                                "type": "error",
+                                "code": result.reject_code,
+                                "message": result.reject_message,
+                            }))
                             continue
-
-                        user = get_user(db, account.user_id)
-                        if not user:
-                            await websocket.send_text(json.dumps({"type": "error", "message": "user not found"}))
-                            continue
-
-                        # Extract order parameters
-                        symbol = msg.get("symbol")
-                        name = msg.get("name", symbol)  # Use symbol as name if not provided
-                        market = msg.get("market", "CRYPTO")
-                        side = msg.get("side")
-                        order_type = msg.get("order_type")
-                        price = msg.get("price")
-                        quantity = msg.get("quantity")
-                        leverage = msg.get("leverage", 1)
-
-                        # Validate required parameters
-                        if not all([symbol, side, order_type, quantity]):
-                            await websocket.send_text(json.dumps({"type": "error", "message": "missing required parameters"}))
-                            continue
-
-                        # Convert quantity to float (crypto supports fractional quantities)
-                        try:
-                            quantity = float(quantity)
-                        except (ValueError, TypeError):
-                            await websocket.send_text(json.dumps({"type": "error", "message": "invalid quantity"}))
-                            continue
-
-                        # Validate leverage
-                        try:
-                            leverage = int(leverage)
-                            if leverage < 1 or leverage > 50:
-                                await websocket.send_text(json.dumps({"type": "error", "message": "leverage must be between 1 and 50"}))
-                                continue
-                        except (ValueError, TypeError):
-                            await websocket.send_text(json.dumps({"type": "error", "message": "invalid leverage"}))
-                            continue
-
-                        # Create the order
-                        order = create_order(
-                            db=db,
-                            account=account,
-                            symbol=symbol,
-                            name=name,
-                            side=side,
-                            order_type=order_type,
-                            price=price,
-                            quantity=quantity,
-                            leverage=leverage
-                        )
-
-                        # Commit the order
-                        db.commit()
-
-                        # Send success response
-                        await manager.send_to_account(account_id, {"type": "order_pending", "order_id": order.id})
+                        await manager.send_to_account(account_id, {
+                            "type": "order_pending",
+                            "order_id": result.order_id,
+                        })
 
                         # Send updated snapshot
                         await _send_snapshot(db, account_id)
@@ -678,17 +643,11 @@ async def websocket_endpoint(websocket: WebSocket):
                         await websocket.send_text(json.dumps({"type": "error", "message": "unknown message"}))
                     except:
                         break
-            finally:
-                db.close()
     except WebSocketDisconnect:
         if account_id is not None:
             manager.unregister(account_id, websocket)
-        if user_id is not None:
-            manager.unregister(user_id, websocket)
         return
     finally:
         # Clean up resources when user disconnects
         if account_id is not None:
             manager.unregister(account_id, websocket)
-        if user_id is not None:
-            manager.unregister(user_id, websocket)
