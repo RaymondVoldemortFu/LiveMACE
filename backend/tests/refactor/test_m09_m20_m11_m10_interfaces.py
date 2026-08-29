@@ -17,7 +17,9 @@ from benchmark.application.trading import (
     SynchronousTradeCommandGateway,
     TradeCommandIdempotencyStore,
 )
+from benchmark.application.trading.policy import normalize_trade_command
 from benchmark.contracts import Market, TradeCommand
+from benchmark.contracts.errors import TradeGatewayError
 from benchmark.infrastructure.cache import LegacyToolCacheAdapter
 from benchmark.infrastructure.market.services import DisplayMarketDataService, TradingMarketDataService
 from benchmark.infrastructure.market.symbols import infer_market, resolve_symbol_market
@@ -325,6 +327,29 @@ def test_m20_symbol_registry_normalizes_and_validates_supported_markets():
     assert resolved.market is Market.CRYPTO
     with pytest.raises(ValueError, match="Unsupported US stock"):
         resolve_symbol_market("BTC", "US")
+    with pytest.raises(ValueError, match="Unsupported CRYPTO symbol"):
+        resolve_symbol_market("PEPE", "CRYPTO")
+
+
+def test_m11_policy_rejects_unsupported_crypto_symbol():
+    command = TradeCommand(
+        account_id=1,
+        operation="open",
+        market=Market.CRYPTO,
+        symbol="PEPE",
+        direction="long",
+        sizing_mode="portion",
+        sizing_value=Decimal("0.1"),
+        leverage=1,
+        reason="test",
+        idempotency_key="round-1:call-1",
+    )
+
+    with pytest.raises(TradeGatewayError) as caught:
+        normalize_trade_command(command)
+
+    assert caught.value.code == "SYMBOL_INVALID"
+    assert "Unsupported CRYPTO symbol" in str(caught.value)
 
 
 def test_m11_execute_trade_tool_uses_round_tool_call_idempotency_key(monkeypatch):
