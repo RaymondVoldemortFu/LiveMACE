@@ -4,10 +4,16 @@ import os
 import re
 import socket
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from benchmark.builtin.prompts import get_prompt_resolver, require_profile_contract
+from benchmark.builtin.prompts import (
+    BUILTIN_PROMPT_EXTENSION,
+    get_prompt_resolver,
+    require_profile_contract,
+)
+from benchmark.prompts import PromptSourcePriority
 from services.time_source import now_in_tz
 
 from .base import BaseAgent
@@ -19,6 +25,17 @@ llm_logger = logging.getLogger("llm_trace")
 
 CRYPTO_SYMBOLS = {"BTC", "ETH", "SOL", "BNB", "XRP", "DOGE"}
 US_SYMBOLS = {"AAPL", "NVDA", "GOOGL", "META", "AMZN", "TSLA", "PG", "JNJ", "UNH", "JPM", "V", "BA", "XOM", "NEE", "AMT", "PLD", "LIN"}
+
+
+@dataclass(frozen=True)
+class _ExecutionStageResult:
+    trades: List[Dict[str, Any]]
+    matched_plan_items: int
+    expected_plan_items: int
+
+    @property
+    def complete(self) -> bool:
+        return self.matched_plan_items == self.expected_plan_items
 
 
 class AdvancedMultiAgent(BaseAgent):
@@ -390,12 +407,25 @@ class AdvancedMultiAgent(BaseAgent):
                 "collaboration_state": self._format_collaboration_state(step),
             },
         ).content
-        # The resolver may return an external override. Treat its output as an
-        # opaque prompt instead of parsing built-in English headings out of it;
-        # otherwise valid override instructions can be silently discarded.
-        system_prompt = rendered_prompt.strip()
+        builtin_prompt = self._is_builtin_prompt_slot("manager")
+        if builtin_prompt:
+            intro, _ = self._safe_split_once(rendered_prompt, "Trading objective:")
+            _, protocol_and_schema = self._safe_split_once(
+                rendered_prompt, "Decision Protocol:"
+            )
+            system_parts = [intro]
+            if protocol_and_schema:
+                system_parts.append(f"Decision Protocol:\n{protocol_and_schema}")
+            system_prompt = "\n\n".join(
+                part for part in system_parts if part
+            ).strip()
+        else:
+            # External/account Prompt output is authoritative and opaque. Its
+            # declared variables are already rendered here, so neither parse
+            # the content nor repeat those values in the user message.
+            system_prompt = rendered_prompt.strip()
 
-        user_prompt = (
+        builtin_user_prompt = (
             "Current trading task state:\n"
             f"Trading objective:\n{objective}\n\n"
             f"Portfolio:\n{json.dumps(portfolio, ensure_ascii=False)}\n\n"
@@ -408,6 +438,15 @@ class AdvancedMultiAgent(BaseAgent):
             f"Collaboration State:\n{self._format_collaboration_state(step)}\n\n"
             "Decide the next action now and return ONLY JSON."
         )
+        if builtin_prompt:
+            user_prompt = builtin_user_prompt
+        else:
+            user_prompt = (
+                "Supplemental runtime context for the externally supplied prompt:\n"
+                f"{self._current_time_context()}\n\n"
+                f"{self._tradable_universe_context()}\n\n"
+                "Follow the complete system prompt and return its requested response now."
+            )
         return [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
 
     def _build_sub_agent_messages(
@@ -419,15 +458,38 @@ class AdvancedMultiAgent(BaseAgent):
         prices: Dict[str, Any],
     ) -> List[Dict[str, str]]:
         """System: role/spec. User: concrete instruction + runtime context."""
-        # Prompt profile output is an extension boundary. Preserve the full
-        # rendered content; only the separate runtime-context message below is
-        # assembled locally.
-        system_prompt = prompt_template.strip()
-
-        user_lines = [f"Current task for {agent_name}:", instruction, "", self._current_time_context()]
+        slot = self._agent_prompt_slot(agent_name)
+        builtin_prompt = self._is_builtin_prompt_slot(slot)
+        if builtin_prompt:
+            context_marker = "Instruction:" if "Instruction:" in prompt_template else "Context:"
+            intro, _ = self._safe_split_once(prompt_template, context_marker)
+            _, schema_tail = self._safe_split_once(prompt_template, "Return ONLY JSON:")
+            system_parts = [intro]
+            if schema_tail:
+                system_parts.append(f"Return ONLY JSON:\n{schema_tail}")
+            system_prompt = "\n\n".join(
+                part for part in system_parts if part
+            ).strip()
+            user_lines = [
+                f"Current task for {agent_name}:",
+                instruction,
+                "",
+                self._current_time_context(),
+            ]
+        else:
+            system_prompt = prompt_template.strip()
+            user_lines = [
+                "Supplemental runtime context for the externally supplied prompt:",
+                self._current_time_context(),
+            ]
         if agent_name in {"TradingAgent", "NewsAgent"}:
             user_lines.extend(["", self._tradable_universe_context()])
-        if agent_name in {"TradingAgent", "AnalystAgent", "CriticAgent", "CoderAgent"}:
+        if builtin_prompt and agent_name in {
+            "TradingAgent",
+            "AnalystAgent",
+            "CriticAgent",
+            "CoderAgent",
+        }:
             user_lines.extend(
                 [
                     "",
@@ -452,6 +514,33 @@ class AdvancedMultiAgent(BaseAgent):
         user_prompt = "\n".join(user_lines)
 
         return [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
+
+    def _is_builtin_prompt_slot(self, slot: str) -> bool:
+        resolve_slot = getattr(self.prompt_resolver, "resolve_slot", None)
+        if not callable(resolve_slot):
+            return False
+        registered = resolve_slot(
+            self.PROMPT_PROFILE_ID,
+            slot,
+        )
+        return (
+            registered.extension == BUILTIN_PROMPT_EXTENSION
+            and registered.priority == int(PromptSourcePriority.BUILTIN)
+        )
+
+    @staticmethod
+    def _agent_prompt_slot(agent_name: str) -> str:
+        slots = {
+            "TradingAgent": "trading",
+            "NewsAgent": "news",
+            "CoderAgent": "coder",
+            "AnalystAgent": "analyst",
+            "CriticAgent": "critic",
+        }
+        try:
+            return slots[agent_name]
+        except KeyError as exc:
+            raise ValueError(f"Unknown agent: {agent_name}") from exc
 
     def _derive_stance(self, text: str, sentiment: str = "") -> str:
         source = f"{text} {sentiment}".lower()
@@ -662,15 +751,41 @@ class AdvancedMultiAgent(BaseAgent):
         return " | ".join([p for p in parts if p])
 
     def _expected_execution_calls(self, execution_plan: List[Dict[str, Any]]) -> int:
-        expected = 0
-        for step in execution_plan:
-            if not isinstance(step, dict):
-                continue
-            op = str(step.get("operation") or "").strip().lower()
-            if op not in {"open", "close", "hold", "all_in", "close_all"}:
-                continue
-            expected += 1
-        return expected
+        return len(self._executable_plan_items(execution_plan))
+
+    @staticmethod
+    def _executable_plan_items(
+        execution_plan: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        valid_operations = {"open", "close", "hold", "all_in", "close_all"}
+        return [
+            step
+            for step in execution_plan
+            if isinstance(step, dict)
+            and str(step.get("operation") or "").strip().lower()
+            in valid_operations
+        ]
+
+    def _execution_call_matches_plan_item(
+        self,
+        plan_item: Dict[str, Any],
+        arguments: Dict[str, Any],
+    ) -> bool:
+        expected_operation = str(plan_item.get("operation") or "").strip().lower()
+        actual_operation = str(arguments.get("operation") or "").strip().lower()
+        expected_symbol = str(plan_item.get("symbol") or "").strip().upper()
+        actual_symbol = str(arguments.get("symbol") or "").strip().upper()
+        expected_market = str(
+            plan_item.get("market")
+            or self._infer_market_from_symbol(expected_symbol)
+            or ""
+        ).strip().upper()
+        actual_market = str(arguments.get("market") or "CRYPTO").strip().upper()
+        return (
+            actual_operation == expected_operation
+            and actual_symbol == expected_symbol
+            and actual_market == expected_market
+        )
 
     def _is_done_message(self, text: str) -> bool:
         if not text:
@@ -729,14 +844,16 @@ class AdvancedMultiAgent(BaseAgent):
         prices: Dict[str, Any],
         on_step: Optional[Callable] = None,
         decision_round_id: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
+    ) -> _ExecutionStageResult:
         messages = self._build_execution_messages(execution_plan, decision, portfolio, prices)
         available_tools_names = [t["function"]["name"] for t in self.tools.openai_tools]
         allowed_tools = ["execute_trade"]
         valid_tools = [t for t in allowed_tools if t in available_tools_names]
         stage_tools = [t for t in self.tools.openai_tools if t["function"]["name"] in valid_tools]
         executed_trades: List[Dict[str, Any]] = []
-        expected_calls = self._expected_execution_calls(execution_plan)
+        plan_items = self._executable_plan_items(execution_plan)
+        expected_calls = len(plan_items)
+        matched_plan_items = 0
 
         for _ in range(self.EXECUTION_MAX_STEPS):
             self._log_llm_trace(
@@ -784,28 +901,58 @@ class AdvancedMultiAgent(BaseAgent):
             if tool_calls:
                 for tc in tool_calls:
                     tc_id, name, tc_arguments = LLMClient.tool_call_parts(tc)
+                    tool_invoked = False
                     try:
                         args = json.loads(tc_arguments or "{}")
                     except Exception as e:
                         args = {}
                         result = {"error": f"Invalid tool arguments for {name}: {e}"}
                     else:
-                        tool_func = self.tools.get(name)
-                        if tool_func is None:
-                            result = {"error": f"Tool not found: {name}"}
+                        if not isinstance(args, dict):
+                            args = {}
+                            result = {
+                                "error": f"Invalid tool arguments for {name}: expected a JSON object"
+                            }
+                        elif name == "execute_trade" and matched_plan_items >= expected_calls:
+                            result = {
+                                "error": "Execution plan is already complete; extra trade call rejected"
+                            }
+                        elif name == "execute_trade" and not self._execution_call_matches_plan_item(
+                            plan_items[matched_plan_items], args
+                        ):
+                            expected_item = plan_items[matched_plan_items]
+                            result = {
+                                "error": "Trade call does not match the next execution plan item",
+                                "expected": {
+                                    "operation": expected_item.get("operation"),
+                                    "symbol": expected_item.get("symbol"),
+                                    "market": expected_item.get("market"),
+                                },
+                                "received": {
+                                    "operation": args.get("operation"),
+                                    "symbol": args.get("symbol"),
+                                    "market": args.get("market", "CRYPTO"),
+                                },
+                            }
                         else:
-                            try:
-                                result = self._invoke_llm_tool(
-                                    name,
-                                    args,
-                                    tool_call_id=tc_id,
-                                    decision_round_id=decision_round_id,
-                                )
-                            except Exception as e:
-                                result = {"error": f"Tool execution failed for {name}: {e}"}
+                            tool_func = self.tools.get(name)
+                            if tool_func is None:
+                                result = {"error": f"Tool not found: {name}"}
+                            else:
+                                try:
+                                    result = self._invoke_llm_tool(
+                                        name,
+                                        args,
+                                        tool_call_id=tc_id,
+                                        decision_round_id=decision_round_id,
+                                    )
+                                    tool_invoked = True
+                                except Exception as e:
+                                    result = {"error": f"Tool execution failed for {name}: {e}"}
 
-                    if name == "execute_trade":
+                    if name == "execute_trade" and tool_invoked:
                         executed_trades.append(result if isinstance(result, dict) else {"raw_result": str(result)})
+                        matched_plan_items += 1
 
                     tool_msg = {
                         "role": "tool",
@@ -827,9 +974,9 @@ class AdvancedMultiAgent(BaseAgent):
                         )
                 if tool_guard_warnings:
                     messages.append(LLMClient.tool_guardrail_warning_user_message(tool_guard_warnings))
-                if expected_calls > 0 and len(executed_trades) < expected_calls:
-                    remaining = expected_calls - len(executed_trades)
-                    next_step = execution_plan[len(executed_trades)] if len(executed_trades) < len(execution_plan) else {}
+                if expected_calls > 0 and matched_plan_items < expected_calls:
+                    remaining = expected_calls - matched_plan_items
+                    next_step = plan_items[matched_plan_items]
                     messages.append(
                         {
                             "role": "user",
@@ -845,15 +992,19 @@ class AdvancedMultiAgent(BaseAgent):
                 continue
 
             if self._is_done_message(msg_content):
-                if expected_calls == 0 or len(executed_trades) >= expected_calls:
-                    return executed_trades
-                remaining = expected_calls - len(executed_trades)
-                next_step = execution_plan[len(executed_trades)] if len(executed_trades) < len(execution_plan) else {}
+                if matched_plan_items == expected_calls:
+                    return _ExecutionStageResult(
+                        executed_trades,
+                        matched_plan_items,
+                        expected_calls,
+                    )
+                remaining = expected_calls - matched_plan_items
+                next_step = plan_items[matched_plan_items]
                 messages.append(
                     {
                         "role": "user",
                         "content": (
-                            f"Termination denied: only {len(executed_trades)}/{expected_calls} execute_trade calls completed. "
+                            f"Termination denied: only {matched_plan_items}/{expected_calls} execution plan items completed. "
                             f"Execute remaining {remaining} step(s). Next required step: {json.dumps(next_step, ensure_ascii=False)}. "
                             f"When fully complete, output ONLY: {self.TERMINATION_TOKEN}"
                         ),
@@ -867,13 +1018,17 @@ class AdvancedMultiAgent(BaseAgent):
             )
             messages.append({"role": "user", "content": reminder})
 
-        if expected_calls > 0 and len(executed_trades) < expected_calls:
+        if matched_plan_items < expected_calls:
             logger.warning(
                 "Execution stage exited by step limit before completing plan: completed=%s expected=%s",
-                len(executed_trades),
+                matched_plan_items,
                 expected_calls,
             )
-        return executed_trades
+        return _ExecutionStageResult(
+            executed_trades,
+            matched_plan_items,
+            expected_calls,
+        )
 
     def _run_sub_agent(
         self,
@@ -1210,7 +1365,7 @@ class AdvancedMultiAgent(BaseAgent):
                 if not execution_plan and decision.get("final_decision"):
                     execution_plan = self._normalize_execution_plan([decision.get("final_decision")])
 
-                executed_trades = self._run_execution_stage(
+                execution_result = self._run_execution_stage(
                     execution_plan=execution_plan,
                     decision=decision,
                     portfolio=portfolio,
@@ -1218,11 +1373,9 @@ class AdvancedMultiAgent(BaseAgent):
                     on_step=on_step,
                     decision_round_id=decision_round_id,
                 )
-                expected_execution_calls = self._expected_execution_calls(execution_plan)
-                execution_complete = (
-                    expected_execution_calls == 0
-                    or len(executed_trades) >= expected_execution_calls
-                )
+                executed_trades = execution_result.trades
+                expected_execution_calls = execution_result.expected_plan_items
+                execution_complete = execution_result.complete
 
                 final_decision = {
                     "operation": "hold",
@@ -1236,7 +1389,7 @@ class AdvancedMultiAgent(BaseAgent):
                     "execution_plan": execution_plan,
                     "execution_complete": execution_complete,
                     "expected_execution_calls": expected_execution_calls,
-                    "completed_execution_calls": len(executed_trades),
+                    "completed_execution_calls": execution_result.matched_plan_items,
                     "decision_basis": decision.get("decision_basis") or {},
                     "termination_reason": (
                         "max_steps"

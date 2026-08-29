@@ -378,8 +378,10 @@ def test_incomplete_execution_plan_does_not_report_trade_done(monkeypatch):
     assert len(captured) == 1
 
 
-def test_advanced_manager_system_prompt_preserves_resolver_output():
+def test_advanced_builtin_prompt_messages_preserve_legacy_role_partition(monkeypatch):
     agent = AdvancedMultiAgent(FakeLLM([]), ToolRegistry())
+    monkeypatch.setattr(agent, "_current_time_context", lambda: "TIME-CONTEXT")
+    monkeypatch.setattr(agent, "_tradable_universe_context", lambda: "UNIVERSE-CONTEXT")
     variables = {
         "objective": "objective",
         "portfolio": json.dumps({"cash": 10}, ensure_ascii=False),
@@ -396,22 +398,73 @@ def test_advanced_manager_system_prompt_preserves_resolver_output():
         prices={"BTC": 1},
         step=0,
     )
-    expected = agent.prompt_resolver.render_slot(
+    rendered_manager = agent.prompt_resolver.render_slot(
         agent.PROMPT_PROFILE_ID,
         "manager",
         variables,
     ).content.strip()
-    assert messages[0]["content"] == expected
+    manager_intro = rendered_manager.split("Trading objective:", 1)[0].strip()
+    manager_schema = rendered_manager.split("Decision Protocol:", 1)[1].strip()
+    expected_manager_system = (
+        f"{manager_intro}\n\nDecision Protocol:\n{manager_schema}"
+    ).strip()
+    expected_manager_user = (
+        "Current trading task state:\n"
+        "Trading objective:\nobjective\n\n"
+        f"Portfolio:\n{json.dumps({'cash': 10}, ensure_ascii=False)}\n\n"
+        f"Market Prices:\n{json.dumps({'BTC': 1}, ensure_ascii=False)}\n\n"
+        "TIME-CONTEXT\n\nUNIVERSE-CONTEXT\n\n"
+        f"Evidence Book (use evidence IDs when citing prior findings):\n{variables['evidence_book']}\n\n"
+        "Current Context:\nNo prior actions.\n\n"
+        f"Known Conflicts/Tensions:\n{variables['conflicts']}\n\n"
+        f"Collaboration State:\n{agent._format_collaboration_state(0)}\n\n"
+        "Decide the next action now and return ONLY JSON."
+    )
+    assert messages == [
+        {"role": "system", "content": expected_manager_system},
+        {"role": "user", "content": expected_manager_user},
+    ]
+
+    trading_variables = {
+        "instruction": "Inspect BTC.",
+        "portfolio": json.dumps({"cash": 10}, ensure_ascii=False),
+        "prices": json.dumps({"BTC": 1}, ensure_ascii=False),
+    }
+    rendered_trading = agent.prompt_resolver.render_slot(
+        agent.PROMPT_PROFILE_ID,
+        "trading",
+        trading_variables,
+    ).content
+    trading_messages = agent._build_sub_agent_messages(
+        "TradingAgent",
+        rendered_trading,
+        "Inspect BTC.",
+        {"cash": 10},
+        {"BTC": 1},
+    )
+    trading_intro = rendered_trading.split("Instruction:", 1)[0].strip()
+    trading_schema = rendered_trading.split("Return ONLY JSON:", 1)[1].strip()
+    assert trading_messages[0]["content"] == (
+        f"{trading_intro}\n\nReturn ONLY JSON:\n{trading_schema}"
+    ).strip()
+    assert trading_messages[1]["content"] == (
+        "Current task for TradingAgent:\nInspect BTC.\n\nTIME-CONTEXT\n\n"
+        "UNIVERSE-CONTEXT\n\n"
+        f"Portfolio:\n{json.dumps({'cash': 10}, ensure_ascii=False)}\n\n"
+        f"Prices:\n{json.dumps({'BTC': 1}, ensure_ascii=False)}\n\nRespond now."
+    )
 
 
-def test_advanced_external_prompt_overrides_are_not_sliced():
+def test_advanced_external_prompt_overrides_are_opaque_and_not_duplicated(monkeypatch):
     agent = AdvancedMultiAgent(
         FakeLLM([]),
         ToolRegistry(),
         prompt_resolver=_registry_with_external_advanced_overrides(),
     )
+    monkeypatch.setattr(agent, "_current_time_context", lambda: "TIME-CONTEXT")
+    monkeypatch.setattr(agent, "_tradable_universe_context", lambda: "UNIVERSE-CONTEXT")
     manager_messages = agent._build_manager_messages(
-        objective="hold",
+        objective="OBJECTIVE-UNIQUE",
         context_str="No prior actions.",
         portfolio={"cash": 10},
         prices={"BTC": 1},
@@ -421,7 +474,7 @@ def test_advanced_external_prompt_overrides_are_not_sliced():
         agent.PROMPT_PROFILE_ID,
         "trading",
         {
-            "instruction": "Inspect BTC.",
+            "instruction": "INSTRUCTION-UNIQUE",
             "portfolio": json.dumps({"cash": 10}, ensure_ascii=False),
             "prices": json.dumps({"BTC": 1}, ensure_ascii=False),
         },
@@ -429,12 +482,90 @@ def test_advanced_external_prompt_overrides_are_not_sliced():
     trading_messages = agent._build_sub_agent_messages(
         agent_name="TradingAgent",
         prompt_template=trading_prompt,
-        instruction="Inspect BTC.",
+        instruction="INSTRUCTION-UNIQUE",
         portfolio={"cash": 10},
         prices={"BTC": 1},
     )
     assert "CUSTOM_DIRECTIVE_ALWAYS_HOLD" in manager_messages[0]["content"]
     assert "CUSTOM_DIRECTIVE_TRADING_OVERRIDE" in trading_messages[0]["content"]
+    manager_combined = "\n".join(message["content"] for message in manager_messages)
+    trading_combined = "\n".join(message["content"] for message in trading_messages)
+    assert manager_combined.count("OBJECTIVE-UNIQUE") == 1
+    assert manager_combined.count(json.dumps({"cash": 10}, ensure_ascii=False)) == 1
+    assert trading_combined.count("INSTRUCTION-UNIQUE") == 1
+    assert trading_combined.count(json.dumps({"BTC": 1}, ensure_ascii=False)) == 1
+
+
+def test_execution_rejects_duplicate_call_for_previous_plan_item(monkeypatch):
+    monkeypatch.setattr(AdvancedMultiAgent, "EXECUTION_MAX_STEPS", 2)
+    captured: list[dict] = []
+    tools = ToolRegistry()
+    _register_execute_trade(tools, captured)
+    plan = [
+        {
+            "operation": "open",
+            "symbol": symbol,
+            "market": "CRYPTO",
+            "direction": "long",
+            "target_portion_of_balance": 0.1,
+            "leverage": 1,
+        }
+        for symbol in ("BTC", "ETH")
+    ]
+    duplicate_btc = FakeToolCall(
+        "trade-duplicate",
+        "execute_trade",
+        json.dumps(plan[0]),
+    )
+    agent = AdvancedMultiAgent(
+        FakeLLM(
+            [
+                FakeLLMResponse(None, [FakeToolCall("trade-1", "execute_trade", json.dumps(plan[0]))]),
+                FakeLLMResponse(None, [duplicate_btc]),
+            ]
+        ),
+        tools,
+    )
+
+    result = agent._run_execution_stage(
+        execution_plan=plan,
+        decision={},
+        portfolio={},
+        prices={},
+        decision_round_id="round-duplicate",
+    )
+
+    assert result.complete is False
+    assert result.matched_plan_items == 1
+    assert result.expected_plan_items == 2
+    assert len(result.trades) == 1
+    assert [call["symbol"] for call in captured] == ["BTC"]
+
+
+def test_execution_plan_matching_requires_operation_symbol_and_market():
+    agent = AdvancedMultiAgent(FakeLLM([]), ToolRegistry())
+    plan_item = {
+        "operation": "open",
+        "symbol": "BTC",
+        "market": "CRYPTO",
+    }
+
+    assert agent._execution_call_matches_plan_item(
+        plan_item,
+        {"operation": "OPEN", "symbol": "btc", "market": "CRYPTO"},
+    )
+    assert not agent._execution_call_matches_plan_item(
+        plan_item,
+        {"operation": "close", "symbol": "BTC", "market": "CRYPTO"},
+    )
+    assert not agent._execution_call_matches_plan_item(
+        plan_item,
+        {"operation": "open", "symbol": "ETH", "market": "CRYPTO"},
+    )
+    assert not agent._execution_call_matches_plan_item(
+        plan_item,
+        {"operation": "open", "symbol": "BTC", "market": "US"},
+    )
 
 
 def test_advanced_runtime_rejects_public_tool_invoker():
