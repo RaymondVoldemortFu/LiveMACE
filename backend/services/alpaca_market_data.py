@@ -19,6 +19,7 @@ from alpaca.data.enums import DataFeed
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 from alpaca.trading.client import TradingClient
 
+from benchmark.infrastructure.market.symbols import US_SYMBOLS
 from config.agent_config import AgentConfig
 from services.time_source import now_utc, delta_t_minutes
 from config.market_data_config import ALPACA_US_FEED_ENABLED, ALPACA_US_FEED
@@ -27,19 +28,7 @@ dotenv.load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_STOCKS = [
-    "AAPL", "NVDA",
-    "GOOGL", "META",
-    "AMZN", "TSLA",
-    "PG",
-    "JNJ", "UNH",
-    "JPM", "V",
-    "BA",
-    "XOM",
-    "NEE",
-    "AMT", "PLD",
-    "LIN",
-]
+SUPPORTED_STOCKS = list(US_SYMBOLS)
 
 
 class RateLimiter:

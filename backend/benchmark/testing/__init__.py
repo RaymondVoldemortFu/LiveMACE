@@ -1,5 +1,6 @@
 """Reusable fake provider ports for contract tests."""
 
+from .cache import FakeKlineCache, FakePriceCache, FakeToolCache
 from .providers import (
     FakeLLMClientPort,
     FakeMarketDataPort,
@@ -8,8 +9,11 @@ from .providers import (
 )
 
 __all__ = [
+    "FakeKlineCache",
     "FakeLLMClientPort",
     "FakeMarketDataPort",
     "FakeMemoryStorePort",
+    "FakePriceCache",
     "FakeSandboxPort",
+    "FakeToolCache",
 ]

@@ -7,7 +7,7 @@ from database.models import (
     CRYPTO_TAKER_FEE_RATE, CRYPTO_INTEREST_RATE_HOURLY, CRYPTO_MAX_LEVERAGE,
     CRYPTO_MIN_ORDER_QUANTITY,
 )
-from .market_data import get_last_price
+from .market_data import get_trading_price as get_last_price
 from services.time_source import now_utc
 
 

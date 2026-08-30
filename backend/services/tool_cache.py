@@ -131,13 +131,13 @@ class RedisToolCache:
         round_id: Optional[str] = None,
         suppress_miss_log: bool = False,
     ) -> Optional[Any]:
-        client = self._get_client()
         effective_round_id = round_id or self.get_current_round_id()
         if not effective_round_id:
             return None
 
         key = self._build_data_key(tool_name, args, effective_round_id)
         try:
+            client = self._get_client()
             raw = client.get(key)
             if raw is None:
                 self._increment_round_stat(client, effective_round_id, "miss")
@@ -161,10 +161,9 @@ class RedisToolCache:
         tool_name: str,
         args: Dict[str, Any],
         value: Any,
-        ttl_seconds: int,
+        ttl_seconds: Optional[int] = None,
         round_id: Optional[str] = None,
     ) -> bool:
-        client = self._get_client()
         effective_round_id = round_id or self.get_current_round_id()
         if not effective_round_id:
             return False
@@ -172,9 +171,21 @@ class RedisToolCache:
         key = self._build_data_key(tool_name, args, effective_round_id)
         index_key = self._build_round_index_key(effective_round_id)
         try:
+            client = self._get_client()
             serialized = json.dumps(value, ensure_ascii=False, default=str, allow_nan=False)
-            ttl = max(1, int(ttl_seconds))
-            client.setex(key, ttl, serialized)
+            ttl = max(
+                1,
+                int(
+                    ttl_seconds
+                    if ttl_seconds is not None
+                    else ToolCacheConfig.kline_ttl_seconds
+                ),
+            )
+            set_value = getattr(client, "set", None)
+            if callable(set_value):
+                set_value(key, serialized, ex=ttl)
+            else:
+                client.setex(key, ttl, serialized)
             client.sadd(index_key, key)
             client.expire(index_key, max(ttl, ToolCacheConfig.key_index_ttl_seconds))
             self._increment_round_stat(client, effective_round_id, "set")
@@ -191,7 +202,6 @@ class RedisToolCache:
         args: Dict[str, Any],
         round_id: Optional[str] = None,
     ) -> Iterator[bool]:
-        client = self._get_client()
         effective_round_id = round_id or self.get_current_round_id()
         if not effective_round_id:
             yield False
@@ -199,13 +209,15 @@ class RedisToolCache:
 
         data_key = self._build_data_key(tool_name, args, effective_round_id)
         lock_key = f"{data_key}:lock"
-        lock = client.lock(
-            name=lock_key,
-            timeout=max(1, int(ToolCacheConfig.lock_timeout_seconds)),
-            blocking_timeout=max(1, int(ToolCacheConfig.lock_wait_seconds)),
-        )
+        lock = None
         acquired = False
         try:
+            client = self._get_client()
+            lock = client.lock(
+                name=lock_key,
+                timeout=max(1, int(ToolCacheConfig.lock_timeout_seconds)),
+                blocking_timeout=max(1, int(ToolCacheConfig.lock_wait_seconds)),
+            )
             acquired = bool(lock.acquire(blocking=True))
         except Exception as e:
             logger.warning(f"Tool cache lock failed (tool={tool_name}): {e}")
@@ -213,7 +225,7 @@ class RedisToolCache:
         try:
             yield acquired
         finally:
-            if acquired:
+            if acquired and lock is not None:
                 try:
                     lock.release()
                 except Exception:
@@ -222,11 +234,11 @@ class RedisToolCache:
     def clear_round(self, round_id: Optional[str]) -> int:
         if not round_id:
             return 0
-        client = self._get_client()
 
         index_key = self._build_round_index_key(round_id)
         stats_key = self._build_round_stats_key(round_id)
         try:
+            client = self._get_client()
             keys = list(client.smembers(index_key) or [])
             deleted = 0
             if keys:

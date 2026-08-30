@@ -362,6 +362,7 @@ backend/script/results/*
 backend/eval/eval_output/
 *.sql
 *.docx
+/WAVE 2*.pdf
 *_report.md
 __pycache__
 *.pyc

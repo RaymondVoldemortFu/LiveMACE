@@ -2,11 +2,14 @@
 Price caching service to reduce API calls and improve performance
 """
 
-from typing import Dict, Optional, Tuple
 import logging
 from threading import Lock
+from decimal import Decimal
+from typing import Dict, Optional, Tuple
 
-from services.time_source import now_timestamp
+from benchmark.infrastructure.market.symbols import resolve_symbol_market
+from benchmark.providers import Freshness, PriceResult
+from services.time_source import now_timestamp, now_utc
 logger = logging.getLogger(__name__)
 
 
@@ -14,36 +17,67 @@ class PriceCache:
     """Simple in-memory price cache with TTL"""
     
     def __init__(self, ttl_seconds: int = 30):
-        self.cache: Dict[Tuple[str, str], Tuple[float, float]] = {}  # key: (symbol, market), value: (price, timestamp)
+        self.cache: Dict[Tuple[str, str], Tuple[PriceResult, float]] = {}
         self.ttl_seconds = ttl_seconds
         self.lock = Lock()
     
     def get(self, symbol: str, market: str) -> Optional[float]:
         """Get cached price if still valid"""
-        key = (symbol, market)
+        resolved = resolve_symbol_market(symbol, market)
+        key = (resolved.symbol, resolved.market.value)
         current_time = now_timestamp()
         
         with self.lock:
             if key in self.cache:
-                price, timestamp = self.cache[key]
+                result, timestamp = self.cache[key]
                 if current_time - timestamp < self.ttl_seconds:
-                    logger.debug(f"Cache hit for {symbol}.{market}: {price}")
-                    return price
+                    logger.debug(f"Cache hit for {resolved.symbol}.{resolved.market.value}: {result.value}")
+                    return float(result.value) if result.value is not None else None
                 else:
                     # Remove expired entry
                     del self.cache[key]
-                    logger.debug(f"Cache expired for {symbol}.{market}")
+                    logger.debug(f"Cache expired for {resolved.symbol}.{resolved.market.value}")
         
         return None
     
     def set(self, symbol: str, market: str, price: float):
         """Cache a price with current timestamp"""
-        key = (symbol, market)
+        resolved = resolve_symbol_market(symbol, market)
+        self.set_result(
+            resolved.symbol,
+            resolved.market.value,
+            PriceResult(
+                value=Decimal(str(price)),
+                as_of=now_utc(),
+                source="core.market.legacy",
+                freshness=Freshness.FRESH,
+            ),
+        )
+
+    def get_result(self, symbol: str, market: str) -> PriceResult | None:
+        resolved = resolve_symbol_market(symbol, market)
+        key = (resolved.symbol, resolved.market.value)
         current_time = now_timestamp()
-        
         with self.lock:
-            self.cache[key] = (price, current_time)
-            logger.debug(f"Cached price for {symbol}.{market}: {price}")
+            entry = self.cache.get(key)
+            if entry is None:
+                return None
+            result, timestamp = entry
+            if current_time - timestamp >= self.ttl_seconds:
+                del self.cache[key]
+                return None
+            return result
+
+    def set_result(self, symbol: str, market: str, result: PriceResult) -> None:
+        resolved = resolve_symbol_market(symbol, market)
+        key = (resolved.symbol, resolved.market.value)
+        with self.lock:
+            self.cache[key] = (result, now_timestamp())
+            logger.debug(f"Cached price for {resolved.symbol}.{resolved.market.value}: {result.value}")
+
+    def clear(self) -> None:
+        with self.lock:
+            self.cache.clear()
     
     def clear_expired(self):
         """Remove all expired entries"""
@@ -51,7 +85,7 @@ class PriceCache:
         expired_keys = []
         
         with self.lock:
-            for key, (price, timestamp) in self.cache.items():
+            for key, (_, timestamp) in self.cache.items():
                 if current_time - timestamp >= self.ttl_seconds:
                     expired_keys.append(key)
             
@@ -69,7 +103,7 @@ class PriceCache:
         
         with self.lock:
             total_entries = len(self.cache)
-            for price, timestamp in self.cache.values():
+            for _, timestamp in self.cache.values():
                 if current_time - timestamp < self.ttl_seconds:
                     valid_entries += 1
         

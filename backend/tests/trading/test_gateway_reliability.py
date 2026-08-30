@@ -485,6 +485,28 @@ def test_internal_create_cancel_and_pending_commands_share_uow(
         assert session.query(Order).filter(Order.id == second.order_id).one().status == "CANCELLED"
 
 
+def test_internal_create_order_rejects_unsupported_crypto_symbol(session_factory):
+    result = _gateway(session_factory).create_order(
+        CreateOrderCommand(
+            account_id=1,
+            symbol="PEPE",
+            market=Market.CRYPTO,
+            side="BUY",
+            order_type="LIMIT",
+            quantity=Decimal("1"),
+            price=Decimal("1"),
+        )
+    )
+
+    assert result.accepted is False
+    assert result.reject_code == "SYMBOL_INVALID"
+    assert result.reject_message == "Unsupported CRYPTO symbol: PEPE"
+    with session_factory() as session:
+        assert session.query(Order).count() == 0
+        assert session.query(Trade).count() == 0
+        assert session.query(Position).count() == 0
+
+
 def test_cancel_and_pending_use_account_first_lock_order(session_factory, monkeypatch):
     from benchmark.persistence.sqlalchemy_repositories import (
         SqlAlchemyAccountRepository,
