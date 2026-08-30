@@ -2,7 +2,11 @@ from sqlalchemy import Column, Integer, String, DECIMAL, TIMESTAMP, ForeignKey, 
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 import datetime
-from sqlalchemy.dialects.mysql import BIGINT as MYSQL_BIGINT, LONGTEXT
+from sqlalchemy.dialects.mysql import (
+    BIGINT as MYSQL_BIGINT,
+    LONGTEXT,
+    TIMESTAMP as MYSQL_TIMESTAMP,
+)
 
 from .connection import Base
 
@@ -71,6 +75,64 @@ class Account(Base):
     positions = relationship("Position", back_populates="account")
     orders = relationship("Order", back_populates="account")
     memories = relationship("AgentMemory", back_populates="account")
+    runtime_config = relationship(
+        "AccountRuntimeConfig",
+        back_populates="account",
+        uselist=False,
+    )
+
+
+class AccountRuntimeConfig(Base):
+    """Explicit Agent/Toolset/Prompt runtime configuration for an account (M12).
+
+    Replaces the implicit ``accounts.agent_type`` + boolean flags combination
+    with an explicit, versioned extension configuration. One row per account.
+    The legacy columns on ``accounts`` stay read-only during migration; every
+    runtime read switches to this table before they are removed.
+
+    JSON columns hold controlled shapes only (component ids, config dicts,
+    version maps). API keys / model / base_url stay on ``accounts`` and never
+    enter this table.
+    """
+
+    __tablename__ = "account_runtime_configs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    account_id = Column(
+        Integer, ForeignKey("accounts.id"), unique=True, nullable=False, index=True
+    )
+
+    # Agent component selection + pinned version and validated config copy.
+    agent_id = Column(String(128), nullable=False)
+    agent_version = Column(String(32), nullable=True)
+    agent_config_json = Column(JSON, nullable=False, default=dict)
+
+    # Toolset selection and per-account disabled tools.
+    toolset_ids_json = Column(JSON, nullable=False, default=list)
+    disabled_tools_json = Column(JSON, nullable=False, default=list)
+
+    # Prompt profile selection + pinned version.
+    prompt_profile_id = Column(String(128), nullable=True)
+    prompt_profile_version = Column(String(32), nullable=True)
+
+    # Pinned component versions for reproducible traces (§11).
+    component_versions_json = Column(JSON, nullable=False, default=dict)
+
+    # Validation outcome; "valid" | "configuration_invalid".
+    validation_status = Column(String(32), nullable=False, default="valid")
+    validation_errors_json = Column(JSON, nullable=False, default=list)
+
+    created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
+    updated_at = Column(
+        TIMESTAMP().with_variant(MYSQL_TIMESTAMP(fsp=6), "mysql"),
+        nullable=False,
+        server_default=func.current_timestamp(),
+        onupdate=func.current_timestamp(),
+    )
+
+    account = relationship("Account", back_populates="runtime_config")
+
+    __table_args__ = (UniqueConstraint("account_id", name="uix_account_runtime_config_account"),)
 
 
 class UserAuthSession(Base):

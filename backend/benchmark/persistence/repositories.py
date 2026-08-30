@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, List, Optional, Protocol, runtime_checkable
 if TYPE_CHECKING:  # ORM types for typing only; no runtime import side effects
     from database.models import (
         Account,
+        AccountRuntimeConfig,
         AccountSnapshot,
         AgentPeriodCheckpoint,
         AgentTrace,
@@ -61,6 +62,20 @@ class AccountRepository(Protocol):
     ) -> Optional["Account"]: ...
 
     def set_active(self, account_id: int, active: bool) -> Optional["Account"]: ...
+
+
+@runtime_checkable
+class AccountRuntimeConfigRepository(Protocol):
+    """Persistence for the per-account extension configuration (M12)."""
+
+    def get(self, account_id: int) -> Optional["AccountRuntimeConfig"]: ...
+
+    def get_for_update(self, account_id: int) -> Optional["AccountRuntimeConfig"]: ...
+
+    def upsert(self, config: "AccountRuntimeConfig") -> "AccountRuntimeConfig": ...
+
+    def list_all(self) -> List["AccountRuntimeConfig"]: ...
+
 
 
 @runtime_checkable

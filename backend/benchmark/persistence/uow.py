@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 
 from benchmark.persistence.repositories import (
     AccountRepository,
+    AccountRuntimeConfigRepository,
     DecisionRepository,
     EvaluationRepository,
     OrderRepository,
@@ -42,6 +43,7 @@ class UnitOfWorkState(str, Enum):
 @runtime_checkable
 class UnitOfWork(Protocol):
     accounts: AccountRepository
+    account_runtime_configs: AccountRuntimeConfigRepository
     positions: PositionRepository
     orders: OrderRepository
     trades: TradeRepository
@@ -72,6 +74,7 @@ class SqlAlchemyUnitOfWork:
     """Single-use, single-thread synchronous SQLAlchemy Unit of Work."""
 
     accounts: AccountRepository
+    account_runtime_configs: AccountRuntimeConfigRepository
     positions: PositionRepository
     orders: OrderRepository
     trades: TradeRepository
@@ -136,6 +139,7 @@ class SqlAlchemyUnitOfWork:
     def _build_adapters(self) -> None:
         from benchmark.persistence.sqlalchemy_repositories import (
             SqlAlchemyAccountRepository,
+            SqlAlchemyAccountRuntimeConfigRepository,
             SqlAlchemyDecisionRepository,
             SqlAlchemyEvaluationRepository,
             SqlAlchemyOrderRepository,
@@ -152,6 +156,9 @@ class SqlAlchemyUnitOfWork:
 
         provider = self._active_session
         self.accounts = SqlAlchemyAccountRepository(provider)
+        self.account_runtime_configs = SqlAlchemyAccountRuntimeConfigRepository(
+            provider
+        )
         self.positions = SqlAlchemyPositionRepository(provider)
         self.orders = SqlAlchemyOrderRepository(provider)
         self.trades = SqlAlchemyTradeRepository(provider)
