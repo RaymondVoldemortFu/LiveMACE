@@ -1,10 +1,12 @@
 """M12: account extension config — mapping, validation, service, migration tests."""
 
+import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
@@ -18,7 +20,7 @@ from benchmark.accounts import (
     get_runtime_config,
     save_runtime_config,
 )
-from benchmark.accounts.service import RuntimeConfigConflictError
+from benchmark.accounts.service import RuntimeConfigConflictError, RuntimeConfigRecord
 from benchmark.accounts.validation import (
     VALIDATION_STATUS_INVALID,
     VALIDATION_STATUS_VALID,
@@ -50,14 +52,30 @@ def test_dto_rejects_empty_agent_id():
 
 
 def test_dto_is_immutable_and_normalizes_containers():
+    source = {"nested": {"values": [1, 2]}}
     cfg = AccountExtensionConfig(
         agent_id="core.react",
-        agent_config={"max_steps": 5},
+        agent_config=source,
         toolset_ids=["a", "b"],
+        component_versions={"core.react": "1.0.0"},
     )
     assert cfg.toolset_ids == ("a", "b")
     with pytest.raises(Exception):
         cfg.agent_id = "other"  # frozen dataclass
+    with pytest.raises(TypeError):
+        cfg.agent_config["nested"]["values"] = ()
+    with pytest.raises(TypeError):
+        cfg.component_versions["core.react"] = "9.9.9"
+    source["nested"]["values"].append(3)
+    assert cfg.to_dict()["agent_config"] == {"nested": {"values": [1, 2]}}
+
+
+def test_dto_rejects_non_json_agent_config():
+    with pytest.raises(ConfigValidationError):
+        AccountExtensionConfig(
+            agent_id="core.react",
+            agent_config={"unsupported": {"a", "set"}},
+        )
 
 
 def test_dto_round_trips_through_dict():
@@ -225,11 +243,42 @@ def test_save_and_read_round_trip(session_factory):
     with SqlAlchemyUnitOfWork(session_factory) as uow:
         result = save_runtime_config(uow, account_id, cfg)
         assert result.valid
+        assert result.updated_at.tzinfo is not None
+        assert result.updated_at.utcoffset().total_seconds() == 0
         uow.commit()
     with SqlAlchemyUnitOfWork(session_factory) as uow:
         stored = get_runtime_config(uow, account_id)
-        assert stored.agent_id == "core.react"
-        assert stored.component_versions["core.react"] == "1.0.0"
+        assert stored.config.agent_id == "core.react"
+        assert stored.config.component_versions["core.react"] == "1.0.0"
+        assert stored.updated_at == result.updated_at
+
+
+def test_runtime_config_api_schema_requires_aware_tokens():
+    from pydantic import ValidationError
+
+    from schemas.account import AccountRuntimeConfigSave
+
+    payload = {"config": {"agent_id": "core.react"}}
+    with pytest.raises(ValidationError):
+        AccountRuntimeConfigSave(
+            **payload,
+            expected_updated_at=datetime(2026, 8, 30, 12, 0, 0),
+        )
+
+    parsed = AccountRuntimeConfigSave(
+        **payload,
+        expected_updated_at=datetime(2026, 8, 30, 12, 0, 0, tzinfo=timezone.utc),
+    )
+    assert parsed.expected_updated_at.tzinfo is not None
+
+
+def test_runtime_config_record_rejects_naive_token():
+    with pytest.raises(ValueError, match="timezone-aware"):
+        RuntimeConfigRecord(
+            config=AccountExtensionConfig(agent_id="core.react"),
+            status=VALIDATION_STATUS_VALID,
+            updated_at=datetime(2026, 8, 30, 12, 0, 0),
+        )
 
 
 def test_save_invalid_config_marks_configuration_invalid(session_factory):
@@ -254,15 +303,16 @@ def test_optimistic_concurrency_conflict(session_factory):
         save_runtime_config(uow, account_id, cfg)
         uow.commit()
     with SqlAlchemyUnitOfWork(session_factory) as uow:
-        current = uow.account_runtime_configs.get(account_id)
+        current = get_runtime_config(uow, account_id)
         stale = current.updated_at
         # First writer succeeds and bumps the row.
-        save_runtime_config(
+        updated = save_runtime_config(
             uow,
             account_id,
             AccountExtensionConfig(agent_id="core.multi-agent"),
             expected_updated_at=stale,
         )
+        assert updated.updated_at != stale
         uow.commit()
     with SqlAlchemyUnitOfWork(session_factory) as uow:
         # A second writer using the stale token is rejected.
@@ -273,6 +323,25 @@ def test_optimistic_concurrency_conflict(session_factory):
                 AccountExtensionConfig(agent_id="core.react"),
                 expected_updated_at=stale,
             )
+
+
+def test_update_without_expected_token_conflicts(session_factory):
+    account_id = _seed_account(session_factory)
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        created = save_runtime_config(
+            uow, account_id, AccountExtensionConfig(agent_id="core.react")
+        )
+        uow.commit()
+
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        with pytest.raises(RuntimeConfigConflictError) as exc_info:
+            save_runtime_config(
+                uow,
+                account_id,
+                AccountExtensionConfig(agent_id="core.multi-agent"),
+            )
+        assert exc_info.value.expected_updated_at is None
+        assert exc_info.value.actual_updated_at == created.updated_at
 
 
 def test_create_with_unexpected_token_conflicts(session_factory):
@@ -295,8 +364,6 @@ def test_create_with_unexpected_token_conflicts(session_factory):
 def test_migration_creates_table_and_backfills_idempotently():
     from database.migrations_startup import (
         _account_runtime_configs_backfilled,
-        _backfill_account_runtime_configs,
-        _create_account_runtime_configs,
         run_startup_migrations,
     )
 
@@ -350,3 +417,85 @@ def test_migration_creates_table_and_backfills_idempotently():
         from database.models import AccountRuntimeConfig as ARC
 
         assert session.query(ARC).count() == 3
+
+
+def test_sqlite_old_account_schema_backfills_on_first_startup():
+    from database.migrations_startup import run_startup_migrations
+
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(
+            text("CREATE TABLE agent_period_checkpoints (id INTEGER PRIMARY KEY)")
+        )
+        conn.execute(
+            text(
+                "CREATE TABLE accounts ("
+                "id INTEGER PRIMARY KEY, user_id INTEGER, version VARCHAR(100), "
+                "name VARCHAR(100), account_type VARCHAR(20), agent_type VARCHAR(20), "
+                "memory_enabled VARCHAR(10), enable_rule_aware VARCHAR(10), "
+                "is_active VARCHAR(10), initial_capital FLOAT, current_cash FLOAT, "
+                "frozen_cash FLOAT)"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO accounts VALUES "
+                "(1, 1, 'v1', 'old', 'AI', 'react', 'false', 'false', "
+                "'true', 10000, 10000, 0)"
+            )
+        )
+
+    applied = run_startup_migrations(engine)
+
+    assert "202606_account_tool_routing_enabled" in applied
+    assert "202608_account_runtime_configs_backfill" in applied
+    assert applied.index("202606_account_tool_routing_enabled") < applied.index(
+        "202608_account_runtime_configs_backfill"
+    )
+    assert "tool_routing_enabled" in {
+        column["name"] for column in inspect(engine).get_columns("accounts")
+    }
+    with engine.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT agent_id, agent_config_json, prompt_profile_id "
+                "FROM account_runtime_configs WHERE account_id = 1"
+            )
+        ).one()
+    assert row.agent_id == "core.react"
+    assert row.prompt_profile_id == "core.react.tool-routing"
+    agent_config = json.loads(row.agent_config_json)
+    assert agent_config["memory_enabled"] is False
+    assert agent_config["tool_routing_enabled"] is True
+
+
+def test_backfill_guard_treats_partial_legacy_source_as_unavailable():
+    from database.migrations_startup import (
+        _account_runtime_configs_backfilled,
+        _create_account_runtime_configs,
+    )
+
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "CREATE TABLE accounts ("
+                "id INTEGER PRIMARY KEY, account_type VARCHAR(20), "
+                "agent_type VARCHAR(20))"
+            )
+        )
+        conn.execute(text("INSERT INTO accounts VALUES (1, 'AI', 'react')"))
+        _create_account_runtime_configs(conn)
+        assert _account_runtime_configs_backfilled(conn) is True
+
+
+def test_runtime_config_mysql_ddl_preserves_microsecond_lock_tokens():
+    from sqlalchemy.dialects import mysql
+    from sqlalchemy.schema import CreateTable
+
+    from database.models import AccountRuntimeConfig
+
+    ddl = str(
+        CreateTable(AccountRuntimeConfig.__table__).compile(dialect=mysql.dialect())
+    )
+    assert "updated_at TIMESTAMP(6) NOT NULL" in ddl

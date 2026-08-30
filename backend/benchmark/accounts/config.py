@@ -8,6 +8,8 @@ boundary. It never carries secrets: API key / model / base_url stay on the
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import math
+from types import MappingProxyType
 from typing import Any, Mapping, Optional, Sequence
 
 # Legacy ``agent_type`` -> public component id. ``default`` is the historical
@@ -86,12 +88,20 @@ class AccountExtensionConfig:
             raise ConfigValidationError(
                 "component_versions must be a mapping of component id -> version"
             )
-        # Normalize to immutable containers so the frozen dataclass is truly
-        # read-only (dict/list defaults from a builder cannot be mutated later).
-        object.__setattr__(self, "agent_config", dict(self.agent_config))
+        # Recursively freeze JSON containers so a caller cannot mutate a
+        # validated config through a nested dict/list reference.
+        object.__setattr__(
+            self,
+            "agent_config",
+            _freeze_json_value(self.agent_config, "agent_config", set()),
+        )
         object.__setattr__(self, "toolset_ids", tuple(self.toolset_ids))
         object.__setattr__(self, "disabled_tools", tuple(self.disabled_tools))
-        object.__setattr__(self, "component_versions", dict(self.component_versions))
+        object.__setattr__(
+            self,
+            "component_versions",
+            MappingProxyType(dict(self.component_versions)),
+        )
 
     @property
     def is_baseline(self) -> bool:
@@ -111,7 +121,7 @@ class AccountExtensionConfig:
         """Public JSON-serializable representation (spec §9 DTO shape)."""
         return {
             "agent_id": self.agent_id,
-            "agent_config": dict(self.agent_config),
+            "agent_config": _thaw_json_value(self.agent_config),
             "toolset_ids": list(self.toolset_ids),
             "disabled_tools": list(self.disabled_tools),
             "prompt_profile_id": self.prompt_profile_id,
@@ -138,6 +148,48 @@ def _is_str_sequence(value: Any) -> bool:
         return all(isinstance(item, str) for item in value)
     except TypeError:
         return False
+
+
+def _freeze_json_value(value: Any, path: str, active: set[int]) -> Any:
+    if isinstance(value, Mapping):
+        identity = id(value)
+        if identity in active:
+            raise ConfigValidationError(f"{path} must not contain recursive values")
+        active.add(identity)
+        try:
+            frozen = {}
+            for key, item in value.items():
+                if not isinstance(key, str):
+                    raise ConfigValidationError(f"{path} keys must be strings")
+                frozen[key] = _freeze_json_value(item, f"{path}.{key}", active)
+            return MappingProxyType(frozen)
+        finally:
+            active.remove(identity)
+    if isinstance(value, (list, tuple)):
+        identity = id(value)
+        if identity in active:
+            raise ConfigValidationError(f"{path} must not contain recursive values")
+        active.add(identity)
+        try:
+            return tuple(
+                _freeze_json_value(item, f"{path}[{index}]", active)
+                for index, item in enumerate(value)
+            )
+        finally:
+            active.remove(identity)
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ConfigValidationError(f"{path} must contain finite JSON numbers")
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    raise ConfigValidationError(f"{path} contains a non-JSON value")
+
+
+def _thaw_json_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {key: _thaw_json_value(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_thaw_json_value(item) for item in value]
+    return value
 
 
 def _flag_true(value: Any) -> bool:

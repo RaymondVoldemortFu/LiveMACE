@@ -94,7 +94,7 @@ def validate_extension_config(
 
     issues = []
     resolved_versions = dict(config.component_versions)
-    resolved_agent_config: Any = dict(config.agent_config)
+    resolved_agent_config: Any = config.to_dict()["agent_config"]
 
     # --- Agent component: existence, pinned version, config schema. ---
     requested_agent_version = config.component_versions.get(config.agent_id)
@@ -114,7 +114,7 @@ def validate_extension_config(
     if registered_agent is not None:
         report = agent_registry.validate_config(
             config.agent_id,
-            config.agent_config,
+            resolved_agent_config,
             requested_agent_version,
         )
         if not report.valid:

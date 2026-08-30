@@ -2,7 +2,11 @@ from sqlalchemy import Column, Integer, String, DECIMAL, TIMESTAMP, ForeignKey, 
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 import datetime
-from sqlalchemy.dialects.mysql import BIGINT as MYSQL_BIGINT, LONGTEXT
+from sqlalchemy.dialects.mysql import (
+    BIGINT as MYSQL_BIGINT,
+    LONGTEXT,
+    TIMESTAMP as MYSQL_TIMESTAMP,
+)
 
 from .connection import Base
 
@@ -120,7 +124,8 @@ class AccountRuntimeConfig(Base):
 
     created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
     updated_at = Column(
-        TIMESTAMP,
+        TIMESTAMP().with_variant(MYSQL_TIMESTAMP(fsp=6), "mysql"),
+        nullable=False,
         server_default=func.current_timestamp(),
         onupdate=func.current_timestamp(),
     )

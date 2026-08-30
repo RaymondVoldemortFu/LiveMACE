@@ -294,8 +294,8 @@ def test_sqlite_startup_migrations_add_missing_columns_idempotently():
         "202608_scheduled_job_occurrences",
         "202608_trade_command_receipts",
         "202608_account_runtime_configs",
-        "202606_agent_checkpoint_volatility",
         "202606_account_tool_routing_enabled",
+        "202606_agent_checkpoint_volatility",
     ]
     # second run: already applied, nothing to do, no error
     assert run_startup_migrations(engine) == []
@@ -692,9 +692,11 @@ def test_fresh_schema_needs_no_sqlite_migrations():
 class _FakeMySQLConnection:
     """Answers information_schema column-type queries and records DDL."""
 
-    def __init__(self, column_types):
+    def __init__(self, column_types, timestamp_columns=None):
         # {table: {column: data_type}}
         self.column_types = column_types
+        # {(table, column): (data_type, datetime_precision, is_nullable)}
+        self.timestamp_columns = timestamp_columns or {}
         self.executed_ddl = []
 
     def __enter__(self):
@@ -721,6 +723,16 @@ class _FakeMySQLConnection:
     def execute(self, statement, params=None):
         sql = str(statement)
         if "information_schema.COLUMNS" in sql:
+            if "DATETIME_PRECISION" in sql:
+                metadata = self.timestamp_columns.get(
+                    (params["table_name"], params["column_name"])
+                )
+
+                class Rows(list):
+                    def first(self):
+                        return self[0] if self else None
+
+                return Rows([metadata] if metadata is not None else [])
             table = params["table_name"]
             return [
                 (name, data_type)
@@ -778,7 +790,14 @@ def test_mysql_migrations_skip_ddl_when_columns_already_widened():
                 "tool_calls": "longtext",
                 "tool_output": "longtext",
             },
-        }
+        },
+        {
+            ("account_runtime_configs", "updated_at"): (
+                "timestamp",
+                6,
+                "NO",
+            )
+        },
     )
     engine = _FakeMySQLEngine(conn)
 
@@ -799,15 +818,24 @@ def test_mysql_migrations_apply_once_then_second_startup_is_a_noop():
                 "tool_calls": "text",
                 "tool_output": "text",
             },
-        }
+        },
+        {
+            ("account_runtime_configs", "updated_at"): (
+                "timestamp",
+                0,
+                "YES",
+            )
+        },
     )
     engine = _FakeMySQLEngine(conn)
 
     applied = run_startup_migrations(engine, migrations=_mysql_migrations())
     assert applied == [
+        "202608_account_runtime_configs_updated_at_fsp6",
         "202606_ai_decision_reason_text",
         "202606_agent_traces_longtext",
     ]
+    assert any("TIMESTAMP(6) NOT NULL" in d for d in conn.executed_ddl)
     assert any("ALTER TABLE ai_decision_logs" in d for d in conn.executed_ddl)
     assert any("ALTER TABLE agent_traces" in d for d in conn.executed_ddl)
 
@@ -819,6 +847,11 @@ def test_mysql_migrations_apply_once_then_second_startup_is_a_noop():
         "tool_calls": "longtext",
         "tool_output": "longtext",
     }
+    conn.timestamp_columns[("account_runtime_configs", "updated_at")] = (
+        "timestamp",
+        6,
+        "NO",
+    )
     conn.executed_ddl.clear()
 
     assert run_startup_migrations(engine, migrations=_mysql_migrations()) == []

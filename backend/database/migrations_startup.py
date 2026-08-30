@@ -93,6 +93,53 @@ def _mysql_columns_have_types(
     return check
 
 
+def _mysql_timestamp_has_precision(
+    table: str,
+    column: str,
+    precision: int,
+) -> Callable[[Connection], bool]:
+    """True when a MySQL timestamp column has the required FSP and nullability."""
+
+    def check(conn: Connection) -> bool:
+        from sqlalchemy import text
+
+        row = conn.execute(
+            text(
+                "SELECT DATA_TYPE, DATETIME_PRECISION, IS_NULLABLE "
+                "FROM information_schema.COLUMNS "
+                "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :table_name "
+                "AND COLUMN_NAME = :column_name"
+            ),
+            {"table_name": table, "column_name": column},
+        ).first()
+        if row is None:
+            return False
+        return (
+            str(row[0]).lower() == "timestamp"
+            and int(row[1] or 0) >= precision
+            and str(row[2]).upper() == "NO"
+        )
+
+    return check
+
+
+def _mysql_upgrade_runtime_config_timestamp(conn: Connection) -> None:
+    from sqlalchemy import text
+
+    conn.execute(
+        text(
+            "UPDATE account_runtime_configs SET updated_at = CURRENT_TIMESTAMP(6) "
+            "WHERE updated_at IS NULL"
+        )
+    )
+    conn.execute(
+        text(
+            "ALTER TABLE account_runtime_configs MODIFY COLUMN updated_at "
+            "TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)"
+        )
+    )
+
+
 def _trade_command_receipts_exists(conn: Connection) -> bool:
     from sqlalchemy import inspect
 
@@ -138,7 +185,15 @@ def _account_runtime_configs_backfilled(conn: Connection) -> bool:
         # Nothing to backfill against yet; treated as applied.
         return True
     columns = {col["name"] for col in inspector.get_columns("accounts")}
-    if not {"account_type", "agent_type"}.issubset(columns):
+    source_columns = {
+        "id",
+        "account_type",
+        "agent_type",
+        "memory_enabled",
+        "tool_routing_enabled",
+        "enable_rule_aware",
+    }
+    if not source_columns.issubset(columns):
         return True
     missing = conn.execute(
         text(
@@ -164,10 +219,7 @@ def _backfill_account_runtime_configs(conn: Connection) -> None:
     from sqlalchemy import text
 
     from benchmark.accounts.config import config_from_legacy_account
-    from benchmark.accounts.validation import (
-        VALIDATION_STATUS_INVALID,
-        validate_extension_config,
-    )
+    from benchmark.accounts.validation import validate_extension_config
 
     rows = conn.execute(
         text(
@@ -499,6 +551,26 @@ STARTUP_MIGRATIONS: List[StartupMigration] = [
         fatal=True,
     ),
     StartupMigration(
+        migration_id="202608_account_runtime_configs_updated_at_fsp6",
+        dialect="mysql",
+        is_applied=_mysql_timestamp_has_precision(
+            "account_runtime_configs", "updated_at", 6
+        ),
+        apply=_mysql_upgrade_runtime_config_timestamp,
+        fatal=True,
+    ),
+    # Old SQLite databases may not have this source column yet. It must be
+    # added before the all-dialect M12 backfill selects legacy account flags.
+    StartupMigration(
+        migration_id="202606_account_tool_routing_enabled",
+        dialect="sqlite",
+        is_applied=_sqlite_has_column("accounts", "tool_routing_enabled"),
+        apply=_sqlite_add_column(
+            "accounts", "tool_routing_enabled VARCHAR(10) DEFAULT 'true' NOT NULL"
+        ),
+        fatal=True,
+    ),
+    StartupMigration(
         migration_id="202608_account_runtime_configs_backfill",
         dialect=None,
         is_applied=_account_runtime_configs_backfilled,
@@ -511,15 +583,6 @@ STARTUP_MIGRATIONS: List[StartupMigration] = [
         is_applied=_sqlite_has_column("agent_period_checkpoints", "volatility"),
         apply=_sqlite_add_column(
             "agent_period_checkpoints", "volatility FLOAT DEFAULT 0.0 NOT NULL"
-        ),
-        fatal=True,
-    ),
-    StartupMigration(
-        migration_id="202606_account_tool_routing_enabled",
-        dialect="sqlite",
-        is_applied=_sqlite_has_column("accounts", "tool_routing_enabled"),
-        apply=_sqlite_add_column(
-            "accounts", "tool_routing_enabled VARCHAR(10) DEFAULT 'true' NOT NULL"
         ),
         fatal=True,
     ),

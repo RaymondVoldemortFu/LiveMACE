@@ -1,5 +1,6 @@
-from pydantic import BaseModel, Field
 from typing import Any, Dict, List, Optional
+
+from pydantic import AwareDatetime, BaseModel, Field
 
 
 class AccountCreate(BaseModel):
@@ -81,11 +82,11 @@ class AccountRuntimeConfigOut(BaseModel):
     validation_errors: List[RuntimeConfigValidationIssueDTO] = Field(
         default_factory=list
     )
-    updated_at: Optional[str] = None
+    updated_at: AwareDatetime
 
 
 class AccountRuntimeConfigSave(BaseModel):
     """Request body to save an account runtime config with optimistic locking."""
 
     config: AccountExtensionConfigDTO
-    expected_updated_at: Optional[str] = None
+    expected_updated_at: Optional[AwareDatetime] = None

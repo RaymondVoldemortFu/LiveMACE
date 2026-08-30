@@ -30,6 +30,7 @@ API key / model / base_url **不进**此表，仍留在 `accounts`，运行时�
 - `get_runtime_config(uow, account_id)` / `save_runtime_config(uow, account_id, config, *, expected_updated_at)`：
   - 保存前先校验；invalid 也落库（标 `configuration_invalid`）而非拒绝，使账户停跑而非静默切换 Agent。
   - 乐观并发：`expected_updated_at` 必须等于当前行 `updated_at`（首次创建时须为 `None`），不匹配抛 `RuntimeConfigConflictError` 且不写入。
+  - 读取结果和 `SaveResult` 都返回 timezone-aware UTC `updated_at` token；已有行不允许用默认 `None` 绕过乐观锁。
   - 两个操作都在调用方提供的同步 `UnitOfWork` 内运行，服务自身不开 session、不 commit——事务归 UoW，符合 G7“每个账户 worker 独立 UoW”。
 
 ## 持久化
@@ -43,6 +44,10 @@ API key / model / base_url **不进**此表，仍留在 `accounts`，运行时�
 1. `202608_account_runtime_configs`（fatal）：`checkfirst=True` 建表，幂等。
 2. `202608_account_runtime_configs_backfill`（non-fatal）：对每个尚无 config 的 AI 账户，用共享映射翻译 flags、校验、钉版本后插入一行。guard `_account_runtime_configs_backfilled` 以“无缺失账户”为已应用条件，重复运行不重复插入。MANUAL 账户不回填（从未跑过 Agent）。SQLite/MySQL 共用同一 SQL（`LEFT JOIN` 检测缺失、参数化 `INSERT`）。
 
+SQLite 的 `202606_account_tool_routing_enabled` 补列在回填前执行，确保旧库首次启动即可读取完整 legacy flags；回填 guard 同时检查所有源列。
+
+MySQL 的 `updated_at` 使用 `TIMESTAMP(6) NOT NULL`，并由幂等迁移 `202608_account_runtime_configs_updated_at_fsp6` 升级已创建的旧表，避免微秒 token 被截断。
+
 ## API schema
 
 `schemas/account.py` 新增 typed DTO：`AccountExtensionConfigDTO`、`AccountRuntimeConfigOut`（含 `validation_status` + typed 错误）、`AccountRuntimeConfigSave`（带 `expected_updated_at` 乐观锁）。均不含 secret，bool 为 typed 字段。HTTP router 接线归 M14/M21。
@@ -54,8 +59,8 @@ API key / model / base_url **不进**此表，仍留在 `accounts`，运行时�
 - DTO：空 agent_id 拒绝、frozen 不可变、dict 双向、无 secret 字段。
 - 映射：react 默认、四象限 profile 矩阵、rule-aware 优先级、multi-agent、baseline 无 profile。
 - 校验：react 钉版本 + schema 默认；未知 agent / 未知 profile / 坏 schema / baseline 带多余 profile 均 `configuration_invalid`。
-- 服务：UoW 暴露 repo、未设返回 None、保存-读取往返、invalid 落库并标记、乐观并发冲突、首次创建带 token 冲突。
-- 迁移：建表 + 回填三类账户（react/rule-aware/baseline）、幂等（重复运行不新增）。
+- 服务：UoW 暴露 repo、未设返回 None、保存-读取往返、UTC token、invalid 落库并标记、stale/缺失 token 乐观并发冲突、首次创建带 token 冲突。
+- 迁移：建表 + 回填三类账户（react/rule-aware/baseline）、旧 SQLite 首次启动补列后立即回填、MySQL `TIMESTAMP(6)` DDL/幂等升级、重复运行不新增。
 
 ## 未做（归属其它模块）
 

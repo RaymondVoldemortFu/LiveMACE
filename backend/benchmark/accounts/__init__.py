@@ -24,6 +24,8 @@ from benchmark.accounts.config import (
 )
 from benchmark.accounts.service import (
     RuntimeConfigConflictError,
+    RuntimeConfigRecord,
+    SaveResult,
     get_runtime_config,
     save_runtime_config,
 )
@@ -36,5 +38,7 @@ __all__ = [
     "validate_extension_config",
     "get_runtime_config",
     "save_runtime_config",
+    "RuntimeConfigRecord",
+    "SaveResult",
     "RuntimeConfigConflictError",
 ]
