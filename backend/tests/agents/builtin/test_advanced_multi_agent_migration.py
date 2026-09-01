@@ -159,6 +159,25 @@ def _registry_with_external_advanced_overrides() -> PromptRegistry:
     return registry
 
 
+class _ResolverWithoutResolveSlot:
+    """Profile-capable public resolver without PromptRegistry provenance APIs."""
+
+    def __init__(self, registry):
+        self._registry = registry
+
+    def render(self, *args, **kwargs):
+        return self._registry.render(*args, **kwargs)
+
+    def get_prompt_spec(self, *args, **kwargs):
+        return self._registry.get_prompt_spec(*args, **kwargs)
+
+    def get_profile(self, *args, **kwargs):
+        return self._registry.get_profile(*args, **kwargs)
+
+    def render_slot(self, *args, **kwargs):
+        return self._registry.render_slot(*args, **kwargs)
+
+
 def test_only_advanced_multi_agent_registers_as_a_public_component():
     registry = AgentRegistry()
     register_builtin_agents(registry)
@@ -455,11 +474,61 @@ def test_advanced_builtin_prompt_messages_preserve_legacy_role_partition(monkeyp
     )
 
 
+def test_builtin_prompt_partition_does_not_require_resolve_slot(monkeypatch):
+    normal = AdvancedMultiAgent(FakeLLM([]), ToolRegistry())
+    public_resolver = _ResolverWithoutResolveSlot(get_builtin_prompt_registry())
+    wrapped = AdvancedMultiAgent(
+        FakeLLM([]),
+        ToolRegistry(),
+        prompt_resolver=public_resolver,
+    )
+    monkeypatch.setattr(AdvancedMultiAgent, "_current_time_context", lambda self: "TIME")
+    monkeypatch.setattr(
+        AdvancedMultiAgent,
+        "_tradable_universe_context",
+        lambda self: "UNIVERSE",
+    )
+
+    kwargs = {
+        "objective": "objective",
+        "context_str": "context",
+        "portfolio": {"cash": 10},
+        "prices": {"BTC": 1},
+        "step": 0,
+    }
+    assert wrapped._build_manager_messages(**kwargs) == normal._build_manager_messages(
+        **kwargs
+    )
+    trading_variables = {
+        "instruction": "Inspect BTC.",
+        "portfolio": json.dumps({"cash": 10}, ensure_ascii=False),
+        "prices": json.dumps({"BTC": 1}, ensure_ascii=False),
+    }
+    wrapped_trading = public_resolver.render_slot(
+        wrapped.PROMPT_PROFILE_ID,
+        "trading",
+        trading_variables,
+    ).content
+    normal_trading = normal.prompt_resolver.render_slot(
+        normal.PROMPT_PROFILE_ID,
+        "trading",
+        trading_variables,
+    ).content
+    sub_agent_args = ("TradingAgent", "Inspect BTC.", {"cash": 10}, {"BTC": 1})
+    assert wrapped._build_sub_agent_messages(
+        sub_agent_args[0], wrapped_trading, *sub_agent_args[1:]
+    ) == normal._build_sub_agent_messages(
+        sub_agent_args[0], normal_trading, *sub_agent_args[1:]
+    )
+
+
 def test_advanced_external_prompt_overrides_are_opaque_and_not_duplicated(monkeypatch):
     agent = AdvancedMultiAgent(
         FakeLLM([]),
         ToolRegistry(),
-        prompt_resolver=_registry_with_external_advanced_overrides(),
+        prompt_resolver=_ResolverWithoutResolveSlot(
+            _registry_with_external_advanced_overrides()
+        ),
     )
     monkeypatch.setattr(agent, "_current_time_context", lambda: "TIME-CONTEXT")
     monkeypatch.setattr(agent, "_tradable_universe_context", lambda: "UNIVERSE-CONTEXT")
@@ -542,30 +611,244 @@ def test_execution_rejects_duplicate_call_for_previous_plan_item(monkeypatch):
     assert [call["symbol"] for call in captured] == ["BTC"]
 
 
-def test_execution_plan_matching_requires_operation_symbol_and_market():
+def test_execution_rejection_does_not_advance_plan_cursor(monkeypatch):
+    monkeypatch.setattr(AdvancedMultiAgent, "EXECUTION_MAX_STEPS", 2)
+    captured: list[dict] = []
+    tools = ToolRegistry()
+
+    def execute_trade(**kwargs):
+        captured.append(dict(kwargs))
+        if kwargs.get("symbol") == "ETH":
+            return {
+                "executed": False,
+                "operation": "open",
+                "symbol": "ETH",
+                "market": "CRYPTO",
+                "error": "broker rejected",
+            }
+        return {
+            "executed": True,
+            "operation": "open",
+            "symbol": "BTC",
+            "market": "CRYPTO",
+        }
+
+    tools.register(
+        Tool(
+            name="execute_trade",
+            description="execute a test trade",
+            parameters={"type": "object", "additionalProperties": True},
+            func=execute_trade,
+        )
+    )
+    plan = [
+        {
+            "operation": "open",
+            "symbol": symbol,
+            "market": "CRYPTO",
+            "direction": "long",
+            "size_mode": "portion",
+            "target_portion_of_balance": 0.1,
+            "leverage": 1,
+        }
+        for symbol in ("BTC", "ETH")
+    ]
+    calls = [
+        FakeToolCall(f"trade-{index}", "execute_trade", json.dumps(item))
+        for index, item in enumerate(plan, start=1)
+    ]
+    agent = AdvancedMultiAgent(
+        FakeLLM([FakeLLMResponse(None, calls), FakeLLMResponse("<TRADE_DONE>")]),
+        tools,
+    )
+
+    result = agent._run_execution_stage(
+        execution_plan=plan,
+        decision={},
+        portfolio={},
+        prices={},
+        decision_round_id="round-rejected",
+    )
+
+    assert result.complete is False
+    assert result.matched_plan_items == 1
+    assert result.expected_plan_items == 2
+    assert [item["executed"] for item in result.trades] == [True, False]
+    assert [call["symbol"] for call in captured] == ["BTC", "ETH"]
+
+
+def test_execution_accepts_close_all_without_symbol(monkeypatch):
+    monkeypatch.setattr(AdvancedMultiAgent, "EXECUTION_MAX_STEPS", 2)
+    captured: list[dict] = []
+    tools = ToolRegistry()
+    _register_execute_trade(tools, captured)
+    plan = [{"operation": "close_all"}]
+    agent = AdvancedMultiAgent(
+        FakeLLM(
+            [
+                FakeLLMResponse(
+                    None,
+                    [
+                        FakeToolCall(
+                            "close-all",
+                            "execute_trade",
+                            json.dumps({"operation": "close_all"}),
+                        )
+                    ],
+                ),
+                FakeLLMResponse("<TRADE_DONE>"),
+            ]
+        ),
+        tools,
+    )
+
+    result = agent._run_execution_stage(
+        execution_plan=plan,
+        decision={},
+        portfolio={},
+        prices={},
+        decision_round_id="round-close-all",
+    )
+
+    assert result.complete is True
+    assert result.matched_plan_items == 1
+    assert len(captured) == 1
+    assert captured[0]["operation"] == "close_all"
+    assert "symbol" not in captured[0]
+
+
+def test_execution_plan_matching_covers_all_approved_trade_parameters():
     agent = AdvancedMultiAgent(FakeLLM([]), ToolRegistry())
     plan_item = {
         "operation": "open",
         "symbol": "BTC",
         "market": "CRYPTO",
+        "direction": "long",
+        "size_mode": "portion",
+        "target_portion_of_balance": 0.1,
+        "leverage": 1,
     }
 
     assert agent._execution_call_matches_plan_item(
         plan_item,
-        {"operation": "OPEN", "symbol": "btc", "market": "CRYPTO"},
+        {
+            "operation": "OPEN",
+            "symbol": "btc",
+            "market": "CRYPTO",
+            "direction": "long",
+            "size_mode": "portion",
+            "target_portion_of_balance": 0.1,
+            "leverage": 1,
+        },
     )
+    mutations = (
+        {"operation": "close"},
+        {"symbol": "ETH"},
+        {"market": "US"},
+        {"direction": "short"},
+        {"size_mode": "usd", "usd_amount": 100},
+        {"target_portion_of_balance": 0.9},
+        {"leverage": 10},
+    )
+    for mutation in mutations:
+        actual = dict(plan_item)
+        actual.update(mutation)
+        assert not agent._execution_call_matches_plan_item(plan_item, actual)
+
+    usd_plan = {
+        "operation": "open",
+        "symbol": "BTC",
+        "market": "CRYPTO",
+        "direction": "long",
+        "size_mode": "usd",
+        "usd_amount": 100,
+        "leverage": 1,
+    }
     assert not agent._execution_call_matches_plan_item(
-        plan_item,
-        {"operation": "close", "symbol": "BTC", "market": "CRYPTO"},
+        usd_plan,
+        {**usd_plan, "usd_amount": 900},
     )
+    close_plan = {
+        "operation": "close",
+        "symbol": "BTC",
+        "market": "CRYPTO",
+        "direction": "long",
+        "size_mode": "portion",
+        "close_ratio": 0.25,
+        "leverage": 1,
+    }
     assert not agent._execution_call_matches_plan_item(
-        plan_item,
-        {"operation": "open", "symbol": "ETH", "market": "CRYPTO"},
+        close_plan,
+        {**close_plan, "close_ratio": 0.75},
     )
+
+
+def test_execution_plan_matching_uses_effective_trade_command_semantics():
+    agent = AdvancedMultiAgent(FakeLLM([]), ToolRegistry())
+    portion_plan = {
+        "operation": "open",
+        "symbol": "BTC",
+        "market": "CRYPTO",
+        "direction": "long",
+        "size_mode": "portion",
+        "target_portion_of_balance": 0.1,
+        "leverage": 1,
+    }
+    assert agent._execution_call_matches_plan_item(
+        portion_plan,
+        {
+            **portion_plan,
+            "target_portion_of_balance": "0.10",
+            "usd_amount": 999,
+        },
+    )
+
+    close_ratio_plan = {
+        "operation": "close",
+        "symbol": "BTC",
+        "market": "CRYPTO",
+        "direction": "long",
+        "size_mode": "close_ratio",
+        "target_portion_of_balance": 0.25,
+        "leverage": 1,
+    }
+    assert agent._execution_call_matches_plan_item(
+        close_ratio_plan,
+        {
+            **close_ratio_plan,
+            "size_mode": "portion",
+            "close_ratio": 0.25,
+        },
+    )
+
+    inferred_stock_plan = {
+        "operation": "open",
+        "symbol": "AAPL",
+        "direction": "long",
+        "size_mode": "portion",
+        "target_portion_of_balance": 0.1,
+        "leverage": 1,
+    }
     assert not agent._execution_call_matches_plan_item(
-        plan_item,
-        {"operation": "open", "symbol": "BTC", "market": "US"},
+        inferred_stock_plan,
+        inferred_stock_plan,
     )
+    assert agent._execution_call_matches_plan_item(
+        inferred_stock_plan,
+        {**inferred_stock_plan, "market": "US"},
+    )
+
+
+def test_execution_result_advances_only_for_unambiguous_success():
+    completed = AdvancedMultiAgent._execution_result_completed_plan_item
+
+    assert completed({"executed": True})
+    assert not completed({"executed": False})
+    assert not completed({"executed": True, "error": "ambiguous failure"})
+    assert not completed({"executed": True, "accepted": False})
+    assert not completed({"executed": True, "reject_code": "REJECTED"})
+    assert not completed({"accepted": True})
+    assert not completed("executed")
 
 
 def test_advanced_runtime_rejects_public_tool_invoker():

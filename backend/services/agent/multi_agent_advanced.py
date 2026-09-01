@@ -6,14 +6,14 @@ import socket
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional, Tuple
 
 from benchmark.builtin.prompts import (
-    BUILTIN_PROMPT_EXTENSION,
+    get_builtin_prompt_registry,
     get_prompt_resolver,
     require_profile_contract,
 )
-from benchmark.prompts import PromptSourcePriority
 from services.time_source import now_in_tz
 
 from .base import BaseAgent
@@ -394,20 +394,25 @@ class AdvancedMultiAgent(BaseAgent):
         step: int,
     ) -> List[Dict[str, str]]:
         """System: policy/schema. User: current trading task state."""
+        variables = {
+            "objective": objective,
+            "portfolio": json.dumps(portfolio, ensure_ascii=False),
+            "prices": json.dumps(prices, ensure_ascii=False),
+            "evidence_book": self._format_evidence_book(),
+            "context": context_str,
+            "conflicts": self._format_conflicts(),
+            "collaboration_state": self._format_collaboration_state(step),
+        }
         rendered_prompt = self.prompt_resolver.render_slot(
             self.PROMPT_PROFILE_ID,
             "manager",
-            {
-                "objective": objective,
-                "portfolio": json.dumps(portfolio, ensure_ascii=False),
-                "prices": json.dumps(prices, ensure_ascii=False),
-                "evidence_book": self._format_evidence_book(),
-                "context": context_str,
-                "conflicts": self._format_conflicts(),
-                "collaboration_state": self._format_collaboration_state(step),
-            },
+            variables,
         ).content
-        builtin_prompt = self._is_builtin_prompt_slot("manager")
+        builtin_prompt = self._matches_builtin_prompt_slot(
+            "manager",
+            rendered_prompt,
+            variables,
+        )
         if builtin_prompt:
             intro, _ = self._safe_split_once(rendered_prompt, "Trading objective:")
             _, protocol_and_schema = self._safe_split_once(
@@ -459,7 +464,17 @@ class AdvancedMultiAgent(BaseAgent):
     ) -> List[Dict[str, str]]:
         """System: role/spec. User: concrete instruction + runtime context."""
         slot = self._agent_prompt_slot(agent_name)
-        builtin_prompt = self._is_builtin_prompt_slot(slot)
+        variables = {"instruction": instruction}
+        if slot in {"trading", "analyst", "critic"}:
+            variables.update(
+                portfolio=json.dumps(portfolio, ensure_ascii=False),
+                prices=json.dumps(prices, ensure_ascii=False),
+            )
+        builtin_prompt = self._matches_builtin_prompt_slot(
+            slot,
+            prompt_template,
+            variables,
+        )
         if builtin_prompt:
             context_marker = "Instruction:" if "Instruction:" in prompt_template else "Context:"
             intro, _ = self._safe_split_once(prompt_template, context_marker)
@@ -515,18 +530,20 @@ class AdvancedMultiAgent(BaseAgent):
 
         return [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
 
-    def _is_builtin_prompt_slot(self, slot: str) -> bool:
-        resolve_slot = getattr(self.prompt_resolver, "resolve_slot", None)
-        if not callable(resolve_slot):
-            return False
-        registered = resolve_slot(
+    def _matches_builtin_prompt_slot(
+        self,
+        slot: str,
+        rendered_content: str,
+        variables: Dict[str, Any],
+    ) -> bool:
+        """Identify unchanged built-in content without requiring provenance APIs."""
+
+        builtin_content = get_builtin_prompt_registry().render_slot(
             self.PROMPT_PROFILE_ID,
             slot,
-        )
-        return (
-            registered.extension == BUILTIN_PROMPT_EXTENSION
-            and registered.priority == int(PromptSourcePriority.BUILTIN)
-        )
+            variables,
+        ).content
+        return rendered_content == builtin_content
 
     @staticmethod
     def _agent_prompt_slot(agent_name: str) -> str:
@@ -771,20 +788,127 @@ class AdvancedMultiAgent(BaseAgent):
         plan_item: Dict[str, Any],
         arguments: Dict[str, Any],
     ) -> bool:
-        expected_operation = str(plan_item.get("operation") or "").strip().lower()
-        actual_operation = str(arguments.get("operation") or "").strip().lower()
-        expected_symbol = str(plan_item.get("symbol") or "").strip().upper()
-        actual_symbol = str(arguments.get("symbol") or "").strip().upper()
-        expected_market = str(
-            plan_item.get("market")
-            or self._infer_market_from_symbol(expected_symbol)
-            or ""
-        ).strip().upper()
-        actual_market = str(arguments.get("market") or "CRYPTO").strip().upper()
+        expected = self._execution_command_signature(plan_item, plan_item=True)
+        actual = self._execution_command_signature(arguments, plan_item=False)
+        return expected is not None and actual is not None and actual == expected
+
+    @staticmethod
+    def _canonical_decimal(value: Any) -> Tuple[bool, Optional[str]]:
+        if value is None or value == "":
+            return True, None
+        if isinstance(value, bool):
+            return False, None
+        try:
+            number = Decimal(str(value))
+        except (InvalidOperation, ValueError):
+            return False, None
+        if not number.is_finite():
+            return False, None
+        if number == 0:
+            return True, "0"
+        return True, format(number.normalize(), "f")
+
+    @staticmethod
+    def _canonical_leverage(value: Any) -> Optional[int]:
+        if value is None or value == "":
+            return 1
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            try:
+                return int(value)
+            except (OverflowError, ValueError):
+                return None
+        if isinstance(value, str):
+            match = re.search(r"-?\d+", value.strip())
+            if match:
+                return int(match.group(0))
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+    def _execution_command_signature(
+        self,
+        values: Dict[str, Any],
+        *,
+        plan_item: bool,
+    ) -> Optional[Dict[str, Any]]:
+        """Normalize every model-controlled execute_trade argument for approval matching."""
+
+        operation = str(values.get("operation") or "").strip().lower()
+        if not operation:
+            return None
+        symbol = str(values.get("symbol") or "").strip().upper()
+
+        raw_market = str(values.get("market") or "").strip().upper()
+        market_aliases = {
+            "STOCK": "US",
+            "STOCKS": "US",
+            "HYPERLIQUID": "CRYPTO",
+        }
+        raw_market = market_aliases.get(raw_market, raw_market)
+        if plan_item and raw_market not in {"CRYPTO", "US"}:
+            market = self._infer_market_from_symbol(symbol) or "CRYPTO"
+        else:
+            market = raw_market or "CRYPTO"
+
+        direction = str(values.get("direction") or "long").strip().lower()
+        size_mode = str(values.get("size_mode") or "portion").strip().lower()
+        target_portion = values.get("target_portion_of_balance")
+        close_ratio = values.get("close_ratio")
+        if size_mode == "close_ratio":
+            size_mode = "portion"
+            if close_ratio is None or close_ratio == "":
+                close_ratio = target_portion
+        normalized_numbers: Dict[str, Optional[str]] = {}
+        for field, value in (
+            ("target_portion_of_balance", target_portion),
+            ("usd_amount", values.get("usd_amount")),
+            ("close_ratio", close_ratio),
+        ):
+            valid, normalized = self._canonical_decimal(value)
+            if not valid:
+                return None
+            normalized_numbers[field] = normalized
+
+        leverage = self._canonical_leverage(values.get("leverage"))
+        if leverage is None:
+            return None
+
+        sizing_mode: Optional[str] = size_mode
+        sizing_value: Optional[str] = None
+        if operation in {"hold", "close_all", "all_in"}:
+            sizing_mode = None
+        elif size_mode == "usd" and normalized_numbers["usd_amount"] is not None:
+            sizing_value = normalized_numbers["usd_amount"]
+        elif normalized_numbers["close_ratio"] is not None:
+            sizing_mode = "close_ratio"
+            sizing_value = normalized_numbers["close_ratio"]
+        elif normalized_numbers["target_portion_of_balance"] is not None:
+            sizing_value = normalized_numbers["target_portion_of_balance"]
+
+        return {
+            "operation": operation,
+            "symbol": symbol,
+            "market": market,
+            "direction": direction,
+            "sizing_mode": sizing_mode,
+            "sizing_value": sizing_value,
+            "leverage": leverage,
+        }
+
+    @staticmethod
+    def _execution_result_completed_plan_item(result: Any) -> bool:
         return (
-            actual_operation == expected_operation
-            and actual_symbol == expected_symbol
-            and actual_market == expected_market
+            isinstance(result, dict)
+            and result.get("executed") is True
+            and result.get("accepted") is not False
+            and not result.get("error")
+            and not result.get("reject_code")
         )
 
     def _is_done_message(self, text: str) -> bool:
@@ -921,18 +1045,18 @@ class AdvancedMultiAgent(BaseAgent):
                             plan_items[matched_plan_items], args
                         ):
                             expected_item = plan_items[matched_plan_items]
+                            expected_signature = self._execution_command_signature(
+                                expected_item,
+                                plan_item=True,
+                            )
+                            received_signature = self._execution_command_signature(
+                                args,
+                                plan_item=False,
+                            )
                             result = {
                                 "error": "Trade call does not match the next execution plan item",
-                                "expected": {
-                                    "operation": expected_item.get("operation"),
-                                    "symbol": expected_item.get("symbol"),
-                                    "market": expected_item.get("market"),
-                                },
-                                "received": {
-                                    "operation": args.get("operation"),
-                                    "symbol": args.get("symbol"),
-                                    "market": args.get("market", "CRYPTO"),
-                                },
+                                "expected": expected_signature,
+                                "received": received_signature,
                             }
                         else:
                             tool_func = self.tools.get(name)
@@ -952,7 +1076,8 @@ class AdvancedMultiAgent(BaseAgent):
 
                     if name == "execute_trade" and tool_invoked:
                         executed_trades.append(result if isinstance(result, dict) else {"raw_result": str(result)})
-                        matched_plan_items += 1
+                        if self._execution_result_completed_plan_item(result):
+                            matched_plan_items += 1
 
                     tool_msg = {
                         "role": "tool",
