@@ -611,6 +611,79 @@ def test_execution_rejects_duplicate_call_for_previous_plan_item(monkeypatch):
     assert [call["symbol"] for call in captured] == ["BTC"]
 
 
+def test_namespaced_execute_trade_uses_the_same_plan_guard_and_accounting(monkeypatch):
+    monkeypatch.setattr(AdvancedMultiAgent, "EXECUTION_MAX_STEPS", 1)
+    captured: list[dict] = []
+    disallowed_calls: list[dict] = []
+    tools = ToolRegistry()
+    _register_execute_trade(tools, captured)
+    tools.register(
+        Tool(
+            name="get_account_state",
+            description="must not run during execution",
+            parameters={"type": "object", "additionalProperties": True},
+            func=lambda **kwargs: disallowed_calls.append(dict(kwargs)),
+        )
+    )
+    plan_item = {
+        "operation": "open",
+        "symbol": "BTC",
+        "market": "CRYPTO",
+        "direction": "long",
+        "size_mode": "portion",
+        "target_portion_of_balance": 0.1,
+        "leverage": 1,
+    }
+    unapproved = {
+        **plan_item,
+        "symbol": "ETH",
+        "direction": "short",
+        "target_portion_of_balance": 0.9,
+        "leverage": 10,
+    }
+    agent = AdvancedMultiAgent(
+        FakeLLM(
+            [
+                FakeLLMResponse(
+                    None,
+                    [
+                        FakeToolCall(
+                            "trade-approved",
+                            "provider:execute_trade",
+                            json.dumps(plan_item),
+                        ),
+                        FakeToolCall(
+                            "trade-unapproved",
+                            "provider:execute_trade",
+                            json.dumps(unapproved),
+                        ),
+                        FakeToolCall(
+                            "disallowed-tool",
+                            "provider:get_account_state",
+                            "{}",
+                        ),
+                    ],
+                )
+            ]
+        ),
+        tools,
+    )
+
+    result = agent._run_execution_stage(
+        execution_plan=[plan_item],
+        decision={},
+        portfolio={},
+        prices={},
+        decision_round_id="round-namespaced-tool",
+    )
+
+    assert result.complete is True
+    assert result.matched_plan_items == 1
+    assert len(result.trades) == 1
+    assert [call["symbol"] for call in captured] == ["BTC"]
+    assert disallowed_calls == []
+
+
 def test_execution_rejection_does_not_advance_plan_cursor(monkeypatch):
     monkeypatch.setattr(AdvancedMultiAgent, "EXECUTION_MAX_STEPS", 2)
     captured: list[dict] = []
@@ -836,6 +909,28 @@ def test_execution_plan_matching_uses_effective_trade_command_semantics():
     assert agent._execution_call_matches_plan_item(
         inferred_stock_plan,
         {**inferred_stock_plan, "market": "US"},
+    )
+
+    hold_plan = {
+        "operation": "hold",
+        "market": "CRYPTO",
+        "leverage": 10,
+    }
+    assert agent._execution_call_matches_plan_item(
+        hold_plan,
+        {"operation": "hold", "market": "CRYPTO"},
+    )
+    assert agent._execution_call_matches_plan_item(
+        hold_plan,
+        {"operation": "hold", "market": "CRYPTO", "leverage": "invalid"},
+    )
+    assert not agent._execution_call_matches_plan_item(
+        {**hold_plan, "leverage": 11},
+        {"operation": "hold", "market": "CRYPTO"},
+    )
+    assert not agent._execution_call_matches_plan_item(
+        {**hold_plan, "market": "US"},
+        {"operation": "hold", "market": "US"},
     )
 
 

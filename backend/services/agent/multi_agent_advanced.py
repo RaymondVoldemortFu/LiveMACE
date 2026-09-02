@@ -813,7 +813,7 @@ class AdvancedMultiAgent(BaseAgent):
         if value is None or value == "":
             return 1
         if isinstance(value, bool):
-            return None
+            return 1
         if isinstance(value, int):
             return value
         if isinstance(value, float):
@@ -825,10 +825,12 @@ class AdvancedMultiAgent(BaseAgent):
             match = re.search(r"-?\d+", value.strip())
             if match:
                 return int(match.group(0))
-            return None
+            return 1
         try:
             return int(value)
-        except (TypeError, ValueError, OverflowError):
+        except (TypeError, ValueError):
+            return 1
+        except OverflowError:
             return None
 
     def _execution_command_signature(
@@ -878,6 +880,12 @@ class AdvancedMultiAgent(BaseAgent):
         leverage = self._canonical_leverage(values.get("leverage"))
         if leverage is None:
             return None
+        # Trading policy validates leverage bounds/US leverage before reducing
+        # a valid hold command to its canonical 1x representation.
+        if operation == "hold" and leverage <= 10 and not (
+            market == "US" and leverage != 1
+        ):
+            leverage = 1
 
         sizing_mode: Optional[str] = size_mode
         sizing_value: Optional[str] = None
@@ -1025,6 +1033,10 @@ class AdvancedMultiAgent(BaseAgent):
             if tool_calls:
                 for tc in tool_calls:
                     tc_id, name, tc_arguments = LLMClient.tool_call_parts(tc)
+                    resolved_name = (
+                        name.rsplit(":", 1)[-1] if isinstance(name, str) else name
+                    )
+                    is_execute_trade = resolved_name == "execute_trade"
                     tool_invoked = False
                     try:
                         args = json.loads(tc_arguments or "{}")
@@ -1037,11 +1049,15 @@ class AdvancedMultiAgent(BaseAgent):
                             result = {
                                 "error": f"Invalid tool arguments for {name}: expected a JSON object"
                             }
-                        elif name == "execute_trade" and matched_plan_items >= expected_calls:
+                        elif resolved_name not in allowed_tools:
+                            result = {
+                                "error": f"Tool not allowed in execution stage: {name}"
+                            }
+                        elif is_execute_trade and matched_plan_items >= expected_calls:
                             result = {
                                 "error": "Execution plan is already complete; extra trade call rejected"
                             }
-                        elif name == "execute_trade" and not self._execution_call_matches_plan_item(
+                        elif is_execute_trade and not self._execution_call_matches_plan_item(
                             plan_items[matched_plan_items], args
                         ):
                             expected_item = plan_items[matched_plan_items]
@@ -1074,7 +1090,7 @@ class AdvancedMultiAgent(BaseAgent):
                                 except Exception as e:
                                     result = {"error": f"Tool execution failed for {name}: {e}"}
 
-                    if name == "execute_trade" and tool_invoked:
+                    if is_execute_trade and tool_invoked:
                         executed_trades.append(result if isinstance(result, dict) else {"raw_result": str(result)})
                         if self._execution_result_completed_plan_item(result):
                             matched_plan_items += 1
