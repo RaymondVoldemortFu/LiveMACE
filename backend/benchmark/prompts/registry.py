@@ -243,6 +243,26 @@ class PromptRegistry:
         *,
         profile_version: str | None = None,
     ) -> RenderedPrompt:
+        registered = self.resolve_slot(
+            profile_id,
+            slot,
+            profile_version=profile_version,
+        )
+        return self.render(
+            registered.spec.id,
+            variables,
+            version=registered.spec.version,
+        )
+
+    def resolve_slot(
+        self,
+        profile_id: str,
+        slot: str,
+        *,
+        profile_version: str | None = None,
+    ) -> RegisteredPrompt:
+        """Resolve a profile slot with provider provenance but without rendering."""
+
         require_identifier(profile_id, "prompt profile id")
         if not isinstance(slot, str) or not slot:
             raise TypeError("slot must be a non-empty string")
@@ -258,11 +278,7 @@ class PromptRegistry:
                     "slot": slot,
                 },
             )
-        return self.render(
-            selection.prompt_id,
-            variables,
-            version=selection.version,
-        )
+        return self.resolve(selection.prompt_id, selection.version)
 
     def list(self) -> tuple[PromptSpec, ...]:
         with self._lock:

@@ -7,8 +7,8 @@ M10 switches production callers to ``AgentRuntime``.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
 import logging
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from benchmark.agents import (
@@ -19,6 +19,10 @@ from benchmark.agents import (
     NullEventSink,
 )
 from benchmark.builtin.agents import register_builtin_agents
+from benchmark.builtin.agents.advanced_multi_agent import (
+    ADVANCED_MULTI_AGENT_COMPONENT_ID,
+    ADVANCED_MULTI_AGENT_SHIM_CONFIG_KEYS,
+)
 from benchmark.builtin.agents.react import REACT_COMPONENT_ID, REACT_SHIM_CONFIG_KEYS
 from benchmark.builtin.agents.rule_aware import (
     RULE_AWARE_COMPONENT_ID,
@@ -31,7 +35,6 @@ from .base import BaseAgent
 from .llm_client import LLMClient
 from .multi_agent import MultiAgent
 from .tools import ToolRegistry
-
 
 logger = logging.getLogger(__name__)
 
@@ -63,21 +66,6 @@ def _build_multi_agent(llm: LLMClient, tools: ToolRegistry, **config: Any) -> Ba
     )
 
 
-def _build_advanced_multi_agent(
-    llm: LLMClient,
-    tools: ToolRegistry,
-    **config: Any,
-) -> BaseAgent:
-    from .multi_agent_advanced import AdvancedMultiAgent
-
-    return AdvancedMultiAgent(
-        llm,
-        tools,
-        max_steps=config.get("max_steps", 30),
-        user_id=config.get("user_id"),
-    )
-
-
 def _legacy_schema(default_max_steps: int) -> dict[str, Any]:
     return {
         "type": "object",
@@ -99,7 +87,6 @@ def _create_legacy_registry() -> AgentRegistry:
     register_builtin_agents(registry)
     builtins = (
         ("core.multi-agent", 15, _build_multi_agent),
-        ("core.advanced-multi-agent", 30, _build_advanced_multi_agent),
     )
     for agent_id, default_max_steps, builder in builtins:
         registry.register(
@@ -128,6 +115,7 @@ _LEGACY_REGISTRY = _create_legacy_registry()
 
 _SHIM_CONFIG_KEYS = {
     REACT_COMPONENT_ID: REACT_SHIM_CONFIG_KEYS,
+    ADVANCED_MULTI_AGENT_COMPONENT_ID: ADVANCED_MULTI_AGENT_SHIM_CONFIG_KEYS,
     RULE_AWARE_COMPONENT_ID: RULE_AWARE_SHIM_CONFIG_KEYS,
 }
 
