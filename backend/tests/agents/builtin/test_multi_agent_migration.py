@@ -19,7 +19,7 @@ from benchmark.builtin.agents.multi_agent import (
     MULTI_AGENT_VERSION,
 )
 from benchmark.builtin.prompts import get_builtin_prompt_registry
-from benchmark.contracts import ComponentConfigError, TerminationReason
+from benchmark.contracts import TerminationReason
 from benchmark.infrastructure.adapters import LegacyLLMClientAdapter
 from services.agent.factory import create_agent
 from services.agent.multi_agent import MultiAgent
@@ -161,14 +161,13 @@ def test_multi_agent_runtime_reports_max_steps_when_manager_never_finishes():
     assert result.executed_trades == ()
 
 
-def test_multi_agent_runtime_rejects_public_tool_invoker():
-    runtime = AgentRuntime(
+def test_multi_agent_runtime_accepts_public_tool_invoker():
+    llm = FakeLLM([FakeLLMResponse("not-json"), FakeLLMResponse("still-not-json")])
+    result = AgentRuntime(
         _frozen_registry(),
-        _build_context(FakeLLM([]), FakeToolInvoker()),
+        _build_context(llm, FakeToolInvoker()),
+    ).run(
+        AgentSelection(MULTI_AGENT_COMPONENT_ID, config={"max_steps": 2}),
+        make_decision_context(),
     )
-    with pytest.raises(ComponentConfigError) as caught:
-        runtime.run(
-            AgentSelection(MULTI_AGENT_COMPONENT_ID),
-            make_decision_context(),
-        )
-    assert caught.value.code == "MULTI_AGENT_LEGACY_TOOL_REGISTRY_REQUIRED"
+    assert result.termination_reason is TerminationReason.MAX_STEPS

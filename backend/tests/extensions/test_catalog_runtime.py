@@ -26,6 +26,7 @@ from benchmark.extensions import (
 )
 from benchmark.prompts import PromptRegistry, PromptSourcePriority
 from benchmark.prompts.renderer import parse_template, render_template
+from benchmark.testing import build_fake_build_context
 from benchmark.tools import ToolRegistry
 
 
@@ -140,6 +141,15 @@ def test_builtin_runtime_is_catalogued_and_frozen():
     assert runtime.tools.frozen
     assert runtime.prompts.frozen
     assert all("root" not in record.to_dict() for record in records)
+
+    public_context = build_fake_build_context(prompts=runtime.prompts)
+    for descriptor in runtime.catalog.list_agents():
+        report = runtime.agents.validate_config(descriptor.id, {})
+        assert report.valid, (descriptor.id, [issue.message for issue in report.errors])
+        created = runtime.agents.get(descriptor.id).factory.create(
+            public_context, report.normalized_config
+        )
+        assert callable(created.run)
 
 
 def test_builtin_runtime_is_deterministic():

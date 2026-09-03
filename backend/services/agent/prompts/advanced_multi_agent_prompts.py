@@ -1,9 +1,9 @@
-from benchmark.builtin.prompts import read_builtin_template
+from benchmark.builtin.prompts import render_template_source
 
-Advanced_MANAGER_PROMPT = read_builtin_template("advanced/manager.txt")
-ADVANCED_EXECUTION_PROMPT = read_builtin_template("advanced/execution.txt")
-TRADING_AGENT_PROMPT = read_builtin_template("advanced/trading.txt")
-NEWS_AGENT_PROMPT = read_builtin_template("advanced/news.txt")
-CODER_AGENT_PROMPT = read_builtin_template("advanced/coder.txt")
-ANALYST_AGENT_PROMPT = read_builtin_template("advanced/analyst.txt")
-CRITIC_AGENT_PROMPT = read_builtin_template("advanced/critic.txt")
+Advanced_MANAGER_PROMPT = render_template_source("core.advanced-multi-agent.manager")
+ADVANCED_EXECUTION_PROMPT = render_template_source("core.advanced-multi-agent.execution")
+TRADING_AGENT_PROMPT = render_template_source("core.advanced-multi-agent.trading")
+NEWS_AGENT_PROMPT = render_template_source("core.advanced-multi-agent.news")
+CODER_AGENT_PROMPT = render_template_source("core.advanced-multi-agent.coder")
+ANALYST_AGENT_PROMPT = render_template_source("core.advanced-multi-agent.analyst")
+CRITIC_AGENT_PROMPT = render_template_source("core.advanced-multi-agent.critic")

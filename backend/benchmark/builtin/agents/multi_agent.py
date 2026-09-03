@@ -17,17 +17,16 @@ from benchmark.builtin.agents._legacy_context import (
     portfolio_from_context,
     prices_from_context,
 )
+from benchmark.builtin.agents._legacy_ports import legacy_llm_surface, legacy_tool_registry
 from benchmark.builtin.agents.react import _step_event_metadata
 from benchmark.builtin.prompts import get_prompt_resolver
 from benchmark.contracts import (
     AgentRunResult,
     AgentRuntimeError,
-    ComponentConfigError,
     DecisionContext,
     TerminationReason,
 )
 from services.agent.multi_agent import MultiAgent
-from services.agent.tools import ToolRegistry
 
 MULTI_AGENT_COMPONENT_ID = "core.multi-agent"
 MULTI_AGENT_VERSION = "1.0.0"
@@ -58,15 +57,13 @@ MULTI_AGENT_DESCRIPTOR = AgentDescriptor(
 
 
 def _unwrap_legacy_llm(llm: Any) -> Any:
-    legacy = getattr(llm, "legacy_client", None)
-    if legacy is not None and callable(getattr(legacy, "call", None)):
-        return legacy
-    if callable(getattr(llm, "call", None)):
-        return llm
-    raise ComponentConfigError(
-        "core.multi-agent adapter requires a legacy LLMClient (call()) "
-        "or LegacyLLMClientAdapter",
+    return legacy_llm_surface(
+        llm,
         code="MULTI_AGENT_LEGACY_LLM_REQUIRED",
+        message=(
+            "core.multi-agent adapter requires a legacy LLMClient (call()) "
+            "or an LLMClientPort (complete())"
+        ),
     )
 
 
@@ -158,16 +155,9 @@ class MultiAgentFactory:
     ) -> MultiAgentAdapter:
         if not isinstance(context, AgentBuildContext):
             raise TypeError("context must be AgentBuildContext")
-        if not isinstance(context.tools, ToolRegistry):
-            raise ComponentConfigError(
-                "core.multi-agent currently requires "
-                "services.agent.tools.ToolRegistry; public ToolInvoker-only "
-                "construction is owned by M06",
-                code="MULTI_AGENT_LEGACY_TOOL_REGISTRY_REQUIRED",
-            )
         agent = MultiAgent(
             _unwrap_legacy_llm(context.llm),
-            context.tools,
+            legacy_tool_registry(context.tools),
             max_steps=int(config["max_steps"]),
             user_id=config.get("user_id"),
             agent_name=config.get("agent_name"),

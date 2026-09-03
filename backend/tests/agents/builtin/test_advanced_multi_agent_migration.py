@@ -25,7 +25,6 @@ from benchmark.builtin.prompts import (
     get_builtin_prompt_registry,
 )
 from benchmark.contracts import (
-    ComponentConfigError,
     ExtensionRef,
     Market,
     PromptSpec,
@@ -946,14 +945,13 @@ def test_execution_result_advances_only_for_unambiguous_success():
     assert not completed("executed")
 
 
-def test_advanced_runtime_rejects_public_tool_invoker():
-    runtime = AgentRuntime(
+def test_advanced_runtime_accepts_public_tool_invoker():
+    llm = FakeLLM([FakeLLMResponse("not-json"), FakeLLMResponse("still-not-json")])
+    result = AgentRuntime(
         _frozen_registry(),
-        _build_context(FakeLLM([]), FakeToolInvoker()),
+        _build_context(llm, FakeToolInvoker()),
+    ).run(
+        AgentSelection(ADVANCED_MULTI_AGENT_COMPONENT_ID, config={"max_steps": 2}),
+        make_decision_context(),
     )
-    with pytest.raises(ComponentConfigError) as caught:
-        runtime.run(
-            AgentSelection(ADVANCED_MULTI_AGENT_COMPONENT_ID),
-            make_decision_context(),
-        )
-    assert caught.value.code == "ADVANCED_MULTI_AGENT_LEGACY_TOOL_REGISTRY_REQUIRED"
+    assert result.termination_reason is TerminationReason.MAX_STEPS

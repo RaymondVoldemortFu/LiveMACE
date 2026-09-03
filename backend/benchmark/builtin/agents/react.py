@@ -21,11 +21,11 @@ from benchmark.builtin.agents._legacy_context import (
     prices_from_context,
     termination_from_legacy_decision,
 )
+from benchmark.builtin.agents._legacy_ports import legacy_llm_surface, legacy_tool_registry
 from benchmark.builtin.prompts import get_prompt_resolver
 from benchmark.contracts import (
     AgentRunResult,
     AgentRuntimeError,
-    ComponentConfigError,
     DecisionContext,
     to_jsonable,
 )
@@ -92,15 +92,13 @@ def resolve_memory_enabled(config: Mapping[str, Any], tools: ToolRegistry) -> bo
 
 
 def _unwrap_legacy_llm(llm: Any) -> Any:
-    legacy = getattr(llm, "legacy_client", None)
-    if legacy is not None and callable(getattr(legacy, "call", None)):
-        return legacy
-    if callable(getattr(llm, "call", None)):
-        return llm
-    raise ComponentConfigError(
-        "core.react adapter requires a legacy LLMClient (call()) "
-        "or LegacyLLMClientAdapter",
+    return legacy_llm_surface(
+        llm,
         code="REACT_LEGACY_LLM_REQUIRED",
+        message=(
+            "core.react adapter requires a legacy LLMClient (call()) "
+            "or an LLMClientPort (complete())"
+        ),
     )
 
 
@@ -222,21 +220,16 @@ class ReActAgentFactory:
     ) -> ReActAgentAdapter:
         if not isinstance(context, AgentBuildContext):
             raise TypeError("context must be AgentBuildContext")
-        if not isinstance(context.tools, ToolRegistry):
-            raise ComponentConfigError(
-                "core.react currently requires services.agent.tools.ToolRegistry; "
-                "public ToolInvoker-only construction is owned by M06",
-                code="REACT_LEGACY_TOOL_REGISTRY_REQUIRED",
-            )
+        tools = legacy_tool_registry(context.tools)
         llm = _unwrap_legacy_llm(context.llm)
         agent = ReActAgent(
             llm,
-            context.tools,
+            tools,
             max_steps=int(config["max_steps"]),
             user_id=config.get("user_id"),
             agent_name=config.get("agent_name"),
             tool_routing_enabled=bool(config["tool_routing_enabled"]),
-            memory_enabled=resolve_memory_enabled(config, context.tools),
+            memory_enabled=resolve_memory_enabled(config, tools),
             step_reminder_threshold=int(config["step_reminder_threshold"]),
             include_simulation_notice=bool(config["include_simulation_notice"]),
             prompt_resolver=get_prompt_resolver(context.prompts),

@@ -59,10 +59,14 @@ only-include = [
   "benchmark",
 ]
 
-[tool.hatch.build.targets.wheel.force-include]
-"benchmark/builtin/alpha-arena-extension.yaml" = "benchmark/builtin/alpha-arena-extension.yaml"
-"benchmark/builtin/prompts" = "benchmark/builtin/prompts"
-"benchmark/builtin/schemas" = "benchmark/builtin/schemas"
+[tool.hatch.build]
+include = [
+  "benchmark/**/*.py",
+  "benchmark/**/*.yaml",
+  "benchmark/**/*.yml",
+  "benchmark/**/*.json",
+  "benchmark/**/*.txt",
+]
 
 
 [tool.pytest.ini_options]

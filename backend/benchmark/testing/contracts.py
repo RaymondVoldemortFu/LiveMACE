@@ -29,6 +29,44 @@ class ContractViolation(AssertionError):
     """Raised when an extension violates the public synchronous SPI."""
 
 
+def arguments_from_input_schema(schema: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Build invoke arguments for required schema fields so contract tests reach invoke()."""
+
+    if not isinstance(schema, Mapping):
+        return {}
+    properties = schema.get("properties")
+    if not isinstance(properties, Mapping):
+        properties = {}
+    required = schema.get("required") or ()
+    arguments: dict[str, Any] = {}
+    for name in required:
+        if not isinstance(name, str):
+            raise ContractViolation("input schema required names must be strings")
+        prop = properties.get(name)
+        arguments[name] = _placeholder_for_schema_property(
+            name, prop if isinstance(prop, Mapping) else {}
+        )
+    return arguments
+
+
+def _placeholder_for_schema_property(name: str, prop: Mapping[str, Any]) -> Any:
+    declared = prop.get("type")
+    types = tuple(declared) if isinstance(declared, list) else (declared,)
+    if "integer" in types:
+        return 1
+    if "number" in types:
+        return 1.0
+    if "boolean" in types:
+        return True
+    if "array" in types:
+        return []
+    if "object" in types:
+        return {}
+    if types == ("null",):
+        return None
+    return name
+
+
 def _reject_awaitable(value: Any, message: str) -> Any:
     if isawaitable(value):
         close = getattr(value, "close", None)
@@ -147,6 +185,7 @@ __all__ = [
     "AgentCase",
     "ToolCase",
     "ContractViolation",
+    "arguments_from_input_schema",
     "assert_agent_contract",
     "assert_tool_contract",
     "assert_prompt_contract",

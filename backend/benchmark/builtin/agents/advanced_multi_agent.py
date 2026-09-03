@@ -18,16 +18,15 @@ from benchmark.builtin.agents._legacy_context import (
     prices_from_context,
     termination_from_legacy_decision,
 )
+from benchmark.builtin.agents._legacy_ports import legacy_llm_surface, legacy_tool_registry
 from benchmark.builtin.agents.react import _step_event_metadata
 from benchmark.builtin.prompts import get_prompt_resolver
 from benchmark.contracts import (
     AgentRunResult,
     AgentRuntimeError,
-    ComponentConfigError,
     DecisionContext,
 )
 from services.agent.multi_agent_advanced import AdvancedMultiAgent
-from services.agent.tools import ToolRegistry
 
 ADVANCED_MULTI_AGENT_COMPONENT_ID = "core.advanced-multi-agent"
 ADVANCED_MULTI_AGENT_VERSION = "1.0.0"
@@ -59,15 +58,13 @@ ADVANCED_MULTI_AGENT_DESCRIPTOR = AgentDescriptor(
 
 
 def _unwrap_legacy_llm(llm: Any) -> Any:
-    legacy = getattr(llm, "legacy_client", None)
-    if legacy is not None and callable(getattr(legacy, "call", None)):
-        return legacy
-    if callable(getattr(llm, "call", None)):
-        return llm
-    raise ComponentConfigError(
-        "core.advanced-multi-agent adapter requires a legacy LLMClient (call()) "
-        "or LegacyLLMClientAdapter",
+    return legacy_llm_surface(
+        llm,
         code="ADVANCED_MULTI_AGENT_LEGACY_LLM_REQUIRED",
+        message=(
+            "core.advanced-multi-agent adapter requires a legacy LLMClient (call()) "
+            "or an LLMClientPort (complete())"
+        ),
     )
 
 
@@ -157,16 +154,9 @@ class AdvancedMultiAgentFactory:
     ) -> AdvancedMultiAgentAdapter:
         if not isinstance(context, AgentBuildContext):
             raise TypeError("context must be AgentBuildContext")
-        if not isinstance(context.tools, ToolRegistry):
-            raise ComponentConfigError(
-                "core.advanced-multi-agent currently requires "
-                "services.agent.tools.ToolRegistry; public ToolInvoker-only "
-                "construction is owned by M06",
-                code="ADVANCED_MULTI_AGENT_LEGACY_TOOL_REGISTRY_REQUIRED",
-            )
         agent = AdvancedMultiAgent(
             _unwrap_legacy_llm(context.llm),
-            context.tools,
+            legacy_tool_registry(context.tools),
             max_steps=int(config["max_steps"]),
             user_id=config.get("user_id"),
             agent_name=config.get("agent_name"),

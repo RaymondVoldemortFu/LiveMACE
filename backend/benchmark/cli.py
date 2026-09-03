@@ -19,6 +19,7 @@ from benchmark.extensions import (
 from benchmark.testing import (
     AgentCase,
     ToolCase,
+    arguments_from_input_schema,
     assert_agent_contract,
     assert_prompt_contract,
     assert_tool_contract,
@@ -75,7 +76,23 @@ def _run_contracts(directory: Path) -> None:
         )
     for descriptor in result.agents.list():
         registered = result.agents.get(descriptor.id, descriptor.version)
-        assert_agent_contract(registered.factory, (AgentCase(name=descriptor.id),))
+        report = result.agents.validate_config(descriptor.id, {}, version=descriptor.version)
+        if not report.valid:
+            issues = "; ".join(
+                f"{issue.path}: {issue.message}" for issue in report.errors
+            )
+            raise SystemExit(
+                f"extension {record.id} agent {descriptor.id} config is invalid: {issues}"
+            )
+        assert_agent_contract(
+            registered.factory,
+            (
+                AgentCase(
+                    name=descriptor.id,
+                    config=report.normalized_config,
+                ),
+            ),
+        )
     if result.tools.list():
         class _LoadedProvider:
             def __init__(self, tools):
@@ -86,9 +103,12 @@ def _run_contracts(directory: Path) -> None:
 
         tools = tuple(result.tools.get(spec.name).tool for spec in result.tools.list())
         cases = tuple(
-            ToolCase(name=spec.name, tool_name=spec.name, arguments={})
+            ToolCase(
+                name=spec.name,
+                tool_name=spec.name,
+                arguments=arguments_from_input_schema(spec.input_schema),
+            )
             for spec in result.tools.list()
-            if not spec.input_schema.get("required")
         )
         assert_tool_contract(_LoadedProvider(tools), cases)
     if result.prompts.list():

@@ -226,3 +226,28 @@ def test_fake_trade_gateway_does_not_need_a_database():
     assert result.accepted is True
     assert result.executed is False
     assert gateway.commands == [command]
+
+
+def test_wheel_archives_builtin_resources_once(tmp_path):
+    import zipfile
+
+    completed = subprocess.run(
+        ["uv", "build", "--wheel", "--out-dir", str(tmp_path)],
+        cwd=BACKEND_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    wheels = list(tmp_path.glob("*.whl"))
+    assert len(wheels) == 1, completed.stderr
+    names = zipfile.ZipFile(wheels[0]).namelist()
+    assert len(names) == len(set(names))
+    for path in (
+        "benchmark/builtin/alpha-arena-extension.yaml",
+        "benchmark/builtin/prompts/__init__.py",
+        "benchmark/builtin/prompts/index.yaml",
+        "benchmark/builtin/prompts/advanced/manager.txt",
+        "benchmark/builtin/schemas/react.json",
+        "benchmark/cli.py",
+    ):
+        assert path in names
