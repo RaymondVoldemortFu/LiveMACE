@@ -1,0 +1,1 @@
+Combined extension prompt for {account_name}.

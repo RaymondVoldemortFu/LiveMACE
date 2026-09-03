@@ -97,52 +97,25 @@ def _normalize_json_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
     return normalized
 
 
-def register_public_api_tools(registry, limit: Optional[int] = None) -> int:
+def register_public_api_tools(
+    registry,
+    limit: Optional[int] = None,
+    *,
+    account_id: int = 1,
+    trace_id: Optional[str] = None,
+) -> int:
     """
     Register public-apis tools into ToolRegistry using tools_schema.json.
     Returns number of registered tools.
     """
-    tools_schema = _load_tools_schema()
-    if not tools_schema:
-        return 0
+    from benchmark.builtin.tools.legacy import register_legacy_tools
+    from benchmark.builtin.tools.public_api import PublicApiToolsProvider
 
-    count = 0
-    for entry in tools_schema:
-        if not isinstance(entry, dict) or entry.get("type") != "function":
-            continue
-        function_block = entry.get("function") or {}
-        name = function_block.get("name")
-        if not name:
-            continue
-        if hasattr(registry, "tools") and name in registry.tools:
-            logger.warning("Tool name already exists, skipping public api tool: %s", name)
-            continue
-
-        description = function_block.get("description") or f"Call the {name} public API."
-        parameters = function_block.get("parameters") or {
-            "type": "object",
-            "properties": {},
-            "additionalProperties": True,
-        }
-        if isinstance(parameters, dict):
-            parameters = _normalize_json_schema(parameters)
-        else:
-            parameters = {
-                "type": "object",
-                "properties": {},
-                "additionalProperties": True,
-            }
-
-        registry.register(
-            Tool(
-                name=name,
-                description=description,
-                parameters=parameters,
-                func=_make_public_api_func(name),
-                metadata={"tier": "noise"},
-            )
-        )
-        count += 1
-        if limit is not None and count >= limit:
-            break
-    return count
+    provider = PublicApiToolsProvider(limit=limit)
+    return register_legacy_tools(
+        registry,
+        provider.list_tools(),
+        account_id=account_id,
+        trace_id=trace_id,
+        metadata={"tier": "noise", "source": "public-apis"},
+    )

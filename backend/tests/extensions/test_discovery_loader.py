@@ -848,6 +848,30 @@ def test_builtin_failure_is_fatal(tmp_path):
     assert caught.value.code == "BUILTIN_EXTENSION_LOAD_FAILED"
 
 
+def test_builtin_component_load_failure_preserves_cause(tmp_path):
+    builtin = tmp_path / "builtin"
+    _agent_extension(
+        builtin,
+        "broken_builtin_factory",
+        "class Factory:\n"
+        "    def create(self, context, config):\n"
+        "        return None\n"
+        "def create_factory():\n"
+        "    raise RuntimeError('factory boom')\n",
+        extension_id="com.example.broken-builtin",
+    )
+
+    with pytest.raises(ExtensionLoadError) as caught:
+        load_extensions(ExtensionSettings(builtin_root=builtin))
+
+    assert caught.value.code == "BUILTIN_EXTENSION_LOAD_FAILED"
+    cause = caught.value.__cause__
+    assert cause is not None
+    assert getattr(cause, "code", None) == "AGENT_FACTORY_FAILED"
+    assert isinstance(cause.__cause__, RuntimeError)
+    assert str(cause.__cause__) == "factory boom"
+
+
 def test_loader_rejects_manifest_symlink_outside_extension_root(tmp_path):
     outside = tmp_path / "outside-manifest"
     outside.mkdir()

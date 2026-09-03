@@ -5,16 +5,11 @@ import inspect
 from typing import Dict, Any, List, Optional, Callable
 from datetime import datetime, timezone, timedelta
 
+from benchmark.builtin.prompts import get_prompt_resolver, require_profile_contract
+
 from .base import BaseAgent
 from .llm_client import LLMClient
 from .tools import ToolRegistry
-from config.agent_config import AgentConfig
-from .prompts.multi_agent_prompts import (
-    MANAGER_PROMPT,
-    TRADING_AGENT_PROMPT,
-    NEWS_AGENT_PROMPT,
-    CODER_AGENT_PROMPT
-)
 
 logger = logging.getLogger(__name__)
 
@@ -23,11 +18,27 @@ class MultiAgent(BaseAgent):
     A Multi-Agent architecture where a Manager agent coordinates
     specialized sub-agents (Trading, News, Coder).
     """
-    def __init__(self, llm: LLMClient, tools: ToolRegistry, max_steps: int = 15, user_id: str = None, agent_name: Optional[str] = None):
+
+    PROMPT_PROFILE_ID = "core.multi-agent.default"
+
+    def __init__(
+        self,
+        llm: LLMClient,
+        tools: ToolRegistry,
+        max_steps: int = 15,
+        user_id: str = None,
+        agent_name: Optional[str] = None,
+        prompt_resolver=None,
+    ):
         super().__init__(llm, tools, agent_name=agent_name)
         self.max_steps = max_steps
         self.user_id = user_id
-        # Memory tools are now registered in env_wrapper.register_default_tools()
+        self.prompt_resolver = get_prompt_resolver(prompt_resolver)
+        require_profile_contract(
+            self.prompt_resolver,
+            self.PROMPT_PROFILE_ID,
+            "multi_agent",
+        )
 
         # Shared conversation history (context)
         self.context = []
@@ -64,15 +75,22 @@ class MultiAgent(BaseAgent):
         
         # Select prompt and tools based on agent name
         if agent_name == "TradingAgent":
-            system_prompt = TRADING_AGENT_PROMPT
+            slot = "trading"
+            prompt_variables = {
+                "instruction": instruction,
+                "portfolio": json.dumps(portfolio, ensure_ascii=False),
+                "prices": json.dumps(prices, ensure_ascii=False),
+            }
             # Give Trading Agent access to market/account tools
             allowed_tools = ["get_market_snapshot", "get_kline_history", "get_account_state"]
         elif agent_name == "NewsAgent":
-            system_prompt = NEWS_AGENT_PROMPT
+            slot = "news"
+            prompt_variables = {"instruction": instruction}
             # Give News Agent access to search tools
             allowed_tools = ["consult_search_agent"]
         elif agent_name == "CoderAgent":
-            system_prompt = CODER_AGENT_PROMPT
+            slot = "coder"
+            prompt_variables = {"instruction": instruction}
             # Give Coder Agent access to coding/file tools
             allowed_tools = ["run_python_script", "read_file", "write_file", "execute_shell_command"]
         else:
@@ -82,12 +100,11 @@ class MultiAgent(BaseAgent):
         available_tools_names = [t["function"]["name"] for t in self.tools.openai_tools]
         valid_tools = [t for t in allowed_tools if t in available_tools_names]
 
-        # Format prompt
-        formatted_prompt = system_prompt.format(
-            instruction=instruction,
-            portfolio=json.dumps(portfolio, ensure_ascii=False),
-            prices=json.dumps(prices, ensure_ascii=False)
-        )
+        formatted_prompt = self.prompt_resolver.render_slot(
+            self.PROMPT_PROFILE_ID,
+            slot,
+            prompt_variables,
+        ).content
 
         messages = [
             {"role": "system", "content": formatted_prompt},
@@ -251,11 +268,15 @@ class MultiAgent(BaseAgent):
             # We summarize the conversation history (context) into the prompt
             context_str = "\n".join(self.context)
             
-            formatted_manager_prompt = MANAGER_PROMPT.format(
-                context=context_str if context_str else "No prior actions.",
-                portfolio=json.dumps(portfolio, ensure_ascii=False),
-                prices=json.dumps(prices, ensure_ascii=False)
-            )
+            formatted_manager_prompt = self.prompt_resolver.render_slot(
+                self.PROMPT_PROFILE_ID,
+                "manager",
+                {
+                    "context": context_str if context_str else "No prior actions.",
+                    "portfolio": json.dumps(portfolio, ensure_ascii=False),
+                    "prices": json.dumps(prices, ensure_ascii=False),
+                },
+            ).content
             
             # Call Manager (LLM)
             # Manager has NO tools, only decides next action
@@ -327,7 +348,7 @@ class MultiAgent(BaseAgent):
                 "direction": "long",
                 "target_portion_of_balance": 0.0,
                 "leverage": 1,
-                "reason": "MultiAgent Manager did not reach a conclusion within max steps."
+                "reason": "MultiAgent Manager did not reach a conclusion within max steps.",
             }
 
         return final_decision

@@ -126,5 +126,16 @@ Combination mode config:
 - Required CSV columns:
   - `account_type,agent_type,memory_enabled,tool_routing_enabled,enable_rule_aware,is_active`
 
+## Extensions
+
+Built-in Agents, Tools, and Prompts load from `backend/benchmark/builtin/`. Third-party extensions use the same Catalog. Start with [the extension SDK](docs/extensions/README.md) and the directories under `examples/extensions/`.
+
+```bash
+cd backend
+uv run alpha-arena extension validate ../examples/extensions/minimal-agent
+uv run alpha-arena extension test ../examples/extensions/minimal-agent
+uv run alpha-arena extension list ../examples/extensions/prompt-override --json
+```
+
 ## License
 MIT

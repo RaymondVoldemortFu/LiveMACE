@@ -7,7 +7,7 @@ from decimal import Decimal
 from typing import Mapping
 from uuid import uuid4
 
-from benchmark.contracts import JsonValue, Market
+from benchmark.contracts import JsonValue, Market, TradeCommand, TradeCommandResult
 from benchmark.providers import (
     Freshness,
     HealthStatus,
@@ -161,6 +161,36 @@ class FakeMarketDataPort:
         return HealthStatus("ok", self.id)
 
 
+class FakeTradeCommandGateway:
+    """In-memory TradeCommandGateway that never opens a database session."""
+
+    def __init__(self) -> None:
+        self.commands: list = []
+        self._next_id = 1
+
+    def execute(self, command: TradeCommand) -> TradeCommandResult:
+        if not isinstance(command, TradeCommand):
+            raise TypeError("command must be TradeCommand")
+        self.commands.append(command)
+        executed = command.operation != "hold"
+        order_id = None
+        trade_id = None
+        if executed:
+            order_id = self._next_id
+            trade_id = self._next_id + 1000
+            self._next_id += 1
+        return TradeCommandResult(
+            accepted=True,
+            executed=executed,
+            reject_code=None,
+            reject_message=None,
+            order_id=order_id,
+            trade_id=trade_id,
+            normalized_command=command,
+            raw_result={"source": "fake"},
+        )
+
+
 class FakeSandboxPort:
     id = "fake.sandbox"
     version = "1.0.0"
@@ -189,4 +219,5 @@ __all__ = [
     "FakeMarketDataPort",
     "FakeMemoryStorePort",
     "FakeSandboxPort",
+    "FakeTradeCommandGateway",
 ]

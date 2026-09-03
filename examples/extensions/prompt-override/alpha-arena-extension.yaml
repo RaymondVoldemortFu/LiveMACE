@@ -1,0 +1,11 @@
+api_version: 1
+id: com.example.prompt-override
+version: 1.0.0
+name: Prompt Override
+description: Prompt-only extension that ships a file-backed profile.
+components:
+  prompts:
+    - directory: prompts
+      index: prompts/index.yaml
+capabilities:
+  requested: []

@@ -178,12 +178,12 @@ class _ResolverWithoutResolveSlot:
         return self._registry.render_slot(*args, **kwargs)
 
 
-def test_only_advanced_multi_agent_registers_as_a_public_component():
+def test_advanced_multi_agent_registers_as_a_public_component():
     registry = AgentRegistry()
     register_builtin_agents(registry)
     ids = {descriptor.id for descriptor in registry.list()}
     assert ADVANCED_MULTI_AGENT_COMPONENT_ID in ids
-    assert "core.multi-agent" not in ids
+    assert "core.multi-agent" in ids
     assert registry.validate_config(
         ADVANCED_MULTI_AGENT_COMPONENT_ID, {}
     ).normalized_config == {
@@ -196,7 +196,7 @@ def test_only_advanced_multi_agent_registers_as_a_public_component():
     ).valid
 
 
-def test_basic_multi_agent_remains_on_the_legacy_factory_path():
+def test_basic_multi_agent_legacy_factory_uses_the_public_registry():
     agent = create_agent(
         "multi_agent",
         FakeLLM([FakeLLMResponse("unused")]),

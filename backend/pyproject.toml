@@ -50,8 +50,20 @@ dev = [
     "fakeredis>=2.34.1",
 ]
 
+[project.scripts]
+alpha-arena = "benchmark.cli:main"
+
 [tool.hatch.build.targets.wheel]
 packages = ["benchmark"]
+only-include = [
+  "benchmark",
+]
+
+[tool.hatch.build.targets.wheel.force-include]
+"benchmark/builtin/alpha-arena-extension.yaml" = "benchmark/builtin/alpha-arena-extension.yaml"
+"benchmark/builtin/prompts" = "benchmark/builtin/prompts"
+"benchmark/builtin/schemas" = "benchmark/builtin/schemas"
+
 
 [tool.pytest.ini_options]
 markers = [

@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeou
 import requests
 
 from config.tool_config import ToolConfig
-from services.agent.prompts.sub_agent_prompts import SUB_AGENT_SYSTEM_PROMPT
+from benchmark.builtin.prompts import get_prompt_resolver, require_profile_contract
 from services.agent.llm_client import LLMClient
 
 logger = logging.getLogger(__name__)
@@ -27,7 +27,7 @@ except ImportError:
 
 
 class SearchSubAgent:
-    def __init__(self, model: str = "gpt-4o-mini", api_key: str = None, base_url: str = None, agent_name: Optional[str] = None):
+    def __init__(self, model: str = "gpt-4o-mini", api_key: str = None, base_url: str = None, agent_name: Optional[str] = None, prompt_resolver=None):
         self.brightdata_api_key = ToolConfig.brightdata_api_key
         self._brightdata_client_cls = None
         if self.brightdata_api_key:
@@ -57,7 +57,13 @@ class SearchSubAgent:
             ToolConfig.SEARCH_AGENT_LOCAL_FETCH_CONNECT_TIMEOUT_SECONDS
         )
         self.local_fetch_read_timeout_seconds = ToolConfig.SEARCH_AGENT_LOCAL_FETCH_READ_TIMEOUT_SECONDS
-        
+        self.prompt_resolver = get_prompt_resolver(prompt_resolver)
+        require_profile_contract(
+            self.prompt_resolver,
+            "core.search-sub-agent.default",
+            "search_sub_agent",
+        )
+
         # Initialize tokenizer for accurate counting if available
         self.tokenizer = None
         if TIKTOKEN_AVAILABLE:
@@ -584,7 +590,14 @@ class SearchSubAgent:
         agent_logger.info(f"[{agent_name}] Query: {query}, Topic: {topic}, Time: {time_range}")
 
         messages = [
-            {"role": "system", "content": SUB_AGENT_SYSTEM_PROMPT.format(max_steps=self.max_steps)},
+            {
+                "role": "system",
+                "content": self.prompt_resolver.render_slot(
+                    "core.search-sub-agent.default",
+                    "system",
+                    {"max_steps": self.max_steps},
+                ).content,
+            },
             {"role": "user", "content": f"Query: {query}\nTopic: {topic}\nTime Range: {time_range}\nMax Results: {max_results}"}
         ]
 

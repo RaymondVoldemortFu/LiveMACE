@@ -10,8 +10,10 @@ from typing import Mapping, Protocol, runtime_checkable
 
 from benchmark.contracts import (
     ComponentConfigError,
+    ComponentNotFoundError,
     ExtensionRef,
     PromptProfileDescriptor,
+    PromptRenderError,
     ValidationIssue,
     ValidationReport,
 )
@@ -217,7 +219,7 @@ def validate_profile_contract(
     errors: list[ValidationIssue] = []
     try:
         profile = resolver.get_profile(profile_id)
-    except Exception as exc:
+    except (ComponentNotFoundError, PromptRenderError) as exc:
         return ValidationReport(
             False,
             errors=(
@@ -244,7 +246,7 @@ def validate_profile_contract(
                 selection.prompt_id,
                 version=selection.version,
             )
-        except Exception as exc:
+        except (ComponentNotFoundError, PromptRenderError) as exc:
             errors.append(
                 ValidationIssue(
                     path=f"slots.{slot}",

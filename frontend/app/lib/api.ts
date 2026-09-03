@@ -247,11 +247,17 @@ export interface AccountSystemPromptResponse {
   account_id: number
   account_name: string
   agent_type: string
+  agent_id?: string
   memory_enabled: boolean
   tool_routing_enabled?: boolean
   decision_protocol: string
   termination_token: string
   system_prompt: string
+  prompt_profile_id?: string | null
+  prompt_profile_version?: string | null
+  prompt_id?: string | null
+  prompt_version?: string | null
+  prompt_hash?: string
 }
 
 export async function loginUser(username: string, password: string): Promise<UserAuthResponse> {

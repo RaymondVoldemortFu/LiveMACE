@@ -8,12 +8,11 @@ M10 switches production callers to ``AgentRuntime``.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from typing import Any
 
 from benchmark.agents import (
     AgentBuildContext,
-    AgentDescriptor,
     AgentRegistry,
     ComponentNotFoundError,
     NullEventSink,
@@ -22,6 +21,10 @@ from benchmark.builtin.agents import register_builtin_agents
 from benchmark.builtin.agents.advanced_multi_agent import (
     ADVANCED_MULTI_AGENT_COMPONENT_ID,
     ADVANCED_MULTI_AGENT_SHIM_CONFIG_KEYS,
+)
+from benchmark.builtin.agents.multi_agent import (
+    MULTI_AGENT_COMPONENT_ID,
+    MULTI_AGENT_SHIM_CONFIG_KEYS,
 )
 from benchmark.builtin.agents.react import REACT_COMPONENT_ID, REACT_SHIM_CONFIG_KEYS
 from benchmark.builtin.agents.rule_aware import (
@@ -33,7 +36,6 @@ from benchmark.infrastructure.adapters import LegacyLLMClientAdapter
 
 from .base import BaseAgent
 from .llm_client import LLMClient
-from .multi_agent import MultiAgent
 from .tools import ToolRegistry
 
 logger = logging.getLogger(__name__)
@@ -41,64 +43,9 @@ logger = logging.getLogger(__name__)
 _BUILTIN_PROMPT_REGISTRY = get_builtin_prompt_registry()
 
 
-class _LegacyAgentFactory:
-    def __init__(self, builder: Callable[..., BaseAgent]) -> None:
-        self._builder = builder
-
-    def create(
-        self,
-        context: AgentBuildContext,
-        config: Mapping[str, Any],
-    ) -> BaseAgent:
-        llm = context.llm
-        if isinstance(llm, LegacyLLMClientAdapter):
-            llm = llm.legacy_client
-        return self._builder(llm, context.tools, **dict(config))
-
-
-def _build_multi_agent(llm: LLMClient, tools: ToolRegistry, **config: Any) -> BaseAgent:
-    return MultiAgent(
-        llm,
-        tools,
-        max_steps=config.get("max_steps", 15),
-        user_id=config.get("user_id"),
-        agent_name=config.get("agent_name"),
-    )
-
-
-def _legacy_schema(default_max_steps: int) -> dict[str, Any]:
-    return {
-        "type": "object",
-        "properties": {
-            "max_steps": {"type": "integer", "minimum": 1, "default": default_max_steps},
-            "user_id": {"type": ["string", "integer", "null"]},
-            "account_id": {"type": ["integer", "null"]},
-            "agent_name": {"type": ["string", "null"]},
-            "rule_docs_path": {"type": ["string", "null"]},
-            "enable_llm_audit": {"type": "boolean"},
-        },
-        # Legacy callers have historically supplied implementation-specific kwargs.
-        "additionalProperties": True,
-    }
-
-
 def _create_legacy_registry() -> AgentRegistry:
     registry = AgentRegistry()
     register_builtin_agents(registry)
-    builtins = (
-        ("core.multi-agent", 15, _build_multi_agent),
-    )
-    for agent_id, default_max_steps, builder in builtins:
-        registry.register(
-            AgentDescriptor(
-                id=agent_id,
-                version="1.0.0",
-                config_schema=_legacy_schema(default_max_steps),
-                display_name=agent_id.removeprefix("core."),
-                description="Built-in Agent exposed through the legacy compatibility facade.",
-            ),
-            _LegacyAgentFactory(builder),
-        )
     registry.freeze()
     return registry
 
@@ -115,6 +62,7 @@ _LEGACY_REGISTRY = _create_legacy_registry()
 
 _SHIM_CONFIG_KEYS = {
     REACT_COMPONENT_ID: REACT_SHIM_CONFIG_KEYS,
+    MULTI_AGENT_COMPONENT_ID: MULTI_AGENT_SHIM_CONFIG_KEYS,
     ADVANCED_MULTI_AGENT_COMPONENT_ID: ADVANCED_MULTI_AGENT_SHIM_CONFIG_KEYS,
     RULE_AWARE_COMPONENT_ID: RULE_AWARE_SHIM_CONFIG_KEYS,
 }

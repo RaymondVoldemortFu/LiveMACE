@@ -23,6 +23,10 @@ _PUBLIC_TO_LEGACY_TOOL_NAMES = {
     "core.memory_add": "memory_add",
     "core.memory_search": "memory_search",
     "core.search": "consult_search_agent",
+    "core.execute_shell_command": "execute_shell_command",
+    "core.read_file": "read_file",
+    "core.write_file": "write_file",
+    "core.run_python_script": "run_python_script",
 }
 
 # services/agent/tools.py
@@ -72,6 +76,8 @@ class ToolRegistry:
         legacy_name = _PUBLIC_TO_LEGACY_TOOL_NAMES.get(name, name)
         if legacy_name.startswith("core."):
             legacy_name = legacy_name.removeprefix("core.")
+        elif legacy_name.startswith("public."):
+            legacy_name = legacy_name.removeprefix("public.")
         try:
             tool = self.get(legacy_name)
         except KeyError:

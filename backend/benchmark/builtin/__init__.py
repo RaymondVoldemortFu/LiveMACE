@@ -1,3 +1,3 @@
 """Built-in benchmark components and resources."""
 
-__all__ = ["prompts", "agents"]
+__all__ = ["prompts", "agents", "tools"]

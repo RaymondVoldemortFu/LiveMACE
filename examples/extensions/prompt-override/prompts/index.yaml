@@ -1,0 +1,13 @@
+api_version: 1
+prompts:
+  - id: com.example.prompt-override.system
+    version: 1.0.0
+    file: system.txt
+    required_variables:
+      - account_name
+profiles:
+  - id: com.example.prompt-override.default
+    version: 1.0.0
+    slots:
+      system:
+        prompt_id: com.example.prompt-override.system

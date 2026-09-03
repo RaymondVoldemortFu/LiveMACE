@@ -2,7 +2,7 @@ api_version: 1
 id: benchmark.core
 version: 1.0.0
 name: Open Alpha Arena Built-ins
-description: Built-in agents and prompt profiles shipped with the benchmark runtime.
+description: Built-in agents, tools, and prompt profiles shipped with the benchmark runtime.
 python:
   requires: ">=3.10"
   entrypoint: benchmark.builtin.agents.react:ReActAgentFactory
@@ -11,9 +11,22 @@ components:
     - id: core.react
       factory: benchmark.builtin.agents.react:ReActAgentFactory
       config_schema: schemas/react.json
+    - id: core.multi-agent
+      factory: benchmark.builtin.agents.multi_agent:MultiAgentFactory
+      config_schema: schemas/multi-agent.json
+    - id: core.advanced-multi-agent
+      factory: benchmark.builtin.agents.advanced_multi_agent:AdvancedMultiAgentFactory
+      config_schema: schemas/advanced-multi-agent.json
     - id: core.rule-aware
       factory: benchmark.builtin.agents.rule_aware:RuleAwareAgentFactory
       config_schema: schemas/rule-aware.json
+  tools:
+    - provider: benchmark.builtin.tools.market:MarketToolsProvider
+    - provider: benchmark.builtin.tools.account:AccountToolsProvider
+    - provider: benchmark.builtin.tools.search:SearchToolsProvider
+    - provider: benchmark.builtin.tools.sandbox:SandboxToolsProvider
+    - provider: benchmark.builtin.tools.memory:MemoryToolsProvider
+    - provider: benchmark.builtin.tools.public_api:PublicApiToolsProvider
   prompts:
     - directory: prompts
       index: prompts/index.yaml
@@ -24,4 +37,5 @@ capabilities:
     - memory.read
     - memory.write
     - network.read
+    - sandbox.write
     - trading.write

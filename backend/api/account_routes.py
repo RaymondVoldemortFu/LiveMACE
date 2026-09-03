@@ -24,9 +24,7 @@ from database.connection import SessionLocal
 from database.models import Account, Position
 from services.agent.llm_client import LLMClient
 from config.api_feature_config import ApiFeatureConfig
-from services.agent.prompts.system_prompts import get_trade_agent_prompt
-from services.agent.prompts.multi_agent_prompts import MANAGER_PROMPT as MULTI_AGENT_MANAGER_PROMPT
-from services.agent.prompts.advanced_multi_agent_prompts import Advanced_MANAGER_PROMPT
+from benchmark.builtin.prompts.preview import preview_system_prompt_for_account
 from services.security.api_key_security import encrypt_api_key, mask_api_key_for_display
 
 logger = logging.getLogger(__name__)
@@ -184,33 +182,23 @@ async def get_account_system_prompt(account_id: int, db: Session = Depends(get_d
         agent_type = (getattr(account, "agent_type", "react") or "react").strip().lower()
         memory_enabled = (getattr(account, "memory_enabled", "false") == "true")
         tool_routing_enabled = (getattr(account, "tool_routing_enabled", "true") == "true")
-
-        if agent_type == "react":
-            system_prompt = get_trade_agent_prompt(
-                memory_enabled=memory_enabled,
-                tool_routing_enabled=tool_routing_enabled,
-            )
-        elif agent_type == "multi_agent":
-            system_prompt = MULTI_AGENT_MANAGER_PROMPT
-        elif agent_type == "advanced_multi_agent":
-            system_prompt = Advanced_MANAGER_PROMPT
-        elif agent_type in {"buy_hold", "grid"}:
-            system_prompt = (
-                "This account uses a baseline strategy and does not rely on an LLM system prompt "
-                "for decision generation."
-            )
-        else:
-            system_prompt = f"Unknown agent_type='{agent_type}'. No dedicated system prompt template found."
+        preview = preview_system_prompt_for_account(account)
 
         return {
             "account_id": account.id,
             "account_name": account.name,
             "agent_type": agent_type,
+            "agent_id": preview.agent_id,
             "memory_enabled": memory_enabled,
             "tool_routing_enabled": tool_routing_enabled,
             "decision_protocol": "tool",
             "termination_token": "<TRADE_DONE>",
-            "system_prompt": system_prompt,
+            "system_prompt": preview.system_prompt,
+            "prompt_profile_id": preview.prompt_profile_id,
+            "prompt_profile_version": preview.prompt_profile_version,
+            "prompt_id": preview.prompt_id,
+            "prompt_version": preview.prompt_version,
+            "prompt_hash": preview.prompt_hash,
         }
     except HTTPException:
         raise

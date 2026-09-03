@@ -509,12 +509,13 @@ def _failure_record(
     candidate: ExtensionCandidate,
     manifest: ExtensionManifest,
     code: str,
+    message: str = "extension component loading failed",
 ) -> ExtensionLoadRecord:
     return _record(
         candidate,
         status=ExtensionStatus.LOAD_FAILED,
         manifest=manifest,
-        errors=(_issue(code, "extension component loading failed"),),
+        errors=(_issue(code, message),),
     )
 
 
@@ -557,13 +558,20 @@ def _builtin_module_prefix(root: Path) -> str | None:
     return ".".join(reversed(parts)) or None
 
 
-def _fatal_builtin(records: Sequence[ExtensionLoadRecord]) -> None:
+def _fatal_builtin(
+    records: Sequence[ExtensionLoadRecord],
+    *,
+    cause: BaseException | None = None,
+) -> None:
     details = {"records": [record.to_dict() for record in records]}
-    raise ExtensionLoadError(
+    error = ExtensionLoadError(
         "builtin extension loading failed",
         code="BUILTIN_EXTENSION_LOAD_FAILED",
         details=to_jsonable(details),
     )
+    if cause is not None:
+        raise error from cause
+    raise error
 
 
 def load_discovered_extensions(
@@ -630,28 +638,34 @@ def load_discovered_extensions(
         except _LoaderFailure as exc:
             if module_namespace is not None:
                 module_namespace.uninstall()
-            failure = _failure_record(candidate, manifest, exc.code)
+            failure = _failure_record(candidate, manifest, exc.code, str(exc))
             record_by_index[index] = failure
             if candidate.source is ExtensionSource.BUILTIN:
-                _fatal_builtin(tuple(record_by_index.values()))
+                _fatal_builtin(tuple(record_by_index.values()), cause=exc)
             continue
         except BenchmarkError as exc:
             if module_namespace is not None:
                 module_namespace.uninstall()
-            failure = _failure_record(candidate, manifest, exc.code)
+            failure = _failure_record(candidate, manifest, exc.code, str(exc))
             record_by_index[index] = failure
             if candidate.source is ExtensionSource.BUILTIN:
-                _fatal_builtin(tuple(record_by_index.values()))
+                _fatal_builtin(tuple(record_by_index.values()), cause=exc)
             continue
-        except Exception:
+        except Exception as exc:
             if module_namespace is not None:
                 module_namespace.uninstall()
+            logger.exception(
+                "extension component loading failed for %s", candidate.root
+            )
             failure = _failure_record(
-                candidate, manifest, "COMPONENT_REGISTRATION_FAILED"
+                candidate,
+                manifest,
+                "COMPONENT_REGISTRATION_FAILED",
+                f"extension component loading failed: {exc}",
             )
             record_by_index[index] = failure
             if candidate.source is ExtensionSource.BUILTIN:
-                _fatal_builtin(tuple(record_by_index.values()))
+                _fatal_builtin(tuple(record_by_index.values()), cause=exc)
             continue
 
         accepted.append(contribution)
