@@ -1,0 +1,21 @@
+api_version: 1
+id: examples.combined-extension
+version: 1.0.0
+name: Combined Agent, Tool, and Prompt extension
+description: A small extension showing how the public components fit together.
+python:
+  requires: ">=3.10"
+  entrypoint: components:CombinedAgentFactory
+components:
+  agents:
+    - id: examples.combined-extension.agent
+      factory: components:CombinedAgentFactory
+      config_schema: agent-config.json
+  tools:
+    - provider: components:CombinedToolProvider
+  prompts:
+    - directory: prompts
+      index: prompts/index.yaml
+capabilities:
+  requested:
+    - market.read

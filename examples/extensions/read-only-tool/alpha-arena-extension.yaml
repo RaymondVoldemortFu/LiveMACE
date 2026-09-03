@@ -1,0 +1,14 @@
+api_version: 1
+id: examples.read-only-tool
+version: 1.0.0
+name: Read-only market Tool
+description: A market quote Tool that cannot request trading.write.
+python:
+  requires: ">=3.10"
+  entrypoint: tool:ReadOnlyToolProvider
+components:
+  tools:
+    - provider: tool:ReadOnlyToolProvider
+capabilities:
+  requested:
+    - market.read

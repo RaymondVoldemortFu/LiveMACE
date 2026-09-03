@@ -1,0 +1,13 @@
+api_version: 1
+prompts:
+  - id: examples.combined-extension.system
+    version: 1.0.0
+    file: system.txt
+    required_variables:
+      - symbol
+profiles:
+  - id: examples.combined-extension.default
+    version: 1.0.0
+    slots:
+      system:
+        prompt_id: examples.combined-extension.system
