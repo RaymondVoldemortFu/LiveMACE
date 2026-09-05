@@ -8,7 +8,7 @@ from fastapi import WebSocketDisconnect
 
 from api import account_routes
 from api import ws
-from services import order_matching
+from services import websocket_session_service
 
 
 class _ListQuery:
@@ -116,7 +116,7 @@ def test_websocket_bootstrap_switch_snapshot_curve_and_order_message_contract(mo
     async def record_snapshot(db, account_id):
         snapshots.append(account_id)
 
-    monkeypatch.setattr(ws, "SessionLocal", session_factory)
+    monkeypatch.setattr(websocket_session_service, "SessionLocal", session_factory)
     monkeypatch.setattr(ws, "get_or_create_user", lambda db, username: user)
     monkeypatch.setattr(ws, "get_or_create_default_account", lambda *args, **kwargs: account)
     monkeypatch.setattr(
@@ -131,9 +131,9 @@ def test_websocket_bootstrap_switch_snapshot_curve_and_order_message_contract(mo
     monkeypatch.setattr(ws, "remove_account_snapshot_job", lambda *args, **kwargs: None)
     monkeypatch.setattr(ws, "manager", ws.ConnectionManager())
     monkeypatch.setattr(
-        order_matching,
-        "create_order",
-        lambda **kwargs: SimpleNamespace(id=99),
+        ws,
+        "place_order",
+        lambda *args, **kwargs: SimpleNamespace(accepted=True, order_id=99),
     )
 
     asyncio.run(ws.websocket_endpoint(FakeWebSocket()))
