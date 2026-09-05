@@ -1,127 +1,43 @@
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from collections import defaultdict
-from typing import Optional
-import logging
 
 from database.connection import get_db
-from database.models import AgentMemory
-from services.evaluation.memory_evaluator import MemoryEvaluator
-from services.agent.memory import get_memory_service
+from services.memory_api_service import MemoryApiService
 
-logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/memory", tags=["memory"])
 
 
 @router.get("/{account_id}/list")
 def get_memories(account_id: int, market: Optional[str] = Query(None), db: Session = Depends(get_db)):
-    """Get all memories for an account, optionally filtered by market"""
-    query = db.query(AgentMemory).filter(
-        AgentMemory.account_id == account_id
-    )
-    if market:
-        query = query.filter(AgentMemory.market == market)
-    memories = query.order_by(AgentMemory.created_at.desc()).all()
-
-    return {
-        "memories": [
-            {
-                "id": m.id,
-                "content": m.content,
-                "market": m.market,
-                "created_at": m.created_at,
-                "retrieval_count": m.retrieval_count or 0,
-                "last_retrieved_at": m.last_retrieved_at
-            }
-            for m in memories
-        ]
-    }
+    return MemoryApiService(db).list_memories(account_id, market)
 
 
 @router.get("/{account_id}/metrics")
 def get_metrics(account_id: int, market: Optional[str] = Query(None), db: Session = Depends(get_db)):
-    """Get 4 core memory metrics, optionally filtered by market"""
     try:
-        evaluator = MemoryEvaluator(db)
-        agent_data = {"account_id": account_id}
-        if market:
-            agent_data["market"] = market
-        result = evaluator.evaluate(agent_data=agent_data)
-        return result
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        return MemoryApiService(db).get_metrics(account_id, market)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.get("/{account_id}/growth-timeline")
 def get_growth_timeline(account_id: int, market: Optional[str] = Query(None), db: Session = Depends(get_db)):
-    """Get time-series data for growth curve, optionally filtered by market"""
-    query = db.query(AgentMemory).filter(
-        AgentMemory.account_id == account_id
-    )
-    if market:
-        query = query.filter(AgentMemory.market == market)
-    memories = query.order_by(AgentMemory.created_at).all()
-
-    if not memories:
-        return {"timeline": []}
-
-    # Group by date
-    daily_counts = defaultdict(int)
-    for m in memories:
-        date = m.created_at.date().isoformat()
-        daily_counts[date] += 1
-
-    # Calculate cumulative
-    timeline = []
-    cumulative = 0
-    for date in sorted(daily_counts.keys()):
-        cumulative += daily_counts[date]
-        timeline.append({
-            "date": date,
-            "cumulative_count": cumulative,
-            "daily_additions": daily_counts[date]
-        })
-
-    return {"timeline": timeline}
+    return MemoryApiService(db).get_growth_timeline(account_id, market)
 
 
 @router.delete("/clear-all")
 def clear_all_memories(db: Session = Depends(get_db)):
-    """Clear ALL memories across all accounts (SQLite + vector backend)."""
     try:
-        count = db.query(AgentMemory).count()
-        db.query(AgentMemory).delete()
-        db.commit()
-
-        try:
-            memory_backend = get_memory_service()
-            if memory_backend:
-                memory_backend.reset()
-        except Exception as e:
-            logger.warning(f"Could not reset vector backend: {e}")
-
-        return {"success": True, "deleted": count}
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
+        return MemoryApiService(db).clear_all()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.delete("/{account_id}/clear")
 def clear_memories(account_id: int, db: Session = Depends(get_db)):
-    """Clear all memories for a specific account (SQLite + vector backend)."""
     try:
-        count = db.query(AgentMemory).filter(AgentMemory.account_id == account_id).count()
-        db.query(AgentMemory).filter(AgentMemory.account_id == account_id).delete()
-        db.commit()
-
-        try:
-            memory_backend = get_memory_service()
-            if memory_backend:
-                memory_backend.clear_account_memories(str(account_id))
-        except Exception as e:
-            logger.warning(f"Could not clear vector backend memories: {e}")
-
-        return {"success": True, "deleted": count}
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
+        return MemoryApiService(db).clear_account(account_id)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc

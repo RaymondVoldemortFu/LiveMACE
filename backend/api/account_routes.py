@@ -7,8 +7,6 @@ from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.orm import Session
 from datetime import datetime, timezone, timedelta
 import logging
-import re
-import requests
 from openai import (
     APIConnectionError,
     APITimeoutError,
@@ -20,36 +18,29 @@ from openai import (
 )
 
 
-from database.connection import SessionLocal
-from database.models import Account, Position
+from database.connection import get_db
+from database.models import Account
 from services.agent.llm_client import LLMClient
 from config.api_feature_config import ApiFeatureConfig
 from benchmark.builtin.prompts.preview import preview_system_prompt_for_account
 from services.security.api_key_security import encrypt_api_key, mask_api_key_for_display
+from services.account_api_service import AccountApiService
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/account", tags=["account"])
 
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
 @router.get("/list")
 async def list_all_accounts(db: Session = Depends(get_db)):
     """Get all active accounts (for paper trading demo)"""
     try:
-        from database.models import User
-        accounts = db.query(Account).filter(Account.is_active == "true").all()
+        account_service = AccountApiService(db)
+        accounts = account_service.list_active_accounts()
         
         result = []
         for account in accounts:
-            user = db.query(User).filter(User.id == account.user_id).first()
+            user = account_service.get_user(account.user_id)
             result.append({
                 "id": account.id,
                 "user_id": account.user_id,
@@ -98,10 +89,8 @@ async def get_specific_account_overview(account_id: int, db: Session = Depends(g
     """Get overview for a specific account"""
     try:
         # Get the specific account
-        account = db.query(Account).filter(
-            Account.id == account_id,
-            Account.is_active == "true"
-        ).first()
+        account_service = AccountApiService(db)
+        account = account_service.get_active_account(account_id)
         
         if not account:
             raise HTTPException(status_code=404, detail="Account not found")
@@ -111,30 +100,12 @@ async def get_specific_account_overview(account_id: int, db: Session = Depends(g
         positions_value = float(calc_positions_market_value(db, account.id) or 0.0)
         
         # Count positions and pending orders for this account
-        positions_count = db.query(Position).filter(
-            Position.account_id == account.id,
-            Position.quantity > 0
-        ).count()
-        
-        from database.models import Order, RuleEvaluationResult
-        pending_orders = db.query(Order).filter(
-            Order.account_id == account.id,
-            Order.status == "PENDING"
-        ).count()
+        positions_count, pending_orders = account_service.get_position_order_counts(account.id)
         
         # Get LLM audit statistics from rule_evaluation_results table
         llm_audit_stats = None
         try:
-            from sqlalchemy import func
-            audit_results = db.query(
-                func.count(RuleEvaluationResult.id).label('count'),
-                func.avg(RuleEvaluationResult.llm_audit_score).label('avg_score'),
-                func.avg(RuleEvaluationResult.llm_audit_coverage).label('avg_coverage'),
-                func.avg(RuleEvaluationResult.llm_audit_conflict).label('avg_conflict')
-            ).filter(
-                RuleEvaluationResult.account_id == account.id,
-                RuleEvaluationResult.llm_audit_score.isnot(None)  # Only include records with LLM audit
-            ).first()
+            audit_results = account_service.get_llm_audit_stats(account.id)
 
             if audit_results and audit_results.count > 0:
                 llm_audit_stats = {
@@ -172,10 +143,7 @@ async def get_specific_account_overview(account_id: int, db: Session = Depends(g
 async def get_account_system_prompt(account_id: int, db: Session = Depends(get_db)):
     """Get rendered system prompt for a specific account."""
     try:
-        account = db.query(Account).filter(
-            Account.id == account_id,
-            Account.is_active == "true"
-        ).first()
+        account = AccountApiService(db).get_active_account(account_id)
         if not account:
             raise HTTPException(status_code=404, detail="Account not found")
 
@@ -213,7 +181,8 @@ async def get_account_overview(db: Session = Depends(get_db)):
     """Get overview for the default account (for paper trading demo)"""
     try:
         # Get the first active account (default account)
-        account = db.query(Account).filter(Account.is_active == "true").first()
+        account_service = AccountApiService(db)
+        account = account_service.get_default_active_account()
         
         if not account:
             raise HTTPException(status_code=404, detail="No active account found")
@@ -223,16 +192,7 @@ async def get_account_overview(db: Session = Depends(get_db)):
         positions_value = float(calc_positions_market_value(db, account.id) or 0.0)
         
         # Count positions and pending orders
-        positions_count = db.query(Position).filter(
-            Position.account_id == account.id,
-            Position.quantity > 0
-        ).count()
-        
-        from database.models import Order
-        pending_orders = db.query(Order).filter(
-            Order.account_id == account.id,
-            Order.status == "PENDING"
-        ).count()
+        positions_count, pending_orders = account_service.get_position_order_counts(account.id)
         
         return {
             "account": {
@@ -267,15 +227,12 @@ async def create_new_account(payload: dict, db: Session = Depends(get_db)):
                 detail="Account creation API is disabled by deployment configuration",
             )
 
-        from database.models import User
-        
         # Log incoming payload for debugging
         logger.info(f"Creating account with payload: {payload}")
 
         # Get the default user (or first user)
-        user = db.query(User).filter(User.username == "default").first()
-        if not user:
-            user = db.query(User).first()
+        account_service = AccountApiService(db)
+        user = account_service.get_default_user()
         
         if not user:
             raise HTTPException(status_code=404, detail="No user found")
@@ -310,9 +267,7 @@ async def create_new_account(payload: dict, db: Session = Depends(get_db)):
             is_active="true"
         )
         
-        db.add(new_account)
-        db.commit()
-        db.refresh(new_account)
+        account_service.persist(new_account)
         
         logger.info(f"Account created successfully: ID={new_account.id}, name={new_account.name}, enable_rule_aware={new_account.enable_rule_aware}")
 
@@ -363,10 +318,8 @@ async def update_account_settings(account_id: int, payload: dict, db: Session = 
 
         logger.info(f"Updating account {account_id} with payload: {payload}")
         
-        account = db.query(Account).filter(
-            Account.id == account_id,
-            Account.is_active == "true"
-        ).first()
+        account_service = AccountApiService(db)
+        account = account_service.get_active_account(account_id)
         
         if not account:
             raise HTTPException(status_code=404, detail="Account not found")
@@ -410,8 +363,7 @@ async def update_account_settings(account_id: int, payload: dict, db: Session = 
                 f"Updated api_key (input_length: {len(incoming_api_key) if incoming_api_key else 0}, stored_as_encrypted: {bool(incoming_api_key)})"
             )
         
-        db.commit()
-        db.refresh(account)
+        account_service.persist(account)
         logger.info(f"Account {account_id} updated successfully")
         
         # Reset auto trading job after account update. Runs in a worker
@@ -423,8 +375,7 @@ async def update_account_settings(account_id: int, payload: dict, db: Session = 
         except Exception as e:
             logger.warning(f"Failed to reset auto trading job: {e}")
         
-        from database.models import User
-        user = db.query(User).filter(User.id == account.user_id).first()
+        user = account_service.get_user(account.user_id)
         
         return {
             "id": account.id,

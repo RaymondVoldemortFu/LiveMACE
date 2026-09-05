@@ -2,7 +2,17 @@ from __future__ import annotations
 
 import inspect
 
-from api import extension_routes, order_routes, ws
+from api import (
+    account_routes,
+    agent_routes,
+    compliance_routes,
+    evaluation_routes,
+    extension_routes,
+    memory_routes,
+    order_routes,
+    ranking_routes,
+    ws,
+)
 from benchmark.bootstrap.app import create_app
 from benchmark.bootstrap.runtime import StartupMode
 
@@ -34,7 +44,17 @@ def test_m14_operations_are_registered_with_declared_success_schemas():
 
 
 def test_g8_route_adapters_do_not_own_sessions_or_query_the_orm():
-    for module in (extension_routes, order_routes, ws):
+    for module in (
+        account_routes,
+        agent_routes,
+        compliance_routes,
+        evaluation_routes,
+        extension_routes,
+        memory_routes,
+        order_routes,
+        ranking_routes,
+        ws,
+    ):
         source = inspect.getsource(module)
         assert "SessionLocal" not in source
         assert ".query(" not in source
