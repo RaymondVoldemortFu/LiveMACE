@@ -128,78 +128,6 @@ export async function getEvalAccountCheckpoints(
   return response.json()
 }
 
-// AI Decision Log interfaces and functions
-export interface AIDecision {
-  id: number
-  account_id: number
-  decision_time: string
-  reason: string
-  operation: string
-  symbol?: string
-  prev_portion: number
-  target_portion: number
-  total_balance: number
-  executed: string
-  order_id?: number
-  leverage?: number
-}
-
-export interface AIDecisionFilters {
-  operation?: string
-  symbol?: string
-  executed?: boolean
-  start_date?: string
-  end_date?: string
-  limit?: number
-}
-
-export async function getAIDecisions(accountId: number, filters?: AIDecisionFilters): Promise<AIDecision[]> {
-  const params = new URLSearchParams()
-  if (filters?.operation) params.append('operation', filters.operation)
-  if (filters?.symbol) params.append('symbol', filters.symbol)
-  if (filters?.executed !== undefined) params.append('executed', filters.executed.toString())
-  if (filters?.start_date) params.append('start_date', filters.start_date)
-  if (filters?.end_date) params.append('end_date', filters.end_date)
-  if (filters?.limit) params.append('limit', filters.limit.toString())
-  
-  const queryString = params.toString()
-  const endpoint = `/accounts/${accountId}/ai-decisions${queryString ? `?${queryString}` : ''}`
-  
-  const response = await apiRequest(endpoint)
-  return response.json()
-}
-
-export async function getAIDecisionById(accountId: number, decisionId: number): Promise<AIDecision> {
-  const response = await apiRequest(`/accounts/${accountId}/ai-decisions/${decisionId}`)
-  return response.json()
-}
-
-export async function getAIDecisionStats(accountId: number, days?: number): Promise<{
-  total_decisions: number
-  executed_decisions: number
-  execution_rate: number
-  operations: { [key: string]: number }
-  avg_target_portion: number
-}> {
-  const params = days ? `?days=${days}` : ''
-  const response = await apiRequest(`/accounts/${accountId}/ai-decisions/stats${params}`)
-  return response.json()
-}
-
-// User authentication interfaces
-export interface User {
-  id: number
-  username: string
-  email?: string
-  is_active: boolean
-}
-
-export interface UserAuthResponse {
-  user: User
-  session_token: string
-  expires_at: string
-}
-
 // Trading Account management functions
 export interface TradingAccount {
   id: number
@@ -258,47 +186,6 @@ export interface AccountSystemPromptResponse {
   prompt_id?: string | null
   prompt_version?: string | null
   prompt_hash?: string
-}
-
-export async function loginUser(username: string, password: string): Promise<UserAuthResponse> {
-  const response = await apiRequest('/users/login', {
-    method: 'POST',
-    body: JSON.stringify({ username, password }),
-  })
-  return response.json()
-}
-
-export async function getUserProfile(sessionToken: string): Promise<User> {
-  const response = await apiRequest(`/users/profile?session_token=${sessionToken}`)
-  return response.json()
-}
-
-// Trading Account management functions (matching backend query parameter style)
-export async function listTradingAccounts(sessionToken: string): Promise<TradingAccount[]> {
-  const response = await apiRequest(`/accounts/?session_token=${sessionToken}`)
-  return response.json()
-}
-
-export async function createTradingAccount(account: TradingAccountCreate, sessionToken: string): Promise<TradingAccount> {
-  const response = await apiRequest(`/accounts/?session_token=${sessionToken}`, {
-    method: 'POST',
-    body: JSON.stringify(account),
-  })
-  return response.json()
-}
-
-export async function updateTradingAccount(accountId: number, account: TradingAccountUpdate, sessionToken: string): Promise<TradingAccount> {
-  const response = await apiRequest(`/accounts/${accountId}?session_token=${sessionToken}`, {
-    method: 'PUT',
-    body: JSON.stringify(account),
-  })
-  return response.json()
-}
-
-export async function deleteTradingAccount(accountId: number, sessionToken: string): Promise<void> {
-  await apiRequest(`/accounts/${accountId}?session_token=${sessionToken}`, {
-    method: 'DELETE',
-  })
 }
 
 // Account functions for paper trading with hardcoded user
