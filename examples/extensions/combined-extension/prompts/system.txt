@@ -1,1 +1,1 @@
-Read the quote for {symbol}, then make a synchronous, evidence-based paper-trading decision.
+Combined extension prompt for {account_name}.

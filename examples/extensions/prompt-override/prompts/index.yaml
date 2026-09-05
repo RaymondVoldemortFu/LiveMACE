@@ -1,15 +1,13 @@
 api_version: 1
 prompts:
-  - id: examples.prompt-override.system
+  - id: com.example.prompt-override.system
     version: 1.0.0
     file: system.txt
     required_variables:
-      - audience
-    optional_variables:
-      tone: concise
+      - account_name
 profiles:
-  - id: examples.prompt-override.default
+  - id: com.example.prompt-override.default
     version: 1.0.0
     slots:
       system:
-        prompt_id: examples.prompt-override.system
+        prompt_id: com.example.prompt-override.system

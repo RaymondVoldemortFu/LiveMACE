@@ -160,6 +160,8 @@ def _list_payload(directory: Path) -> tuple[int, dict[str, Any]]:
                 {"path": "manifest", "message": str(exc), "code": "MANIFEST_INVALID"},
             ),
         }
+    agents = tuple(component.id for component in manifest.components.agents)
+    tools = tuple(component.provider for component in manifest.components.tools)
     return 0, {
         "valid": True,
         "directory": str(root),
@@ -170,6 +172,17 @@ def _list_payload(directory: Path) -> tuple[int, dict[str, Any]]:
         "description": manifest.description,
         "capabilities": tuple(manifest.capabilities.requested),
         "components": component_ids,
+        # Flat keys retain the initial CLI JSON contract while components
+        # provides resolved Prompt ids and a uniform grouped representation.
+        "agents": agents,
+        "tools": tools,
+        "prompts": tuple(
+            {
+                "directory": component.directory,
+                "index": component.index,
+            }
+            for component in manifest.components.prompts
+        ),
     }
 
 
@@ -331,7 +344,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         item_code, payload = _list_payload(directory)
         code = max(code, item_code)
         rows.append(payload)
-    _print_payload(rows, json_output=arguments.json_output)
+    payload: Any = rows[0] if arguments.json_output and len(rows) == 1 else rows
+    _print_payload(payload, json_output=arguments.json_output)
     return code
 
 

@@ -9,10 +9,13 @@ from .context import (
     build_fake_agent_build_context,
     build_fake_build_context,
     build_fake_context,
+    tool_context_from_decision,
 )
 from .contracts import (
     AgentCase,
+    ContractViolation,
     ToolCase,
+    arguments_from_input_schema,
     assert_agent_contract,
     assert_prompt_contract,
     assert_tool_contract,
@@ -53,10 +56,13 @@ __all__ = [
     "FakeTradeGateway",
     "AgentCase",
     "ToolCase",
+    "ContractViolation",
+    "arguments_from_input_schema",
     "assert_agent_contract",
     "assert_tool_contract",
     "assert_prompt_contract",
     "build_fake_context",
     "build_fake_agent_build_context",
     "build_fake_build_context",
+    "tool_context_from_decision",
 ]

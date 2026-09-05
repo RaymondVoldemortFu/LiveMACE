@@ -26,6 +26,7 @@ from benchmark.extensions import (
 )
 from benchmark.prompts import PromptRegistry, PromptSourcePriority
 from benchmark.prompts.renderer import parse_template, render_template
+from benchmark.testing import build_fake_build_context
 from benchmark.tools import ToolRegistry
 
 
@@ -114,14 +115,41 @@ def test_builtin_runtime_is_catalogued_and_frozen():
         ("benchmark.core", ExtensionStatus.LOADED)
     ]
     assert [descriptor.id for descriptor in runtime.catalog.list_agents()] == [
+        "core.advanced-multi-agent",
+        "core.multi-agent",
         "core.react",
         "core.rule-aware",
     ]
+    tool_names = {spec.name for spec in runtime.catalog.list_tools()}
+    assert {
+        "core.account_state",
+        "core.decision_history",
+        "core.kline_history",
+        "core.market_snapshot",
+        "core.memory_add",
+        "core.memory_search",
+        "core.search",
+        "core.execute_shell_command",
+        "core.read_file",
+        "core.write_file",
+        "core.run_python_script",
+    }.issubset(tool_names)
+    assert "core.execute_trade" not in tool_names
+    assert any(name.startswith("public.") for name in tool_names)
     assert len(runtime.catalog.list_prompt_profiles()) == 9
     assert runtime.agents.frozen
     assert runtime.tools.frozen
     assert runtime.prompts.frozen
     assert all("root" not in record.to_dict() for record in records)
+
+    public_context = build_fake_build_context(prompts=runtime.prompts)
+    for descriptor in runtime.catalog.list_agents():
+        report = runtime.agents.validate_config(descriptor.id, {})
+        assert report.valid, (descriptor.id, [issue.message for issue in report.errors])
+        created = runtime.agents.get(descriptor.id).factory.create(
+            public_context, report.normalized_config
+        )
+        assert callable(created.run)
 
 
 def test_builtin_runtime_is_deterministic():
@@ -132,6 +160,7 @@ def test_builtin_runtime_is_deterministic():
         record.to_dict() for record in second.catalog.list_extensions()
     ]
     assert first.catalog.list_agents() == second.catalog.list_agents()
+    assert first.catalog.list_tools() == second.catalog.list_tools()
     assert first.catalog.list_prompt_profiles() == second.catalog.list_prompt_profiles()
 
 

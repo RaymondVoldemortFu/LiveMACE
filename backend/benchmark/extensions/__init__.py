@@ -19,6 +19,7 @@ from .discovery import (
     ExtensionSource,
     discover_extensions,
     settings_from_paths,
+    settings_from_environ,
 )
 from .loader import (
     ExtensionLoadRecord,
@@ -52,6 +53,7 @@ __all__ = [
     "ExtensionCandidate",
     "discover_extensions",
     "settings_from_paths",
+    "settings_from_environ",
     "ExtensionStatus",
     "ExtensionLoadRecord",
     "ExtensionLoadResult",

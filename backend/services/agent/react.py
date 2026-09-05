@@ -12,7 +12,7 @@ from .tool_selector import (
     META_TOOL_NAME,
 )
 from config.agent_config import AgentConfig
-from benchmark.builtin.prompts import render_react_prompt
+from benchmark.builtin.prompts import REACT_PROFILE_BY_FLAGS, get_prompt_resolver, render_react_prompt
 from .base import BaseAgent
 from services.time_source import now_in_tz
 
@@ -236,10 +236,17 @@ class ReActAgent(BaseAgent):
 
             if remaining_steps < self.step_reminder_threshold:
                 logger.info(f"Adding step reminder (Remaining: {remaining_steps})")
-                reminder_text = (
-                    f"Reminder: You have {remaining_steps} steps remaining. "
-                    f"You must output {termination_token} before running out of steps."
-                )
+                profile_id = REACT_PROFILE_BY_FLAGS[
+                    (self.memory_enabled, self.tool_routing_enabled)
+                ]
+                reminder_text = get_prompt_resolver(self.prompt_resolver).render_slot(
+                    profile_id,
+                    "step_reminder",
+                    {
+                        "remaining_steps": remaining_steps,
+                        "termination_token": termination_token,
+                    },
+                ).content
                 request_messages.append({
                     "role": "user",
                     "content": reminder_text,

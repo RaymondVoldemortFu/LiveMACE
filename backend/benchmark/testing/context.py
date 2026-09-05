@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Iterable, Mapping
+from uuid import uuid4
 
 from benchmark.agents import AgentBuildContext
 from benchmark.contracts import (
@@ -14,6 +15,7 @@ from benchmark.contracts import (
     Market,
     PortfolioView,
     PositionView,
+    ToolContext,
     to_jsonable,
 )
 from benchmark.prompts import PromptRegistry
@@ -128,6 +130,7 @@ def build_fake_context(
     total_assets: Decimal | int | float | str | None = None,
     captured_at: datetime | None = None,
     now: datetime | None = None,
+    cash: Decimal | int | float | str | None = None,
 ) -> DecisionContext:
     """Build a valid, immutable ``DecisionContext`` without application state.
 
@@ -136,6 +139,10 @@ def build_fake_context(
     and is converted before constructing the public DTO.
     """
 
+    if cash is not None:
+        if current_cash is not None:
+            raise TypeError("cash and current_cash are aliases; provide one")
+        current_cash = cash
     if (
         not isinstance(account_id, int)
         or isinstance(account_id, bool)
@@ -258,8 +265,23 @@ def build_fake_agent_build_context(
 build_fake_build_context = build_fake_agent_build_context
 
 
+def tool_context_from_decision(context: DecisionContext) -> ToolContext:
+    """Create a fully authorized Tool context preserving decision identities."""
+
+    if not isinstance(context, DecisionContext):
+        raise TypeError("context must be DecisionContext")
+    return ToolContext(
+        account_id=context.account_id,
+        decision_round_id=context.decision_round_id,
+        trace_id=context.trace_id,
+        call_id=f"call-{uuid4().hex[:8]}",
+        capabilities=frozenset(KNOWN_CAPABILITIES),
+    )
+
+
 __all__ = [
     "build_fake_context",
     "build_fake_agent_build_context",
     "build_fake_build_context",
+    "tool_context_from_decision",
 ]

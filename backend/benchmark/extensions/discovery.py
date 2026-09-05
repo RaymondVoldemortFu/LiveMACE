@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from enum import Enum
 import os
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Mapping
 
 from benchmark.contracts import KNOWN_CAPABILITIES, require_identifier
 
@@ -110,6 +110,37 @@ def discover_extensions(settings: ExtensionSettings) -> tuple[ExtensionCandidate
     return tuple(candidates)
 
 
+def settings_from_environ(
+    environ: Mapping[str, str] | None = None,
+) -> ExtensionSettings:
+    """Build discovery settings from the ALPHA_ARENA_* process environment."""
+
+    source = os.environ if environ is None else environ
+    directories = source.get("ALPHA_ARENA_EXTENSION_DIRS", "")
+    roots = tuple(
+        Path(item.strip())
+        for item in directories.split(":")
+        if item.strip()
+    )
+    disabled = frozenset(
+        item.strip()
+        for item in source.get("ALPHA_ARENA_DISABLED_EXTENSIONS", "").split(",")
+        if item.strip()
+    )
+    raw_capabilities = source.get("ALPHA_ARENA_ALLOWED_CAPABILITIES")
+    if raw_capabilities is None or not raw_capabilities.strip():
+        capabilities = KNOWN_CAPABILITIES
+    else:
+        capabilities = frozenset(
+            item.strip() for item in raw_capabilities.split(",") if item.strip()
+        )
+    return ExtensionSettings(
+        extension_roots=roots,
+        disabled_extensions=disabled,
+        allowed_capabilities=capabilities,
+    )
+
+
 def settings_from_paths(
     *,
     builtin_root: Path | None = None,
@@ -132,5 +163,6 @@ __all__ = [
     "ExtensionSettings",
     "ExtensionCandidate",
     "discover_extensions",
+    "settings_from_environ",
     "settings_from_paths",
 ]

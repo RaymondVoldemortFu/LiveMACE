@@ -83,6 +83,10 @@ _LEGACY_TO_PUBLIC_TOOL_NAMES = {
     "memory_add": "core.memory_add",
     "memory_search": "core.memory_search",
     "consult_search_agent": "core.search",
+    "execute_shell_command": "core.execute_shell_command",
+    "read_file": "core.read_file",
+    "write_file": "core.write_file",
+    "run_python_script": "core.run_python_script",
 }
 _PUBLIC_TO_LEGACY_TOOL_NAMES = {
     public: legacy for legacy, public in _LEGACY_TO_PUBLIC_TOOL_NAMES.items()

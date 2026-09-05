@@ -57,6 +57,10 @@ from .events import FakeEventSink
 _UNSET = object()
 
 
+class ContractViolation(AssertionError):
+    """Raised when an extension violates the public synchronous SPI."""
+
+
 def _close_awaitable(value: Any) -> None:
     close = getattr(value, "close", None)
     if callable(close):
@@ -66,7 +70,7 @@ def _close_awaitable(value: Any) -> None:
 def _sync_or_assert(value: Any, label: str) -> Any:
     if isawaitable(value):
         _close_awaitable(value)
-        raise AssertionError(
+        raise ContractViolation(
             f"{label} returned an awaitable; v1 extension SPI is synchronous"
         )
     return value
@@ -83,7 +87,7 @@ def _as_reason(value: Any) -> TerminationReason | None:
                 return TerminationReason[value]
             except KeyError:
                 pass
-    raise AssertionError(f"unknown expected termination reason: {value!r}")
+    raise ContractViolation(f"unknown expected termination reason: {value!r}")
 
 
 @dataclass(frozen=True, init=False)
@@ -193,6 +197,7 @@ class ToolCase:
     """One Tool invocation and optional expectation for contract assertions."""
 
     name: str
+    tool_name: str
     arguments: Mapping[str, Any]
     context: ToolContext | None
     expected_ok: bool | None
@@ -227,11 +232,12 @@ class ToolCase:
             arguments = values.pop(0)
         if values:
             raise TypeError("too many positional arguments for ToolCase")
-        chosen_name = name if name is not None else tool_name
-        if name is not None and tool_name is not None and name != tool_name:
-            raise TypeError("name and tool_name disagree")
+        chosen_tool_name = tool_name if tool_name is not None else name
+        chosen_name = name if name is not None else chosen_tool_name
         if not isinstance(chosen_name, str) or not chosen_name.strip():
             raise ValueError("ToolCase name must be non-empty")
+        if not isinstance(chosen_tool_name, str) or not chosen_tool_name.strip():
+            raise ValueError("ToolCase tool_name must be non-empty")
         if arguments is not None and args_mapping is not None:
             raise TypeError("arguments and args_mapping are aliases; provide one")
         chosen_arguments = arguments if arguments is not None else args_mapping
@@ -264,6 +270,7 @@ class ToolCase:
         ):
             raise TypeError("capabilities must contain strings")
         object.__setattr__(self, "name", chosen_name)
+        object.__setattr__(self, "tool_name", chosen_tool_name)
         object.__setattr__(self, "arguments", chosen_arguments)
         object.__setattr__(self, "context", context)
         object.__setattr__(self, "expected_ok", expected_ok)
@@ -277,10 +284,6 @@ class ToolCase:
         ):
             raise ValueError("ToolCase deadline_at must be timezone-aware")
         object.__setattr__(self, "deadline_at", deadline_at)
-
-    @property
-    def tool_name(self) -> str:
-        return self.name
 
     @property
     def expected_result(self) -> Any:
@@ -330,19 +333,19 @@ def _assert_json(value: Any, label: str) -> Any:
     try:
         return to_jsonable(value)
     except (TypeError, ValueError) as exc:
-        raise AssertionError(f"{label} is not JSON-compatible: {exc}") from exc
+        raise ContractViolation(f"{label} is not JSON-compatible: {exc}") from exc
 
 
 def _assert_schema(schema: Mapping[str, Any], label: str) -> None:
     if not isinstance(schema, Mapping):
-        raise AssertionError(f"{label} must be a mapping")
+        raise ContractViolation(f"{label} must be a mapping")
     try:
         validator_type = validators.validator_for(
             dict(schema), default=Draft202012Validator
         )
         validator_type.check_schema(dict(schema))
     except (SchemaError, TypeError, ValueError) as exc:
-        raise AssertionError(f"{label} is not a valid JSON Schema: {exc}") from exc
+        raise ContractViolation(f"{label} is not a valid JSON Schema: {exc}") from exc
 
 
 def assert_agent_contract(
@@ -357,7 +360,7 @@ def assert_agent_contract(
     """
 
     if not isinstance(factory, AgentFactory):
-        raise AssertionError("factory must implement the public AgentFactory SPI")
+        raise ContractViolation("factory must implement the public AgentFactory SPI")
     normalized_cases = (
         (AgentCase(),)
         if cases is None
@@ -366,10 +369,12 @@ def assert_agent_contract(
     for case in normalized_cases:
         context = case.context
         if not isinstance(context, DecisionContext):
-            raise AssertionError(f"Agent case {case.name!r} has an invalid context")
+            raise ContractViolation(f"Agent case {case.name!r} has an invalid context")
         config = _assert_json(case.config, f"Agent case {case.name!r} config")
         if not isinstance(config, dict):
-            raise AssertionError(f"Agent case {case.name!r} config must be an object")
+            raise ContractViolation(
+                f"Agent case {case.name!r} config must be an object"
+            )
         if case.config_schema is not None:
             _assert_schema(
                 case.config_schema, f"Agent case {case.name!r} config_schema"
@@ -378,7 +383,7 @@ def assert_agent_contract(
                 Draft202012Validator(dict(case.config_schema)).iter_errors(config)
             )
             if errors:
-                raise AssertionError(
+                raise ContractViolation(
                     f"Agent case {case.name!r} config does not match schema: "
                     + errors[0].message
                 )
@@ -399,11 +404,11 @@ def assert_agent_contract(
         except AssertionError:
             raise
         except Exception as exc:
-            raise AssertionError(
+            raise ContractViolation(
                 f"AgentFactory.create failed in case {case.name!r}: {type(exc).__name__}"
             ) from exc
         if not isinstance(agent, Agent):
-            raise AssertionError(f"Agent case {case.name!r} did not create an Agent")
+            raise ContractViolation(f"Agent case {case.name!r} did not create an Agent")
         try:
             result = _sync_or_assert(
                 agent.run(context),
@@ -412,23 +417,27 @@ def assert_agent_contract(
         except AssertionError:
             raise
         except Exception as exc:
-            raise AssertionError(
+            raise ContractViolation(
                 f"Agent.run failed in case {case.name!r}: {type(exc).__name__}"
             ) from exc
         if not isinstance(result, AgentRunResult):
-            raise AssertionError(
+            raise ContractViolation(
                 f"Agent case {case.name!r} returned {type(result).__name__}, expected AgentRunResult"
             )
         if result.trace_id != context.trace_id:
-            raise AssertionError(f"Agent case {case.name!r} changed trace_id")
+            raise ContractViolation(f"Agent case {case.name!r} changed trace_id")
         if result.decision_round_id != context.decision_round_id:
-            raise AssertionError(f"Agent case {case.name!r} changed decision_round_id")
+            raise ContractViolation(
+                f"Agent case {case.name!r} changed decision_round_id"
+            )
         if not isinstance(result.summary, str):
-            raise AssertionError(f"Agent case {case.name!r} summary must be a string")
+            raise ContractViolation(
+                f"Agent case {case.name!r} summary must be a string"
+            )
         _assert_json(result, f"Agent case {case.name!r} result")
         expected = case.expected_termination
         if expected is not None and result.termination_reason is not expected:
-            raise AssertionError(
+            raise ContractViolation(
                 f"Agent case {case.name!r} terminated with "
                 f"{result.termination_reason.value!r}, expected {expected.value!r}"
             )
@@ -477,6 +486,17 @@ def _schema_example(schema: Mapping[str, Any]) -> Any:
     if schema_type == "boolean":
         return True
     return "example"
+
+
+def arguments_from_input_schema(
+    schema: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Build a schema-valid example object when one can be derived."""
+
+    if not isinstance(schema, Mapping):
+        return {}
+    candidate = _schema_example(schema)
+    return candidate if isinstance(candidate, dict) else {}
 
 
 def _sensitive_values(value: Any, *, key: str = "") -> set[str]:
@@ -536,23 +556,27 @@ def assert_tool_contract(
     """Assert ToolProvider specs, synchronous invocation, and redacted events."""
 
     if not isinstance(provider, ToolProvider):
-        raise AssertionError("provider must implement the public ToolProvider SPI")
+        raise ContractViolation("provider must implement the public ToolProvider SPI")
     try:
         tools = _sync_or_assert(provider.list_tools(), "ToolProvider.list_tools")
     except AssertionError:
         raise
     except Exception as exc:
-        raise AssertionError(
+        raise ContractViolation(
             f"ToolProvider.list_tools failed: {type(exc).__name__}"
         ) from exc
     if isinstance(tools, (str, bytes)):
-        raise AssertionError("ToolProvider.list_tools must return a sequence of Tools")
+        raise ContractViolation(
+            "ToolProvider.list_tools must return a sequence of Tools"
+        )
     try:
         tools = tuple(tools)
     except Exception as exc:
-        raise AssertionError("ToolProvider.list_tools must return a sequence") from exc
+        raise ContractViolation(
+            "ToolProvider.list_tools must return a sequence"
+        ) from exc
     if not tools:
-        raise AssertionError("ToolProvider.list_tools must expose at least one Tool")
+        raise ContractViolation("ToolProvider.list_tools must expose at least one Tool")
 
     contexts_by_name: dict[str, list[ToolContext]] = {}
     wrapped: list[Tool] = []
@@ -560,17 +584,21 @@ def assert_tool_contract(
     trading_allowlist: set[str] = set()
     for position, tool in enumerate(tools):
         if not isinstance(tool, Tool):
-            raise AssertionError(f"Tool at position {position} does not implement Tool")
+            raise ContractViolation(
+                f"Tool at position {position} does not implement Tool"
+            )
         try:
             spec = tool.spec
         except Exception as exc:
-            raise AssertionError(
+            raise ContractViolation(
                 f"Tool at position {position} has no readable spec"
             ) from exc
         if not isinstance(spec, ToolSpec):
-            raise AssertionError(f"Tool at position {position} spec must be ToolSpec")
+            raise ContractViolation(
+                f"Tool at position {position} spec must be ToolSpec"
+            )
         if spec.name in names:
-            raise AssertionError(f"duplicate Tool name: {spec.name}")
+            raise ContractViolation(f"duplicate Tool name: {spec.name}")
         names.add(spec.name)
         try:
             require_identifier(spec.name, "tool name")
@@ -578,7 +606,7 @@ def assert_tool_contract(
             schema_validator(spec.input_schema)
             schema_validator(spec.output_schema)
         except Exception as exc:
-            raise AssertionError(
+            raise ContractViolation(
                 f"Tool {spec.name!r} has an invalid specification: {exc}"
             ) from exc
         if TRADING_WRITE in spec.required_capabilities:
@@ -587,7 +615,9 @@ def assert_tool_contract(
             spec.side_effect.value == "read_only"
             and TRADING_WRITE in spec.required_capabilities
         ):
-            raise AssertionError(f"read-only Tool {spec.name!r} requests trading.write")
+            raise ContractViolation(
+                f"read-only Tool {spec.name!r} requests trading.write"
+            )
         contexts_by_name[spec.name] = []
         wrapped.append(_RecordingTool(tool, contexts_by_name[spec.name]))
 
@@ -598,7 +628,9 @@ def assert_tool_contract(
         registry.register_provider(_provider_extension(provider), _Provider(wrapped))
         registry.freeze()
     except Exception as exc:
-        raise AssertionError(f"Tool provider could not be registered: {exc}") from exc
+        raise ContractViolation(
+            f"Tool provider could not be registered: {exc}"
+        ) from exc
 
     if cases is not None:
         normalized_cases = tuple(_normalize_tool_case(item) for item in cases)
@@ -620,9 +652,11 @@ def assert_tool_contract(
                 discovered.append(ToolCase(name=name, arguments=arguments))
         normalized_cases = tuple(discovered)
     for case in normalized_cases:
-        if case.name not in names:
-            raise AssertionError(f"Tool case {case.name!r} names an unknown Tool")
-        registry.get(case.name)
+        if case.tool_name not in names:
+            raise ContractViolation(
+                f"Tool case {case.name!r} names an unknown Tool: {case.tool_name!r}"
+            )
+        registry.get(case.tool_name)
         capabilities = (
             frozenset(KNOWN_CAPABILITIES)
             if case.capabilities is None
@@ -630,12 +664,12 @@ def assert_tool_contract(
         )
         unknown = capabilities.difference(KNOWN_CAPABILITIES)
         if unknown:
-            raise AssertionError(
+            raise ContractViolation(
                 f"Tool case {case.name!r} has unknown capabilities: {sorted(unknown)}"
             )
         if case.context is not None:
             if not isinstance(case.context, ToolContext):
-                raise AssertionError(
+                raise ContractViolation(
                     f"Tool case {case.name!r} has an invalid ToolContext"
                 )
             account_id = case.context.account_id
@@ -645,8 +679,8 @@ def assert_tool_contract(
                 capabilities = case.context.capabilities
         else:
             account_id = 1
-            decision_round_id = f"contract-round-{case.name}"
-            trace_id = f"contract-trace-{case.name}"
+            decision_round_id = f"contract-round-{case.tool_name}"
+            trace_id = f"contract-trace-{case.tool_name}"
         events = FakeEventSink()
         invoker = SynchronousToolInvoker(
             registry,
@@ -658,45 +692,51 @@ def assert_tool_contract(
             deadline_at=case.deadline_at,
         )
         try:
-            result = invoker.call(case.name, case.arguments)
+            result = invoker.call(case.tool_name, case.arguments)
         except ToolRuntimeError as exc:
             if case.expected_error_code != exc.code:
                 if exc.code == "ASYNC_TOOL_UNSUPPORTED":
-                    raise AssertionError(
+                    raise ContractViolation(
                         f"Tool case {case.name!r} returned an awaitable"
                     ) from exc
-                raise AssertionError(
+                raise ContractViolation(
                     f"Tool case {case.name!r} raised {exc.code}, expected "
                     f"{case.expected_error_code or 'a ToolResult'}"
                 ) from exc
             continue
         except Exception as exc:
-            raise AssertionError(
+            raise ContractViolation(
                 f"Tool case {case.name!r} failed: {type(exc).__name__}"
             ) from exc
         if not isinstance(result, ToolResult):
-            raise AssertionError(f"Tool case {case.name!r} did not return ToolResult")
+            raise ContractViolation(
+                f"Tool case {case.name!r} did not return ToolResult"
+            )
         if case.expected_ok is not None and result.ok is not case.expected_ok:
-            raise AssertionError(f"Tool case {case.name!r} returned ok={result.ok!r}")
+            raise ContractViolation(
+                f"Tool case {case.name!r} returned ok={result.ok!r}"
+            )
         if (
             case.expected_error_code is not None
             and result.error_code != case.expected_error_code
         ):
-            raise AssertionError(
+            raise ContractViolation(
                 f"Tool case {case.name!r} returned error_code={result.error_code!r}, "
                 f"expected {case.expected_error_code!r}"
             )
         if case.expected_value is not _UNSET and result.value != case.expected_value:
-            raise AssertionError(
+            raise ContractViolation(
                 f"Tool case {case.name!r} returned an unexpected value"
             )
         _assert_json(result, f"Tool case {case.name!r} result")
-        received = contexts_by_name[case.name]
+        received = contexts_by_name[case.tool_name]
         if not received:
             # Input/schema/capability failures are valid contract cases but do
             # not produce an invocation context to inspect.
             if result.ok or case.expected_ok is True:
-                raise AssertionError(f"Tool case {case.name!r} did not invoke its Tool")
+                raise ContractViolation(
+                    f"Tool case {case.name!r} did not invoke its Tool"
+                )
         else:
             context = received[-1]
             if (
@@ -704,11 +744,11 @@ def assert_tool_contract(
                 or context.trace_id != trace_id
                 or context.decision_round_id != decision_round_id
             ):
-                raise AssertionError(
+                raise ContractViolation(
                     f"Tool case {case.name!r} received mismatched context ids"
                 )
             if context.deadline_at is None or context.deadline_at.tzinfo is None:
-                raise AssertionError(
+                raise ContractViolation(
                     f"Tool case {case.name!r} did not receive a deadline"
                 )
         secrets = _sensitive_values(case.arguments)
@@ -716,7 +756,7 @@ def assert_tool_contract(
         event_text = repr(events.snapshot())
         leaked = sorted(secret for secret in secrets if secret in event_text)
         if leaked:
-            raise AssertionError(
+            raise ContractViolation(
                 f"Tool case {case.name!r} leaked secret values in runtime events"
             )
 
@@ -731,33 +771,33 @@ def assert_prompt_contract(provider: PromptProvider) -> None:
     """Assert Prompt metadata, rendering, hashing, and synchronous behavior."""
 
     if not isinstance(provider, PromptProvider):
-        raise AssertionError("provider must implement the public PromptProvider SPI")
+        raise ContractViolation("provider must implement the public PromptProvider SPI")
     try:
         specs = _sync_or_assert(provider.list_prompts(), "PromptProvider.list_prompts")
     except AssertionError:
         raise
     except Exception as exc:
-        raise AssertionError(
+        raise ContractViolation(
             f"PromptProvider.list_prompts failed: {type(exc).__name__}"
         ) from exc
     if isinstance(specs, (str, bytes)):
-        raise AssertionError("PromptProvider.list_prompts must return a sequence")
+        raise ContractViolation("PromptProvider.list_prompts must return a sequence")
     try:
         specs = tuple(specs)
     except Exception as exc:
-        raise AssertionError(
+        raise ContractViolation(
             "PromptProvider.list_prompts must return a sequence"
         ) from exc
     if not specs:
-        raise AssertionError(
+        raise ContractViolation(
             "PromptProvider.list_prompts must expose at least one Prompt"
         )
     seen: set[str] = set()
     for spec in specs:
         if not isinstance(spec, PromptSpec):
-            raise AssertionError(f"Prompt {spec!r} is not PromptSpec")
+            raise ContractViolation(f"Prompt {spec!r} is not PromptSpec")
         if spec.id in seen:
-            raise AssertionError(f"duplicate Prompt id: {spec.id}")
+            raise ContractViolation(f"duplicate Prompt id: {spec.id}")
         seen.add(spec.id)
         try:
             rendered = _sync_or_assert(
@@ -767,25 +807,29 @@ def assert_prompt_contract(provider: PromptProvider) -> None:
         except AssertionError:
             raise
         except Exception as exc:
-            raise AssertionError(
+            raise ContractViolation(
                 f"PromptProvider.render({spec.id}) failed: {type(exc).__name__}"
             ) from exc
         if not isinstance(rendered, RenderedPrompt):
-            raise AssertionError(f"Prompt {spec.id!r} did not return RenderedPrompt")
+            raise ContractViolation(f"Prompt {spec.id!r} did not return RenderedPrompt")
         if rendered.spec != spec:
-            raise AssertionError(f"Prompt {spec.id!r} returned a different spec")
+            raise ContractViolation(f"Prompt {spec.id!r} returned a different spec")
         if len(rendered.content) > MAX_RENDERED_CHARACTERS:
-            raise AssertionError(f"Prompt {spec.id!r} exceeds rendered size limit")
+            raise ContractViolation(f"Prompt {spec.id!r} exceeds rendered size limit")
         if (
             rendered.content_sha256
             != sha256(rendered.content.encode("utf-8")).hexdigest()
         ):
-            raise AssertionError(f"Prompt {spec.id!r} returned an invalid content hash")
+            raise ContractViolation(
+                f"Prompt {spec.id!r} returned an invalid content hash"
+            )
 
 
 __all__ = [
     "AgentCase",
     "ToolCase",
+    "ContractViolation",
+    "arguments_from_input_schema",
     "assert_agent_contract",
     "assert_tool_contract",
     "assert_prompt_contract",

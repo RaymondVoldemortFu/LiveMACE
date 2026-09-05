@@ -25,7 +25,6 @@ from benchmark.builtin.prompts import (
     get_builtin_prompt_registry,
 )
 from benchmark.contracts import (
-    ComponentConfigError,
     ExtensionRef,
     Market,
     PromptSpec,
@@ -178,12 +177,12 @@ class _ResolverWithoutResolveSlot:
         return self._registry.render_slot(*args, **kwargs)
 
 
-def test_only_advanced_multi_agent_registers_as_a_public_component():
+def test_advanced_multi_agent_registers_as_a_public_component():
     registry = AgentRegistry()
     register_builtin_agents(registry)
     ids = {descriptor.id for descriptor in registry.list()}
     assert ADVANCED_MULTI_AGENT_COMPONENT_ID in ids
-    assert "core.multi-agent" not in ids
+    assert "core.multi-agent" in ids
     assert registry.validate_config(
         ADVANCED_MULTI_AGENT_COMPONENT_ID, {}
     ).normalized_config == {
@@ -196,7 +195,7 @@ def test_only_advanced_multi_agent_registers_as_a_public_component():
     ).valid
 
 
-def test_basic_multi_agent_remains_on_the_legacy_factory_path():
+def test_basic_multi_agent_legacy_factory_uses_the_public_registry():
     agent = create_agent(
         "multi_agent",
         FakeLLM([FakeLLMResponse("unused")]),
@@ -946,14 +945,13 @@ def test_execution_result_advances_only_for_unambiguous_success():
     assert not completed("executed")
 
 
-def test_advanced_runtime_rejects_public_tool_invoker():
-    runtime = AgentRuntime(
+def test_advanced_runtime_accepts_public_tool_invoker():
+    llm = FakeLLM([FakeLLMResponse("not-json"), FakeLLMResponse("still-not-json")])
+    result = AgentRuntime(
         _frozen_registry(),
-        _build_context(FakeLLM([]), FakeToolInvoker()),
+        _build_context(llm, FakeToolInvoker()),
+    ).run(
+        AgentSelection(ADVANCED_MULTI_AGENT_COMPONENT_ID, config={"max_steps": 2}),
+        make_decision_context(),
     )
-    with pytest.raises(ComponentConfigError) as caught:
-        runtime.run(
-            AgentSelection(ADVANCED_MULTI_AGENT_COMPONENT_ID),
-            make_decision_context(),
-        )
-    assert caught.value.code == "ADVANCED_MULTI_AGENT_LEGACY_TOOL_REGISTRY_REQUIRED"
+    assert result.termination_reason is TerminationReason.MAX_STEPS

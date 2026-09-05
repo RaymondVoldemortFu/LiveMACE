@@ -1,13 +1,15 @@
 api_version: 1
-id: examples.minimal-agent
+id: com.example.minimal-agent
 version: 1.0.0
-name: Minimal synchronous Agent
-description: "The smallest useful Agent extension: one synchronous HOLD decision."
+name: Minimal Hold Agent
+description: Smallest Agent that returns HOLD from a synchronous run().
 python:
   requires: ">=3.10"
-  entrypoint: agent:MinimalAgentFactory
+  entrypoint: agent:HoldAgentFactory
 components:
   agents:
-    - id: examples.minimal-agent.agent
-      factory: agent:MinimalAgentFactory
-      config_schema: config.json
+    - id: com.example.minimal-agent
+      factory: agent:HoldAgentFactory
+      config_schema: schema.json
+capabilities:
+  requested: []

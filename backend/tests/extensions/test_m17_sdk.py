@@ -242,7 +242,7 @@ def test_cli_validate_test_and_list_examples():
         text=True,
     )
     assert listed.returncode == 0
-    assert "examples.prompt-override.system" in listed.stdout
+    assert "com.example.prompt-override.system" in listed.stdout
 
 
 @pytest.mark.slow

@@ -62,6 +62,19 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["benchmark"]
+only-include = [
+  "benchmark",
+]
+
+[tool.hatch.build]
+include = [
+  "benchmark/**/*.py",
+  "benchmark/**/*.yaml",
+  "benchmark/**/*.yml",
+  "benchmark/**/*.json",
+  "benchmark/**/*.txt",
+]
+
 
 # Keep the checked-in, catalog-loadable examples available after a wheel
 # install.  The CLI also discovers this top-level resource in installed

@@ -1,59 +1,33 @@
-"""A capability-scoped, read-only Tool example."""
-
-from __future__ import annotations
-
-from typing import Mapping
-
-from benchmark.contracts import Market, SideEffect, ToolContext, ToolResult, ToolSpec
+from benchmark.contracts import MARKET_READ, SideEffect, ToolResult, ToolSpec
 
 
-class QuoteTool:
-    spec = ToolSpec(
-        name="examples.read-only-tool.quote",
-        description="Return a deterministic paper-market quote.",
-        input_schema={
-            "type": "object",
-            "properties": {
-                "symbol": {"type": "string", "minLength": 1},
-                "market": {"type": "string", "enum": ["CRYPTO", "US"]},
+class SymbolEchoTool:
+    def __init__(self):
+        self._spec = ToolSpec(
+            name="com.example.symbol-echo",
+            description="Echo a symbol for read-only inspection.",
+            input_schema={
+                "type": "object",
+                "properties": {"symbol": {"type": "string"}},
+                "required": ["symbol"],
             },
-            "required": ["symbol", "market"],
-            "additionalProperties": False,
-        },
-        output_schema={
-            "type": "object",
-            "properties": {
-                "symbol": {"type": "string"},
-                "market": {"type": "string"},
-                "price": {"type": "string"},
+            output_schema={
+                "type": "object",
+                "properties": {"symbol": {"type": "string"}},
             },
-            "required": ["symbol", "market", "price"],
-            "additionalProperties": False,
-        },
-        side_effect=SideEffect.READ_ONLY,
-        timeout_seconds=5.0,
-        required_capabilities=("market.read",),
-    )
-
-    def invoke(
-        self,
-        context: ToolContext,
-        arguments: Mapping[str, object],
-    ) -> ToolResult:
-        del context
-        market = Market(str(arguments["market"]).upper())
-        symbol = str(arguments["symbol"]).strip().upper()
-        # Strings keep the DTO JSON boundary explicit and deterministic.
-        price = "100" if market is Market.CRYPTO else "200"
-        return ToolResult(
-            ok=True,
-            value={"symbol": symbol, "market": market.value, "price": price},
+            side_effect=SideEffect.READ_ONLY,
+            required_capabilities=(MARKET_READ,),
         )
+
+    @property
+    def spec(self) -> ToolSpec:
+        return self._spec
+
+    def invoke(self, context, arguments) -> ToolResult:
+        del context
+        return ToolResult(ok=True, value={"symbol": arguments["symbol"]})
 
 
 class ReadOnlyToolProvider:
-    id = "examples.read-only-tool"
-    version = "1.0.0"
-
-    def list_tools(self) -> tuple[QuoteTool, ...]:
-        return (QuoteTool(),)
+    def list_tools(self):
+        return (SymbolEchoTool(),)

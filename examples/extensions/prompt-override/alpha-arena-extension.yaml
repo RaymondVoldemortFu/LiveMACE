@@ -1,9 +1,11 @@
 api_version: 1
-id: examples.prompt-override
+id: com.example.prompt-override
 version: 1.0.0
-name: Prompt-only override
-description: A Prompt-only extension; no Python component is required.
+name: Prompt Override
+description: Prompt-only extension that ships a file-backed profile.
 components:
   prompts:
     - directory: prompts
       index: prompts/index.yaml
+capabilities:
+  requested: []

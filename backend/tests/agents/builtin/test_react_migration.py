@@ -37,7 +37,6 @@ from benchmark.builtin.agents.react import (
 )
 from benchmark.builtin.prompts import get_builtin_prompt_registry, render_react_prompt
 from benchmark.contracts import (
-    ComponentConfigError,
     ExecutedTradeRef,
     Market,
     PositionView,
@@ -232,7 +231,7 @@ def test_adapter_runs_in_caller_thread_and_returns_hold(monkeypatch):
     )
 
 
-def test_runtime_rejects_public_tool_invoker_without_legacy_registry(
+def test_runtime_accepts_public_tool_invoker_without_legacy_registry(
     monkeypatch, decision_context
 ):
     _freeze_now(monkeypatch)
@@ -243,15 +242,13 @@ def test_runtime_rejects_public_tool_invoker_without_legacy_registry(
         prompts=get_builtin_prompt_registry(),
         events=NullEventSink(),
     )
-    runtime = _runtime(build)
-    with pytest.raises(ComponentConfigError, match="ToolRegistry") as caught:
-        runtime.run(
-            AgentSelection(
-                REACT_COMPONENT_ID, config={"max_steps": 1, "tool_routing_enabled": False}
-            ),
-            decision_context,
-        )
-    assert caught.value.code == "REACT_LEGACY_TOOL_REGISTRY_REQUIRED"
+    result = _runtime(build).run(
+        AgentSelection(
+            REACT_COMPONENT_ID, config={"max_steps": 1, "tool_routing_enabled": False}
+        ),
+        decision_context,
+    )
+    assert result.termination_reason is TerminationReason.HOLD
 
 
 def test_plain_react_exposes_default_non_routed_tools(monkeypatch):

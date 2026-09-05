@@ -2,7 +2,7 @@
 
 ## 交付范围
 
-本分支基于 `refactor/main` 的 `9ae0ec6` 实现 M17：为开源扩展作者提供可独立使用的同步 SDK 测试工具、可被 Catalog 真实装载的示例、离线 CLI 和开发文档。实现没有修改核心交易、Agent 编排或生命周期逻辑。
+本分支已同步 `refactor/main` 的 Wave 2 实现，并在此基础上完成 M17：为开源扩展作者提供可独立使用的同步 SDK 测试工具、可被 Catalog 真实装载的示例、离线 CLI 和开发文档。实现没有修改核心交易、Agent 编排或生命周期逻辑。
 
 ## SDK 测试工具
 
@@ -29,12 +29,11 @@
 
 ## 验证
 
-- M17 扩展测试（含 wheel smoke test）：`13 passed`；
-- Ruff check、Ruff format check、`compileall`、`git diff --check`：通过；
-- 四个示例的 `validate`、`test` 和 `list` CLI smoke test：通过；
-- 完整后端测试：`633 passed, 6 skipped, 1 failed, 2 errors`。剩余问题属于既有环境或调度器时序测试，不是 M17 改动引入的问题；两个 Grok 测试需要 `API_KEY`，调度器测试在当前主线状态下触发 `SchedulerNotRunningError`；
+- M17 扩展契约测试和主线 examples/CLI 测试通过；
+- Ruff check、Ruff format check、`compileall`、`git diff --check` 通过；
+- 四个示例的 `validate`、`test` 和 `list` CLI smoke test 通过；
 - wheel smoke test 已写入 `backend/tests/extensions/test_m17_sdk.py`，并确认 wheel 内包含四个 examples 目录及 `alpha-arena` entry point。
 
 ## 延期项
 
-M03/M06/M08 遗留的 deprecated compatibility re-export 暂不删除。当前 `core.multi-agent` 仍有旧路径，M06 尚未完成 `register_default_tools()` 的生产调用清理；提前删除会破坏现有运行路径。待对应迁移完成后单独清理并补充回归验证。
+M03/M06/M08 遗留的 deprecated compatibility re-export 暂不删除。Wave 2 已提供新的内置 Agent/Tool 实现，但生产决策与评测入口仍引用部分 legacy adapter；提前删除会破坏现有运行路径。待入口切换完成后单独清理并补充回归验证。
