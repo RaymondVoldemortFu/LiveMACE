@@ -128,14 +128,23 @@ Combination mode config:
 
 ## Extensions
 
-Built-in Agents, Tools, and Prompts load from `backend/benchmark/builtin/`. Third-party extensions use the same Catalog. Start with [the extension SDK](docs/extensions/README.md) and the directories under `examples/extensions/`.
+Open Alpha Arena exposes a synchronous extension SPI for Agents, Tools, and
+Prompt-only packages. Built-in components and third-party extensions use the
+same Catalog. Runnable examples are in
+[`examples/extensions`](examples/extensions), with step-by-step guides in
+[`docs/extensions`](docs/extensions).
+
+From `backend/`, validate, test, or inspect an extension without starting the
+full application runtime:
 
 ```bash
-cd backend
 uv run alpha-arena extension validate ../examples/extensions/minimal-agent
 uv run alpha-arena extension test ../examples/extensions/minimal-agent
 uv run alpha-arena extension list ../examples/extensions/prompt-override --json
 ```
+
+The same CLI is available as `python -m benchmark` or
+`python -m benchmark.cli`.
 
 ## License
 MIT
