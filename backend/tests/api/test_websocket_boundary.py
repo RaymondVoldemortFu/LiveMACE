@@ -43,6 +43,32 @@ def test_invalid_order_is_rejected_before_dispatch():
         )
 
 
+def test_order_leverage_preserves_the_existing_one_to_fifty_contract():
+    accepted = parse_websocket_message(
+        {
+            "type": "place_order",
+            "symbol": "BTCUSDT",
+            "side": "BUY",
+            "order_type": "MARKET",
+            "quantity": 0.1,
+            "leverage": 50,
+        }
+    )
+    assert accepted.leverage == 50
+
+    with pytest.raises(ValidationError):
+        parse_websocket_message(
+            {
+                "type": "place_order",
+                "symbol": "BTCUSDT",
+                "side": "BUY",
+                "order_type": "MARKET",
+                "quantity": 0.1,
+                "leverage": 51,
+            }
+        )
+
+
 def test_connection_manager_keys_are_account_ids(monkeypatch):
     scheduled = []
     removed = []

@@ -49,7 +49,7 @@ class PlaceOrderMessage(_Message):
     order_type: Literal["MARKET", "LIMIT"]
     quantity: float = Field(gt=0)
     price: float | None = None
-    leverage: int = Field(default=1, ge=1, le=10)
+    leverage: int = Field(default=1, ge=1, le=50)
 
 
 class PingMessage(_Message):
