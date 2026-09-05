@@ -113,4 +113,3 @@ def save_account_runtime_config(
         )
     except ExtensionConfigServiceError as exc:
         return _error(exc)
-

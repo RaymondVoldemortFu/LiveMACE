@@ -94,4 +94,3 @@ class RuntimeConfigOut(BaseModel):
     validation_status: str
     validation_errors: List[ValidationIssueOut] = Field(default_factory=list)
     updated_at: Optional[str] = None
-

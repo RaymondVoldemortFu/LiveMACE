@@ -440,7 +440,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 logging.error(f"Invalid JSON received: {e}")
                 try:
                     await websocket.send_text(json.dumps({"type": "error", "message": "Invalid JSON format"}))
-                except:
+                except Exception:
                     break
                 continue
             try:
@@ -488,7 +488,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     if not u:
                         try:
                             await websocket.send_text(json.dumps({"type": "error", "message": "user not found"}))
-                        except:
+                        except Exception:
                             break
                         continue
                     user_id = uid
@@ -624,24 +624,24 @@ async def websocket_endpoint(websocket: WebSocket):
                         # Business logic errors (insufficient funds, etc.)
                         try:
                             await websocket.send_text(json.dumps({"type": "error", "message": str(e)}))
-                        except:
+                        except Exception:
                             break
                     except Exception as e:
                         # Unexpected errors
                         logging.exception("Order placement error")
                         try:
                             await websocket.send_text(json.dumps({"type": "error", "message": f"order placement failed: {str(e)}"}))
-                        except:
+                        except Exception:
                             break
                 elif kind == "ping":
                     try:
                         await websocket.send_text(json.dumps({"type": "pong"}))
-                    except:
+                    except Exception:
                         break
                 else:
                     try:
                         await websocket.send_text(json.dumps({"type": "error", "message": "unknown message"}))
-                    except:
+                    except Exception:
                         break
     except WebSocketDisconnect:
         if account_id is not None:
