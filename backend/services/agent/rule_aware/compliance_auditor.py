@@ -6,7 +6,7 @@ import json
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 
-from .rule_engine import RuleEngine, Rule
+from .rule_engine import RuleEngine
 from .rule_validator import RuleValidator, RuleViolation
 
 logger = logging.getLogger(__name__)
@@ -100,7 +100,106 @@ class ComplianceAuditor:
         self.rule_engine = rule_engine
         self.rule_validator = rule_validator
         self.audit_history: List[ComplianceAudit] = []
-    
+
+    def post_execution_portfolio(self, portfolio, prices, executed_trades=()):
+        """Read committed balances and positions together after tool execution."""
+        from database.connection import SessionLocal
+        from database.models import Account, Order, Position, Trade
+        from services.asset_calculator import calculate_position_market_value
+
+        account_id = portfolio.get("account_id")
+        with SessionLocal() as db:
+            account = db.get(Account, account_id)
+            if account is None:
+                raise ValueError("Post-execution audit account is unavailable")
+            positions = (
+                db.query(Position)
+                .filter(Position.account_id == account_id, Position.quantity > 0)
+                .all()
+            )
+            order_ids = set()
+            for trade in executed_trades:
+                result = trade.get("result") or {}
+                if result.get("executed") is not True or result.get("error"):
+                    continue
+                for item in [result, *(result.get("closed_orders") or [])]:
+                    if item.get("order_id") is not None:
+                        order_ids.add(item["order_id"])
+            executed_order_fills = {}
+            if order_ids:
+                fills = db.query(Trade, Order.leverage).join(Order, Trade.order_id == Order.id).filter(
+                    Trade.account_id == account_id, Trade.order_id.in_(order_ids)
+                ).all()
+                for fill, leverage in fills:
+                    record = executed_order_fills.setdefault(str(fill.order_id), {
+                        "symbol": fill.symbol, "market": fill.market,
+                        "leverage": leverage, "notional_usd": 0.0,
+                    })
+                    record["notional_usd"] += abs(float(fill.price) * float(fill.quantity))
+            cash = float(account.current_cash)
+            equity = cash
+            snapshots = []
+            for position in positions:
+                price = float(prices.get(position.symbol) or position.avg_cost)
+                equity += float(calculate_position_market_value(position, price))
+                snapshots.append(
+                    {
+                        "symbol": position.symbol,
+                        "market": position.market,
+                        "quantity": float(position.quantity),
+                        "avg_cost": float(position.avg_cost),
+                        "leverage": position.leverage,
+                        "side": position.side,
+                        "valuation_price": price,
+                    }
+                )
+            return {
+                "account_id": account_id,
+                "decision_round_id": portfolio.get("decision_round_id"),
+                "cash": cash,
+                "frozen_cash": float(account.frozen_cash),
+                "margin_used": float(account.margin_used),
+                "total_assets": equity,
+                "total_equity": equity,
+                "positions": snapshots,
+                "executed_order_fills": executed_order_fills,
+                "audit_phase": "post_execution",
+                "price_basis": "decision_round_quotes_with_entry_cost_fallback",
+            }
+
+    @staticmethod
+    def _executed_actions(decision, portfolio):
+        """Expand batched closes and audit normalized fills instead of request aliases."""
+        actions = []
+        seen_orders = set()
+        fills = portfolio.get("executed_order_fills", {})
+        for trade in decision.get("executed_trades", []):
+            result = trade.get("result") or {}
+            args = trade.get("args") or {}
+            if result.get("executed") is not True or result.get("error"):
+                continue
+            operation = str(result.get("operation") or args.get("operation") or "").lower()
+            if operation == "hold":
+                continue
+            items = result.get("closed_orders", []) if operation == "close_all" else [result]
+            for item in items:
+                order_id = str(item["order_id"]) if item.get("order_id") is not None else None
+                if order_id in seen_orders:
+                    continue
+                fill = fills.get(order_id, {})
+                action = {**args, **item, **fill}
+                action["operation"] = "close" if operation == "close_all" else "open" if operation == "all_in" else operation
+                notional = fill.get("notional_usd", item.get("notional_usd"))
+                if notional is None:
+                    raise ValueError("Executed order notional is unavailable for compliance audit")
+                action.update(size_mode="usd", usd_amount=float(notional))
+                equity = portfolio["total_equity"]
+                action["target_portion_of_balance"] = float(notional) / equity if equity > 0 else 0
+                actions.append(action)
+                if order_id is not None:
+                    seen_orders.add(order_id)
+        return actions or [{"operation": "hold"}]
+
     def audit_decision(
         self, 
         decision: Dict[str, Any], 
@@ -128,9 +227,15 @@ class ComplianceAuditor:
         audit.rules_checked = [rule.id for rule in all_rules]
         
         # Validate decision
-        is_valid, violations = self.rule_validator.validate_decision(
-            decision, portfolio, prices
-        )
+        decisions = [decision]
+        if portfolio.get("audit_phase") == "post_execution":
+            decisions = self._executed_actions(decision, portfolio)
+        violations = []
+        for action in decisions:
+            _, action_violations = self.rule_validator.validate_decision(action, portfolio, prices)
+            for violation in action_violations:
+                if not any(existing.to_dict() == violation.to_dict() for existing in violations):
+                    violations.append(violation)
         audit.violations = violations
         
         # Extract conflicts from agent reasoning if provided
@@ -156,7 +261,7 @@ class ComplianceAuditor:
                 r2_total_score += 1.0
             else:
                 # Has violation: use continuous score if available
-                violation = rule_violations[0]
+                violation = min(rule_violations, key=lambda item: item.score if item.score is not None else 0.0)
                 if violation.score is not None:
                     # Use continuous score (0.0 - 1.0)
                     rule_score = max(0.0, min(1.0, violation.score))

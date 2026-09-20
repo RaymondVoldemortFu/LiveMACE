@@ -43,7 +43,20 @@ components:
   agents:
     - id: com.example.hold-agent.agent
       factory: agent:Factory
-      config_schema: config.json
+      config_schema: schema.json
+```
+
+`schema.json` supplies defaults that `alpha-arena extension test` applies through
+the Agent registry:
+
+```json
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "message": {"type": "string", "default": "holding"}
+  }
+}
 ```
 
 Use only the public `benchmark.*` imports shown above.  A run must return a

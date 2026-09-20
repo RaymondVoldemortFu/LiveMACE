@@ -6,6 +6,8 @@ dotenv.load_dotenv()
 
 
 class ToolConfig:
+    SEARCH_PROVIDER = os.getenv("SEARCH_PROVIDER", "brightdata").strip().lower()
+    tavily_api_key = os.getenv("TAVILY_API_KEY")
     brightdata_api_key = os.getenv("BRIGHTDATA_API_KEY")
     
     # Sub-agent configuration
@@ -17,6 +19,9 @@ class ToolConfig:
 
     # Search sub-agent network robustness configuration
     SEARCH_AGENT_MAX_RETRIES = max(0, int(os.getenv("SEARCH_AGENT_MAX_RETRIES", "3")))
+    SEARCH_AGENT_ROUND_TIMEOUT_SECONDS = max(
+        1.0, float(os.getenv("SEARCH_AGENT_ROUND_TIMEOUT_SECONDS", "55"))
+    )
     SEARCH_AGENT_SEARCH_TIMEOUT_SECONDS = max(
         1.0, float(os.getenv("SEARCH_AGENT_SEARCH_TIMEOUT_SECONDS", "20"))
     )
@@ -29,4 +34,3 @@ class ToolConfig:
     SEARCH_AGENT_LOCAL_FETCH_READ_TIMEOUT_SECONDS = max(
         1.0, float(os.getenv("SEARCH_AGENT_LOCAL_FETCH_READ_TIMEOUT_SECONDS", "20"))
     )
-    

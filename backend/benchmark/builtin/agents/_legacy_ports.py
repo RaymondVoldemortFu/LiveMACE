@@ -122,6 +122,43 @@ def legacy_tool_registry(tools: Any) -> ToolRegistry:
     return InvokerBackedToolRegistry(tools)
 
 
+def tool_error_payload(result: ToolResult) -> dict[str, JsonValue]:
+    """Expose actionable schema feedback without echoing rejected argument values."""
+    payload: dict[str, JsonValue] = {
+        "error": result.error_message or result.error_code or "Tool call failed",
+        "error_code": result.error_code,
+        "retryable": result.retryable,
+    }
+    errors = result.metadata.get("errors")
+    if result.error_code != "TOOL_INPUT_INVALID" or not isinstance(errors, (list, tuple)):
+        return payload
+    messages = {
+        "type": "Value has the wrong type; follow the tool input schema.",
+        "enum": "Value must match an allowed option in the tool input schema.",
+        "additionalProperties": "Remove fields not declared in the tool input schema.",
+    }
+    details = []
+    for error in errors[:10]:
+        if not isinstance(error, Mapping):
+            continue
+        validator = str(error.get("validator") or "")[:64]
+        # jsonschema's required message contains a schema field name. Other
+        # validators may embed the entire rejected value, including secrets.
+        message = (
+            str(error.get("message") or "A required field is missing.")[:256]
+            if validator == "required"
+            else messages.get(validator, "Value does not satisfy the tool input schema.")
+        )
+        details.append({
+            "path": str(error.get("path") or "$")[:256],
+            "validator": validator,
+            "message": message,
+        })
+    if details:
+        payload["validation_errors"] = details
+    return payload
+
+
 def _invoker_func(invoker: Any, public_name: str):
     def invoke(**arguments: Any) -> JsonValue:
         payload = dict(arguments)
@@ -132,7 +169,12 @@ def _invoker_func(invoker: Any, public_name: str):
                 if key not in _TRADE_RUNTIME_ARGUMENTS
             }
         try:
-            result = invoker.call(public_name, payload)
+            call_id = arguments.get("tool_call_id") if public_name == "core.execute_trade" else None
+            call_with_id = getattr(invoker, "call_with_id", None)
+            if call_id and callable(call_with_id):
+                result = call_with_id(public_name, payload, call_id)
+            else:
+                result = invoker.call(public_name, payload)
         except ToolRuntimeError:
             raise
         if not isinstance(result, ToolResult):
@@ -143,9 +185,7 @@ def _invoker_func(invoker: Any, public_name: str):
             )
         if result.ok:
             return to_jsonable(result.value)
-        return {
-            "error": result.error_message or result.error_code or "Tool call failed"
-        }
+        return tool_error_payload(result)
 
     return invoke
 

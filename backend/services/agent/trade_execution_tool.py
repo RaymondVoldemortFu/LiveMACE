@@ -98,7 +98,7 @@ def execute_trade_tool(
     sizing_value = None
     if normalized_size_mode == "usd" and usd_amount is not None:
         sizing_value = Decimal(str(usd_amount))
-    elif close_ratio is not None:
+    elif (operation or "").strip().lower() == "close" and close_ratio is not None:
         normalized_size_mode = "close_ratio"
         sizing_value = Decimal(str(close_ratio))
     elif target_portion_of_balance is not None:

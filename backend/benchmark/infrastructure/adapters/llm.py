@@ -88,11 +88,11 @@ class LegacyLLMClientAdapter(LLMClientPort):
             )
         try:
             message = self._client.call(
-                messages=[dict(item) for item in request.messages],
-                tools=[dict(item) for item in request.tools] or None,
+                messages=to_jsonable(request.messages),
+                tools=to_jsonable(request.tools) or None,
                 timeout=timeout,
                 response_format=(
-                    None if response_format is None else dict(response_format)
+                    None if response_format is None else to_jsonable(response_format)
                 ),
                 temperature=request.temperature,
                 max_tokens=request.max_tokens,
@@ -199,7 +199,12 @@ class LegacyLLMClientAdapter(LLMClientPort):
                     provider_id=self.id,
                 )
             raw = dumped
-        return LLMResponse(content=content, tool_calls=normalized_calls, raw=raw)
+        return LLMResponse(
+            content=content,
+            tool_calls=normalized_calls,
+            raw=raw,
+            finish_reason=getattr(self._client, "last_finish_reason", None),
+        )
 
     def _to_tool_call(self, value: Any) -> LLMToolCall:
         parser = getattr(self._client, "tool_call_parts", None)
@@ -249,7 +254,9 @@ def _parse_finite_float(text: str) -> float:
 def _llm_failure(provider_id: str, operation: str, exc: Exception) -> ProviderError:
     name = type(exc).__name__.lower()
     status_code = getattr(exc, "status_code", None)
-    if "timeout" in name:
+    if str(exc) == "LLM_BUDGET_EXCEEDED":
+        code, retryable = "LLM_BUDGET_EXCEEDED", False
+    elif "timeout" in name:
         code, retryable = "LLM_TIMEOUT", True
     elif "ratelimit" in name or status_code == 429:
         code, retryable = "LLM_RATE_LIMITED", True

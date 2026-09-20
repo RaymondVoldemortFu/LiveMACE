@@ -578,6 +578,7 @@ def test_mysql_startup_migration_holds_advisory_lock_across_check_and_apply():
             events.append("rollback")
 
     class Engine:
+        url = "mysql+pymysql://localhost/test_wave3"
         dialect = type("Dialect", (), {"name": "mysql"})()
 
         def connect(self):
@@ -751,6 +752,7 @@ class _FakeMySQLConnection:
 
 
 class _FakeMySQLEngine:
+    url = "mysql+pymysql://localhost/test_wave3"
     def __init__(self, conn):
         self._conn = conn
         from types import SimpleNamespace

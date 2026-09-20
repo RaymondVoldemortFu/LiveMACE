@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -76,3 +78,33 @@ def test_component_schema_and_standard_not_found_error():
     assert missing.status_code == 404
     assert missing.json()["error"]["code"] == "COMPONENT_NOT_FOUND"
     assert missing.json()["error"]["request_id"]
+
+
+def test_default_catalog_uses_deployment_extension_settings(monkeypatch):
+    extension_root = Path(__file__).resolve().parents[3] / "examples/extensions/minimal-agent"
+    monkeypatch.setenv("ALPHA_ARENA_EXTENSION_DIRS", str(extension_root))
+    monkeypatch.setenv("ALPHA_ARENA_DISABLED_EXTENSIONS", "benchmark.core")
+    monkeypatch.setenv("ALPHA_ARENA_ALLOWED_CAPABILITIES", "market.read")
+    __import__("benchmark.extensions.host", fromlist=["reset_extension_runtime"]).reset_extension_runtime()
+    try:
+        service = get_extension_config_service()
+        app = FastAPI()
+        app.include_router(router)
+        with TestClient(app) as client:
+            extensions = client.get("/api/extensions").json()
+            agents = client.get("/api/extensions/agents").json()
+            valid = client.post("/api/account/1/runtime-config/validate", json={
+                "config": {"agent_id": "com.example.minimal-agent"},
+            })
+            disabled = client.post("/api/account/1/runtime-config/validate", json={
+                "config": {"agent_id": "core.react"},
+            })
+        assert {item["id"]: item["status"] for item in extensions} == {
+            "benchmark.core": "disabled", "com.example.minimal-agent": "loaded",
+        }
+        assert [item["id"] for item in agents] == ["com.example.minimal-agent"]
+        assert service.catalog.allowed_capabilities == frozenset({"market.read"})
+        assert valid.json()["valid"] is True
+        assert disabled.json()["valid"] is False
+    finally:
+        __import__("benchmark.extensions.host", fromlist=["reset_extension_runtime"]).reset_extension_runtime()

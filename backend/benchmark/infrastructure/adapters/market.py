@@ -49,7 +49,7 @@ class _FunctionMarketDataAdapter(MarketDataPort):
         self,
         *,
         provider_id: str,
-        price_loader: Callable[[str], float | None],
+        price_loader: Callable[[str], PriceResult | float | None],
         kline_loader: Callable[[str, str, int, object, object], list[dict] | None],
         status_loader: Callable[[str], Mapping[str, object]],
         supported_market: Market,
@@ -69,6 +69,8 @@ class _FunctionMarketDataAdapter(MarketDataPort):
                 provider_id=self.id,
                 operation="get_price",
             )
+            if isinstance(value, PriceResult):
+                return value
             if value is None:
                 return PriceResult(None, None, self.id, Freshness.UNAVAILABLE, "provider returned no price")
             decimal_value = Decimal(str(value))
@@ -222,13 +224,13 @@ class AlpacaMarketDataAdapter(_FunctionMarketDataAdapter):
     def __init__(self) -> None:
         from services.alpaca_market_data import (
             get_kline_data_from_alpaca,
-            get_last_price_from_alpaca,
+            get_price_result_from_alpaca,
             get_market_status_from_alpaca,
         )
 
         super().__init__(
             provider_id="core.market.alpaca",
-            price_loader=get_last_price_from_alpaca,
+            price_loader=get_price_result_from_alpaca,
             kline_loader=get_kline_data_from_alpaca,
             status_loader=get_market_status_from_alpaca,
             supported_market=Market.US,

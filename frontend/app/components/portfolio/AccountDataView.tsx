@@ -54,6 +54,7 @@ interface Position {
   market: string
   quantity: number
   available_quantity: number
+  side?: string
   avg_cost: number
   leverage: number
   last_price?: number | null
@@ -270,16 +271,16 @@ export default function AccountDataView({
   return (
     <div className="min-h-full flex flex-col space-y-6">
       {/* Main Content */}
-      <div className={`grid gap-6 ${showAssetCurves ? 'grid-cols-5' : 'grid-cols-1'}`}>
+      <div className={`grid gap-6 ${showAssetCurves ? 'grid-cols-1 xl:grid-cols-5' : 'grid-cols-1'}`}>
         {/* Asset Curves */}
         {showAssetCurves && (
-          <div className="col-span-3">
+          <div className="min-w-0 xl:col-span-3">
             <AssetCurveWithData data={allAssetCurves} wsRef={wsRef} />
           </div>
         )}
 
         {/* Tabs and Trading Panel */}
-        <div className={`${showAssetCurves ? 'col-span-2' : 'col-span-1'} flex flex-col`}>
+        <div className={`${showAssetCurves ? 'xl:col-span-2' : 'col-span-1'} min-w-0 flex flex-col`}>
           {/* Account Selector */}
           <div className="flex justify-end mb-4">
             <AccountSelector
@@ -294,7 +295,7 @@ export default function AccountDataView({
           {/* Evaluation leaderboard */}
           <Card className="mb-4">
             <CardHeader className="pb-3">
-              <div className="flex items-center justify-between gap-2">
+              <div className="flex flex-wrap gap-2 items-center justify-between gap-2">
                 <CardTitle className="text-base">Agent 结算评分</CardTitle>
                 <div className="w-[96px]">
                   <Select
@@ -375,7 +376,7 @@ export default function AccountDataView({
                 </Table>
               </div>
 
-              <div className="mt-4 flex items-center justify-between gap-2">
+              <div className="mt-4 flex flex-wrap gap-2 items-center justify-between gap-2">
                 <div className="text-sm font-medium">Checkpoint（按周期）</div>
                 <div className="flex items-center gap-2">
                   <div className="w-[92px]">
@@ -444,9 +445,9 @@ export default function AccountDataView({
           </Card>
 
           {/* Content Area */}
-          <div className={`${showTradingPanel ? 'grid grid-cols-4 gap-4' : ''}`}>
+          <div className={`${showTradingPanel ? 'grid grid-cols-1 xl:grid-cols-4 gap-4' : ''}`}>
             {/* Tabs */}
-            <div className={`${showTradingPanel ? 'col-span-3' : 'col-span-1'}`}>
+            <div className={`${showTradingPanel ? 'xl:col-span-3' : 'col-span-1'} min-w-0`}>
               <Tabs defaultValue="ai-decisions" className="flex flex-col">
                 <TabsList className="grid w-full grid-cols-4">
                   <TabsTrigger value="ai-decisions">AI Decisions</TabsTrigger>
@@ -492,7 +493,7 @@ export default function AccountDataView({
                     }
                   }}
                   user={overview?.account ? {
-                    id: overview.account.id.toString(),
+                    id: overview.account.user_id.toString(),
                     current_cash: overview.account.current_cash,
                     frozen_cash: overview.account.frozen_cash,
                     has_password: true // Assume has password for now
@@ -500,7 +501,8 @@ export default function AccountDataView({
                   positions={positions.map(p => ({
                     symbol: p.symbol,
                     market: p.market,
-                    available_quantity: p.available_quantity
+                    available_quantity: p.available_quantity,
+                    side: p.side
                   }))}
                   lastPrices={Object.fromEntries(
                     positions.map(p => [`${p.symbol}.${p.market}`, p.last_price ?? null])
@@ -522,7 +524,7 @@ function OrderBook({ orders, onCancelOrder }: { orders: Order[], onCancelOrder: 
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead>Time</TableHead>
+            <TableHead>Order ID</TableHead>
             <TableHead>Order No</TableHead>
             <TableHead>Symbol</TableHead>
             <TableHead>Side</TableHead>

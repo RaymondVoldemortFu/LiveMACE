@@ -47,6 +47,8 @@ def place_and_execute_crypto(
     leverage: int = 1,
     *,
     manage_transaction: bool = True,
+    existing_order: Order | None = None,
+    execution_price: Decimal | None = None,
 ) -> Order:
     """
     Place and execute a CRYPTO order with leverage support.
@@ -74,32 +76,35 @@ def place_and_execute_crypto(
         raise ValueError(f"Quantity must be >= {CRYPTO_MIN_ORDER_QUANTITY}")
     
     # Get execution price
-    exec_price = Decimal(str(price if (order_type == "LIMIT" and price) else get_last_price(symbol, "CRYPTO")))
+    exec_price = (execution_price if execution_price is not None else
+                  Decimal(str(price if (order_type == "LIMIT" and price) else get_last_price(symbol, "CRYPTO"))))
     notional = exec_price * Decimal(str(quantity))
     
     # Calculate fees
     taker_fee = _calc_crypto_fee(notional, leverage)
     
-    # Create order
-    order = Order(
-        version="v1",
-        account_id=account.id,
-        order_no=uuid.uuid4().hex[:16],
-        symbol=symbol,
-        name=name,
-        market="CRYPTO",
-        side=side.upper(),
-        order_type=order_type,
-        price=float(exec_price),
-        quantity=quantity,
-        leverage=leverage,
-        filled_quantity=0,
-        status="PENDING",
-        order_time=now_utc(),
-    )
-    db.add(order)
-    db.flush()
-    
+    if existing_order is not None:
+        order = existing_order
+    else:
+        order = Order(
+            version="v1",
+            account_id=account.id,
+            order_no=uuid.uuid4().hex[:16],
+            symbol=symbol,
+            name=name,
+            market="CRYPTO",
+            side=side.upper(),
+            order_type=order_type,
+            price=float(exec_price),
+            quantity=quantity,
+            leverage=leverage,
+            filled_quantity=0,
+            status="PENDING",
+            order_time=now_utc(),
+        )
+        db.add(order)
+        db.flush()
+
     # Get existing position
     pos = (
         db.query(Position)
@@ -201,8 +206,8 @@ def place_and_execute_crypto(
         interest_charged = _calculate_position_interest(pos)
         if interest_charged > 0:
             pos.accumulated_interest = float(Decimal(str(pos.accumulated_interest)) + interest_charged)
-            if Decimal(str(account.current_cash)) < interest_charged:
-                raise ValueError(f"Insufficient cash for interest payment: {interest_charged}")
+            # Closing releases collateral in this same transaction. Cash may
+            # be below interest before settlement; that must not block risk reduction.
             account.current_cash = float(Decimal(str(account.current_cash)) - interest_charged)
         
         if pos.leverage > 1:
@@ -269,7 +274,7 @@ def place_and_execute_crypto(
         symbol=symbol,
         name=name,
         market="CRYPTO",
-        side=side.upper(),
+        side=order.side,
         price=float(exec_price),
         quantity=quantity,
         commission=float(taker_fee),

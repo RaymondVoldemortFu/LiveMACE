@@ -4,11 +4,14 @@ Alpaca US stock market data service
 
 from __future__ import annotations
 
+from requests.adapters import HTTPAdapter
+
 import logging
 import os
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from threading import Lock
 from typing import Dict, List, Any, Optional
 
@@ -20,15 +23,35 @@ from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 from alpaca.trading.client import TradingClient
 
 from benchmark.infrastructure.market.symbols import US_SYMBOLS
-from config.agent_config import AgentConfig
+from benchmark.providers import Freshness, PriceResult
 from services.time_source import now_utc, delta_t_minutes
-from config.market_data_config import ALPACA_US_FEED_ENABLED, ALPACA_US_FEED
+from config.market_data_config import alpaca_feed_kwargs, alpaca_quote_is_fresh
 
 dotenv.load_dotenv()
 
 logger = logging.getLogger(__name__)
 
 SUPPORTED_STOCKS = list(US_SYMBOLS)
+
+
+def _quote_result(price, timestamp=None, error=None) -> PriceResult:
+    source = "core.market.alpaca"
+    value = Decimal(str(price)) if price is not None else None
+    if value is None or not value.is_finite() or value <= 0:
+        return PriceResult(
+            None, None, source, Freshness.UNAVAILABLE,
+            error or "provider returned no valid price",
+        )
+    as_of = (
+        timestamp
+        if isinstance(timestamp, datetime) and timestamp.utcoffset() is not None
+        else None
+    )
+    fresh = alpaca_quote_is_fresh(as_of, now_utc())
+    return PriceResult(
+        value, as_of, source, Freshness.FRESH if fresh else Freshness.STALE,
+        None if fresh else "quote timestamp is missing, future, or older than the allowed age",
+    )
 
 
 class RateLimiter:
@@ -72,6 +95,15 @@ def _ensure_supported_symbol(symbol: str) -> str:
     return symbol_norm
 
 
+
+class _BoundedHTTPAdapter(HTTPAdapter):
+    """The Alpaca SDK omits requests' timeout; bound connection/read waits."""
+    def send(self, request, **kwargs):
+        if kwargs.get("timeout") is None:
+            kwargs["timeout"] = (3, 15)
+        return super().send(request, **kwargs)
+
+
 class AlpacaClient:
     def __init__(self, max_rpm: int = 200):
         self._config = _load_alpaca_config()
@@ -84,6 +116,11 @@ class AlpacaClient:
             secret_key=self._config.api_secret,
             paper=True
         )
+        for client in (self._data_client, self._trading_client):
+            client._session.mount("https://", _BoundedHTTPAdapter())
+            client._session.mount("http://", _BoundedHTTPAdapter())
+            client._retry = 1
+            client._retry_wait = 1
         self._limiter = RateLimiter(max_calls=max_rpm, window_seconds=60)
         self._max_rpm = max_rpm
 
@@ -92,16 +129,15 @@ class AlpacaClient:
         self._limiter.wait_for_slot()
 
     def _request_feed_kwargs(self) -> Dict[str, Any]:
-        """
-        Controlled by config:
-        - True: use IEX feed explicitly
-        - False: do not pass feed parameter
-        """
-        if AgentConfig.ALPACA_USE_IEX_FEED:
-            return {"feed": DataFeed.IEX}
-        return {}
+        """Use the shared explicit IEX feed for every SDK request."""
+        return {"feed": DataFeed(alpaca_feed_kwargs()["feed"])}
 
     def get_last_price(self, symbol: str) -> Optional[float]:
+        """Compatibility getter for display/valuation consumers."""
+        result = self.get_price_result(symbol)
+        return float(result.value) if result.value is not None else None
+
+    def get_price_result(self, symbol: str) -> PriceResult:
         try:
             symbol_norm = _ensure_supported_symbol(symbol)
             logger.info("Alpaca latest trade request: %s", symbol_norm)
@@ -132,7 +168,7 @@ class AlpacaClient:
                     last_bar = bar_list[-1]
                     price = getattr(last_bar, "close", None)
                     logger.info("Alpaca delayed price success: %s price=%s", symbol_norm, price)
-                    return float(price) if price is not None else None
+                    return _quote_result(price, getattr(last_bar, "timestamp", None))
                 logger.warning("Alpaca delayed price empty, fallback to latest trade: %s", symbol_norm)
 
             req_kwargs = self._request_feed_kwargs()
@@ -144,13 +180,13 @@ class AlpacaClient:
             trade = resp.get(symbol_norm)
             if not trade:
                 logger.warning("Alpaca latest trade empty: %s", symbol_norm)
-                return None
+                return _quote_result(None)
             price = getattr(trade, "price", None)
             logger.info("Alpaca latest trade success: %s price=%s", symbol_norm, price)
-            return float(price) if price is not None else None
+            return _quote_result(price, getattr(trade, "timestamp", None))
         except Exception as e:
             logger.error(f"Error fetching Alpaca price for {symbol}: {e}")
-            return None
+            return _quote_result(None, error="Alpaca price request failed")
 
     def get_last_close_price(self, symbol: str, lookback_days: int = 10) -> Optional[float]:
         """Get latest available daily close price for a US symbol.
@@ -349,12 +385,7 @@ def _estimate_start_time(end_dt: datetime, timeframe: TimeFrame, count: int) -> 
 
 
 def _alpaca_feed_kwargs() -> Dict[str, Any]:
-    if not ALPACA_US_FEED_ENABLED:
-        return {}
-    feed = (ALPACA_US_FEED or "").strip()
-    if not feed:
-        return {}
-    return {"feed": feed}
+    return alpaca_feed_kwargs()
 
 
 _alpaca_client: Optional[AlpacaClient] = None
@@ -373,6 +404,10 @@ def _get_alpaca_client() -> AlpacaClient:
 
 def get_last_price_from_alpaca(symbol: str) -> Optional[float]:
     return _get_alpaca_client().get_last_price(symbol)
+
+
+def get_price_result_from_alpaca(symbol: str) -> PriceResult:
+    return _get_alpaca_client().get_price_result(symbol)
 
 
 def get_last_close_price_from_alpaca(symbol: str) -> Optional[float]:

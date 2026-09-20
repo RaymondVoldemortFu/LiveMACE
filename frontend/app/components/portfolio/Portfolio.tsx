@@ -1,3 +1,4 @@
+import MarketDataPanel from '../common/MarketDataPanel'
 import AccountDataView from './AccountDataView'
 import { AIDecision } from '@/lib/api'
 
@@ -94,6 +95,8 @@ export default function Portfolio({
   loadingAccounts
 }: PortfolioProps) {
   return (
+    <>
+    <MarketDataPanel />
     <AccountDataView
       overview={overview}
       positions={positions}
@@ -110,5 +113,6 @@ export default function Portfolio({
       showAssetCurves={false}
       showTradingPanel={true}
     />
+    </>
   )
 }

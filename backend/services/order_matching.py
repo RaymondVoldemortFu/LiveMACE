@@ -30,6 +30,17 @@ def _calc_commission(notional: Decimal) -> Decimal:
     return max(pct_fee, min_fee)
 
 
+def _guard_manual_crypto_position(db, account_id, symbol, market):
+    if market != "CRYPTO":
+        return
+    position = db.query(Position).filter(
+        Position.account_id == account_id, Position.symbol == symbol,
+        Position.market == market, Position.side == "SHORT", Position.quantity > 0,
+    ).first()
+    if position is not None:
+        raise ValueError("Manual crypto orders cannot modify an existing short position")
+
+
 def create_order(db: Session, account: Account, symbol: str, name: str,
                 side: str, order_type: str, price: Optional[float], quantity: float, leverage: int = 1, market: str = "CRYPTO") -> Order:
     """
@@ -51,6 +62,13 @@ def create_order(db: Session, account: Account, symbol: str, name: str,
     Raises:
         ValueError: Parameter validation failed or insufficient funds/positions
     """
+    _guard_manual_crypto_position(db, account.id, symbol, market)
+    if market == "CRYPTO" and side == "BUY":
+        position = db.query(Position).filter(
+            Position.account_id == account.id, Position.symbol == symbol,
+            Position.market == market, Position.quantity > 0).first()
+        if position is not None and (position.leverage or 1) != leverage:
+            raise ValueError("Cannot add to position with different leverage")
     # Basic parameter validation (crypto-only)
     
     # For crypto, we support fractional quantities, so no lot size validation needed
@@ -160,7 +178,12 @@ def check_and_execute_order(
     if order.status != "PENDING":
         return False
     
-    # Check if cookie is configured, skip order checking if not
+    # A direction can change after a LIMIT order was created. Keep this order
+    # pending while the incompatible position exists; do not abort other orders.
+    try:
+        _guard_manual_crypto_position(db, order.account_id, order.symbol, order.market)
+    except ValueError:
+        return False
     try:
         # Get current market price
         current_price = get_last_price(order.symbol, order.market)
@@ -263,6 +286,34 @@ def _execute_order(
         commission = _calc_commission(notional)
         leverage = Decimal(str(order.leverage))
 
+        if order.market == "CRYPTO":
+            position = db.query(Position).filter(
+                Position.account_id == account.id, Position.symbol == order.symbol,
+                Position.market == order.market).first()
+            active = position is not None and position.quantity > 0
+            if leverage > 1 or (active and (position.leverage or 1) > 1):
+                if order.side == "BUY" and active and position.leverage != int(leverage):
+                    return False
+                from services.order_executor_leverage import place_and_execute_crypto
+                with db.begin_nested() as settlement:
+                    try:
+                        place_and_execute_crypto(
+                            db, account.id, order.symbol, order.name,
+                            "LONG" if order.side == "BUY" else "SELL", order.order_type,
+                            order.price, float(quantity),
+                            leverage=int(leverage) if order.side == "BUY" else int(position.leverage if active else 1),
+                            manage_transaction=False, existing_order=order, execution_price=execution_price,
+                        )
+                    except ValueError:
+                        # A previously valid pending order can become unaffordable
+                        # or oversized. Roll back only this settlement and continue.
+                        settlement.rollback()
+                        return False
+                _release_frozen_on_fill(account, order, execution_price, commission)
+                if manage_transaction:
+                    db.commit()
+                return True
+
         # Re-check funds and positions (prevent concurrency issues)
         if order.side == "BUY":
             if leverage > 1:
@@ -332,6 +383,7 @@ def _execute_order(
                     # Update leverage (weighted average)
                     new_leverage = (old_notional * old_leverage + notional * leverage) / new_notional
 
+                position.side = "LONG"
                 position.quantity = float(new_qty)
                 position.available_quantity = float(Decimal(str(position.available_quantity)) + quantity)
                 position.avg_cost = float(new_avg_cost)
@@ -553,10 +605,15 @@ def process_all_pending_orders(db: Session) -> Tuple[int, int]:
     """
     pending_orders = get_pending_orders(db)
     executed_count = 0
-    
+    checked_count = 0
+    from services.scheduler import shutdown_cancellation_requested
+
     for order in pending_orders:
+        if shutdown_cancellation_requested():
+            break
+        checked_count += 1
         if check_and_execute_order(db, order):
             executed_count += 1
-    
-    logger.info(f"Processing pending orders: checked {len(pending_orders)} orders, executed {executed_count} orders")
-    return executed_count, len(pending_orders)
+
+    logger.info(f"Processing pending orders: checked {checked_count} orders, executed {executed_count} orders")
+    return executed_count, checked_count

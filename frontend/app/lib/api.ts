@@ -295,7 +295,18 @@ export interface AgentStep {
   created_at: string
 }
 
+export interface RuntimeEvent {
+  id: string
+  type: string
+  account_id: number
+  decision_round_id: string
+  payload: Record<string, unknown>
+  created_at: string
+}
+
 export interface AgentTrace {
+  events?: RuntimeEvent[]
+  schema_version?: number
   trace_id: string
   steps: AgentStep[]
 }

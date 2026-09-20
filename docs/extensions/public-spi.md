@@ -29,7 +29,15 @@ synchronous and owns all of those resources itself.
 - A breaking SPI change requires a new API version.  Additive fields and
   defaults are the compatible way to evolve v1.
 
-An upgrade example keeps the old release loadable while publishing a new one:
+An upgrade keeps the previous release loadable by publishing a second package
+with the same extension `id` and a new SemVer `version`.  Catalog loading
+retains both `1.0.0` and `2.0.0` when they share `api_version: 1`:
+
+```yaml
+id: com.example.quotes
+version: 1.0.0
+api_version: 1
+```
 
 ```yaml
 id: com.example.quotes
@@ -37,16 +45,19 @@ version: 2.0.0
 api_version: 1
 ```
 
-An account can pin it with the public runtime configuration:
+An account pins the component it should run:
 
 ```json
 {
-  "agent_id": "com.example.agent",
+  "agent_id": "com.example.quotes.agent",
   "component_versions": {
-    "com.example.agent": "2.0.0"
+    "com.example.quotes.agent": "2.0.0"
   }
 }
 ```
+
+Another account can keep `1.0.0` in `component_versions` while both releases
+remain installed.
 
 ## Capabilities
 

@@ -23,7 +23,7 @@ def execute_legacy_trade(session: Any, command: Any) -> Mapping[str, Any]:
         direction=command.direction or "long",
         size_mode=(
             "portion"
-            if command.operation == "all_in"
+            if command.operation == "all_in" or command.sizing_mode == "close_ratio"
             else command.sizing_mode or "portion"
         ),
         target_portion_of_balance=(

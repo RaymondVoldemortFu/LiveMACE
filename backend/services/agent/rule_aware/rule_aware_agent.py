@@ -337,7 +337,8 @@ class RuleAwareAgent(BaseAgent):
             # ── Post-loop: build decision for tool-mode (TRADE_DONE) sessions ──
             if trade_done_detected and decision is None:
                 decision = self._build_tool_mode_decision(
-                    executed_trades, accumulated_content, portfolio, prices
+                    executed_trades, accumulated_content,
+                    {**portfolio, "decision_round_id": decision_round_id}, prices
                 )
 
             # ── Fallback: no decision produced at all ──
@@ -391,6 +392,11 @@ class RuleAwareAgent(BaseAgent):
         if parsed_output is None:
             parsed_output = self.compliance_auditor.parse_agent_output(full_content)
 
+        if decision.get("protocol") == "tool":
+            portfolio = self.compliance_auditor.post_execution_portfolio(
+                portfolio, prices, decision.get("executed_trades", ()),
+            )
+
         # Perform compliance audit
         logger.info("Starting compliance audit...")
         logger.info(f"Portfolio state: total_assets={portfolio.get('total_assets')}")
@@ -408,6 +414,11 @@ class RuleAwareAgent(BaseAgent):
         agent_logger.info(compliance_audit.format_for_output())
 
         decision["compliance_audit"] = compliance_audit.to_dict()
+        decision["compliance_audit"]["portfolio_basis"] = {
+            key: portfolio.get(key)
+            for key in ("audit_phase", "price_basis", "cash", "total_equity", "positions")
+        }
+        decision["compliance_audit"]["sector_allocation_basis"] = "preferred_notional / total_position_notional"
         decision["agent_reasoning"] = parsed_output.get("reasoning", "")
         logger.info("Compliance audit attached to decision")
 
@@ -496,15 +507,16 @@ class RuleAwareAgent(BaseAgent):
 
         logger.info(f"Tool-mode session summary: {len(executed_trades)} trade call(s), representative={op} {sym}")
 
-        # Run compliance audit using original portfolio snapshot.
-        # Rules that query the DB directly (R2-01, R2-03, R2-06) will reflect the
-        # post-trade state because execute_trade_tool already committed each trade.
-        # Portfolio-level fields (cash, total_assets) use the pre-session snapshot
-        # which is an acceptable approximation for the scoring record.
+        # Audit committed post-session balances and positions together.
         try:
             summary = self._attach_compliance_audit(summary, portfolio, prices, agent_content)
         except Exception as e:
             logger.error(f"Compliance audit failed for tool-mode session: {e}", exc_info=True)
+            summary["compliance_audit"] = {
+                "final_status": "ERROR",
+                "error": "Post-execution compliance audit unavailable",
+                "s_rule_sat": None,
+            }
 
         return summary
 

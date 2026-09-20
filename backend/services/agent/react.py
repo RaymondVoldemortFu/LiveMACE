@@ -323,15 +323,18 @@ class ReActAgent(BaseAgent):
                         }
                     else:
                         cache_key = f"{name}:{json.dumps(args, sort_keys=True)}"
-                        # Tool selector updates active tool set dynamically.
-                        # Its result must always reflect latest context, so skip cache.
-                        should_cache_tool_result = name != META_TOOL_NAME
+                        # Only immutable round observations may use this legacy
+                        # cache. Account/history/file reads can change after a
+                        # write; writes require the gateway's call-id semantics.
+                        should_cache_tool_result = name in {
+                            "get_market_snapshot", "get_kline_history", "consult_search_agent"
+                        }
                         tool_call_counts[cache_key] = tool_call_counts.get(cache_key, 0) + 1
                         dup_count = tool_call_counts[cache_key]
                         dup_limit = getattr(AgentConfig, "TOOL_CALL_DUP_MAX", 5)
                         dup_warn = getattr(AgentConfig, "TOOL_CALL_DUP_WARN", 10)
 
-                        if dup_count > dup_limit:
+                        if should_cache_tool_result and dup_count > dup_limit:
                             result = {
                                 "error": (
                                     f"Refused to execute tool '{name}' with identical parameters "
@@ -365,7 +368,7 @@ class ReActAgent(BaseAgent):
                                         tool_call_id=tc_id,
                                         decision_round_id=decision_round_id,
                                     )
-                                    if should_cache_tool_result:
+                                    if should_cache_tool_result and not (isinstance(result, dict) and result.get("error")):
                                         tool_call_cache[cache_key] = result
                                     # Meta tool handling, optional for special tools
                                     if name == META_TOOL_NAME and isinstance(result, dict):

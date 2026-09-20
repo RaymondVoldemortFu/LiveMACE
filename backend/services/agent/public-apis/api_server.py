@@ -2,10 +2,12 @@
 API Server: dynamically loads all apis/*/api.py (excluding UNSUPPORTED_APIS)
 and exposes them via POST /v1/<name> with JSON body as params.
 """
+import builtins
 import importlib.util
 import json
 import os
 import sys
+from functools import lru_cache
 
 # Ensure project root is on path and load unsupported list
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -20,6 +22,31 @@ except ImportError:
 APIS_DIR = os.path.join(ROOT, "apis")
 
 
+def _wave3_api_unavailable(name):
+    # The validated Wave3 provider supports chat completions, not image generation.
+    return (
+        os.getenv("WAVE3_PRODUCTION", "false").lower() == "true"
+        and name in {"markdowntoimage", "imagetotext"}
+    )
+
+
+@lru_cache(maxsize=1)
+def _load_config():
+    """Keep the generated tools' config distinct from the host's config package."""
+    spec = importlib.util.spec_from_file_location(
+        "public_apis_runtime_config", os.path.join(ROOT, "config.py")
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _tool_import(name, globals=None, locals=None, fromlist=(), level=0):
+    if name == "config" and level == 0:
+        return _load_config()
+    return builtins.__import__(name, globals, locals, fromlist, level)
+
+
 def _discover_available():
     """Return list of API names that have api.py and are not unsupported."""
     out = []
@@ -27,13 +54,15 @@ def _discover_available():
         if name.startswith("."):
             continue
         path = os.path.join(APIS_DIR, name, "api.py")
-        if os.path.isfile(path) and name not in UNSUPPORTED_APIS:
+        if os.path.isfile(path) and name not in UNSUPPORTED_APIS and not _wave3_api_unavailable(name):
             out.append(name)
     return out
 
 
 def _load_run(name):
     """Load api module for name and return its run function, or None on failure."""
+    if _wave3_api_unavailable(name):
+        return None
     path = os.path.join(APIS_DIR, name, "api.py")
     if not os.path.isfile(path):
         return None
@@ -41,6 +70,8 @@ def _load_run(name):
     if spec is None or spec.loader is None:
         return None
     mod = importlib.util.module_from_spec(spec)
+    # Override only this generated module's import resolution, never sys.modules['config'].
+    mod.__dict__["__builtins__"] = {**vars(builtins), "__import__": _tool_import}
     sys.modules[spec.name] = mod
     try:
         spec.loader.exec_module(mod)
@@ -51,6 +82,8 @@ def _load_run(name):
 
 def _run_api(name, params):
     """Call run(params) for the given API name. Returns dict with status/error/data."""
+    if _wave3_api_unavailable(name):
+        return {"status": "error", "error": "API is unavailable for the Wave3 model provider", "data": None}
     run_fn = _load_run(name)
     if run_fn is None:
         return {"status": "error", "error": "API not found or failed to load", "data": None}

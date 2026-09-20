@@ -17,13 +17,13 @@ interface OrderFormProps {
   price: number
   quantity: number
   leverage?: number
-  side?: 'LONG' | 'SHORT' | 'BUY' | 'SELL'
+  side?: 'BUY' | 'SELL'
   onSymbolChange: (symbol: string) => void
   onOrderTypeChange: (orderType: 'MARKET' | 'LIMIT') => void
   onPriceChange: (price: number) => void
   onQuantityChange: (quantity: number) => void
   onLeverageChange?: (leverage: number) => void
-  onSideChange?: (side: 'LONG' | 'SHORT' | 'BUY' | 'SELL') => void
+  onSideChange?: (side: 'BUY' | 'SELL') => void
   onAdjustPrice: (delta: number) => void
   onAdjustQuantity: (delta: number) => void
   lastPrices?: Record<string, number | null>
@@ -35,7 +35,7 @@ export default function OrderForm({
   price,
   quantity,
   leverage = 1,
-  side = 'LONG',
+  side = 'BUY',
   onSymbolChange,
   onOrderTypeChange,
   onPriceChange,
@@ -212,6 +212,7 @@ export default function OrderForm({
           <div className="relative flex-1">
            <Input 
               inputMode="decimal"
+              aria-label="Price"
               value={price.toString()}
               onChange={(e) => handlePriceChange(e.target.value)}
               className="text-center"
@@ -240,9 +241,13 @@ export default function OrderForm({
           </Button>
           <div className="relative flex-1">
             <Input 
-              inputMode="numeric"
+              type="number"
+              aria-label="Quantity"
+              inputMode="decimal"
+              step="any"
+              min="0"
               value={quantity}
-              onChange={(e) => onQuantityChange(parseInt(e.target.value) || 0)}
+              onChange={(e) => onQuantityChange(Number(e.target.value))}
               className="text-center"
             />
           </div>
@@ -308,15 +313,13 @@ export default function OrderForm({
               <path d="M12 8h.01"></path>
             </svg>
           </div>
-          <Select value={side} onValueChange={(v) => onSideChange(v as 'LONG' | 'SHORT' | 'BUY' | 'SELL')}>
+          <Select value={side} onValueChange={(v) => onSideChange(v as 'BUY' | 'SELL')}>
             <SelectTrigger className="bg-input text-xs h-6">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="LONG">Long (Open)</SelectItem>
-              <SelectItem value="SHORT">Short (Open)</SelectItem>
-              <SelectItem value="SELL">Sell (Close Long)</SelectItem>
-              <SelectItem value="BUY">Buy (Close Short)</SelectItem>
+              <SelectItem value="BUY">Buy (Long)</SelectItem>
+              <SelectItem value="SELL">Sell (Long)</SelectItem>
             </SelectContent>
           </Select>
         </div>

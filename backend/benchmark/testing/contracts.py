@@ -25,7 +25,6 @@ from benchmark.contracts import (
     KNOWN_CAPABILITIES,
     PromptSpec,
     RenderedPrompt,
-    SideEffect,
     TerminationReason,
     ToolContext,
     ToolResult,
@@ -55,6 +54,7 @@ from .events import FakeEventSink
 
 
 _UNSET = object()
+_PRODUCTION_TRADING_WRITE_ALLOWLIST = frozenset({"core.execute_trade"})
 
 
 class ContractViolation(AssertionError):
@@ -65,6 +65,12 @@ def _close_awaitable(value: Any) -> None:
     close = getattr(value, "close", None)
     if callable(close):
         close()
+
+
+def _exception_detail(exc: BaseException) -> str:
+    message = str(exc).strip()
+    name = type(exc).__name__
+    return f"{name}: {message}" if message else name
 
 
 def _sync_or_assert(value: Any, label: str) -> Any:
@@ -394,6 +400,7 @@ def assert_agent_contract(
                 account_id=context.account_id,
                 decision_round_id=context.decision_round_id,
                 trace_id=context.trace_id,
+                deadline_at=case.deadline_at,
             )
         )
         try:
@@ -405,7 +412,8 @@ def assert_agent_contract(
             raise
         except Exception as exc:
             raise ContractViolation(
-                f"AgentFactory.create failed in case {case.name!r}: {type(exc).__name__}"
+                f"AgentFactory.create failed in case {case.name!r}: "
+                f"{_exception_detail(exc)}"
             ) from exc
         if not isinstance(agent, Agent):
             raise ContractViolation(f"Agent case {case.name!r} did not create an Agent")
@@ -418,7 +426,7 @@ def assert_agent_contract(
             raise
         except Exception as exc:
             raise ContractViolation(
-                f"Agent.run failed in case {case.name!r}: {type(exc).__name__}"
+                f"Agent.run failed in case {case.name!r}: {_exception_detail(exc)}"
             ) from exc
         if not isinstance(result, AgentRunResult):
             raise ContractViolation(
@@ -457,7 +465,50 @@ def _provider_extension(provider: ToolProvider) -> ExtensionRef:
     return ExtensionRef(candidate_id, candidate_version)
 
 
+def _schema_types(schema: Mapping[str, Any]) -> tuple[Any, ...]:
+    declared = schema.get("type")
+    if isinstance(declared, list):
+        return tuple(declared)
+    return (declared,)
+
+
+def _numeric_example(schema: Mapping[str, Any], *, integer: bool) -> int | float:
+    lower = schema.get("minimum")
+    if "exclusiveMinimum" in schema:
+        exclusive = schema["exclusiveMinimum"]
+        adjusted = int(exclusive) + 1 if integer else float(exclusive) + 1
+        lower = adjusted if lower is None else max(lower, adjusted)
+    upper = schema.get("maximum")
+    if "exclusiveMaximum" in schema:
+        exclusive = schema["exclusiveMaximum"]
+        adjusted = int(exclusive) - 1 if integer else float(exclusive) - 1
+        upper = adjusted if upper is None else min(upper, adjusted)
+    value: int | float = 1 if integer else 1.0
+    if lower is not None:
+        value = max(value, lower)
+    if upper is not None:
+        value = min(value, upper)
+    return int(value) if integer else float(value)
+
+
+def _string_example(schema: Mapping[str, Any]) -> str:
+    min_length = int(schema.get("minLength") or 0)
+    max_length = schema.get("maxLength")
+    text = "example"
+    if min_length > len(text):
+        text = text + ("x" * (min_length - len(text)))
+    if isinstance(max_length, int) and max_length < len(text):
+        text = "x" * max_length
+    if min_length > len(text):
+        text = text + ("x" * (min_length - len(text)))
+    return text
+
+
 def _schema_example(schema: Mapping[str, Any]) -> Any:
+    if not isinstance(schema, Mapping):
+        return "example"
+    if "const" in schema:
+        return schema["const"]
     if "default" in schema:
         return schema["default"]
     if "examples" in schema and schema["examples"]:
@@ -466,26 +517,44 @@ def _schema_example(schema: Mapping[str, Any]) -> Any:
         return schema["enum"][0]
     for branch in ("anyOf", "oneOf"):
         values = schema.get(branch)
-        if isinstance(values, Sequence) and values:
-            return _schema_example(values[0])
-    schema_type = schema.get("type")
-    if schema_type == "object" or "properties" in schema:
+        if (
+            isinstance(values, Sequence)
+            and values
+            and not isinstance(values, (str, bytes))
+        ):
+            first = values[0]
+            return _schema_example(first if isinstance(first, Mapping) else {})
+    types = _schema_types(schema)
+    if "object" in types or "properties" in schema:
         properties = schema.get("properties", {})
         required = schema.get("required", ())
+        if not isinstance(properties, Mapping):
+            return {}
         return {
-            key: _schema_example(properties.get(key, {}))
+            key: _schema_example(
+                properties.get(key, {})
+                if isinstance(properties.get(key, {}), Mapping)
+                else {}
+            )
             for key in required
-            if isinstance(properties, Mapping)
         }
-    if schema_type == "array":
+    if "array" in types:
+        min_items = int(schema.get("minItems") or 0)
+        items_schema = schema.get("items", {})
+        if not isinstance(items_schema, Mapping):
+            items_schema = {}
+        if min_items:
+            return [_schema_example(items_schema) for _ in range(min_items)]
         return []
-    if schema_type == "integer":
-        return 1
-    if schema_type == "number":
-        return 1
-    if schema_type == "boolean":
+    if "integer" in types:
+        return _numeric_example(schema, integer=True)
+    if "number" in types:
+        return _numeric_example(schema, integer=False)
+    if "boolean" in types:
         return True
-    return "example"
+    if types == ("null",):
+        return None
+    return _string_example(schema)
 
 
 def arguments_from_input_schema(
@@ -563,7 +632,7 @@ def assert_tool_contract(
         raise
     except Exception as exc:
         raise ContractViolation(
-            f"ToolProvider.list_tools failed: {type(exc).__name__}"
+            f"ToolProvider.list_tools failed: {_exception_detail(exc)}"
         ) from exc
     if isinstance(tools, (str, bytes)):
         raise ContractViolation(
@@ -581,7 +650,6 @@ def assert_tool_contract(
     contexts_by_name: dict[str, list[ToolContext]] = {}
     wrapped: list[Tool] = []
     names: set[str] = set()
-    trading_allowlist: set[str] = set()
     for position, tool in enumerate(tools):
         if not isinstance(tool, Tool):
             raise ContractViolation(
@@ -602,15 +670,16 @@ def assert_tool_contract(
         names.add(spec.name)
         try:
             require_identifier(spec.name, "tool name")
-            validate_tool_spec(spec, trading_write_allowlist=frozenset({spec.name}))
+            validate_tool_spec(
+                spec,
+                trading_write_allowlist=_PRODUCTION_TRADING_WRITE_ALLOWLIST,
+            )
             schema_validator(spec.input_schema)
             schema_validator(spec.output_schema)
         except Exception as exc:
             raise ContractViolation(
                 f"Tool {spec.name!r} has an invalid specification: {exc}"
             ) from exc
-        if TRADING_WRITE in spec.required_capabilities:
-            trading_allowlist.add(spec.name)
         if (
             spec.side_effect.value == "read_only"
             and TRADING_WRITE in spec.required_capabilities
@@ -621,9 +690,7 @@ def assert_tool_contract(
         contexts_by_name[spec.name] = []
         wrapped.append(_RecordingTool(tool, contexts_by_name[spec.name]))
 
-    registry = ToolRegistry(
-        trading_write_allowlist=trading_allowlist or ("core.execute_trade",)
-    )
+    registry = ToolRegistry(trading_write_allowlist=_PRODUCTION_TRADING_WRITE_ALLOWLIST)
     try:
         registry.register_provider(_provider_extension(provider), _Provider(wrapped))
         registry.freeze()
@@ -635,21 +702,17 @@ def assert_tool_contract(
     if cases is not None:
         normalized_cases = tuple(_normalize_tool_case(item) for item in cases)
     else:
-        # Contract discovery must not unexpectedly execute a write-capable
-        # component.  Such Tools still receive full spec/registration checks;
-        # callers provide explicit cases when they want to exercise writes.
         discovered: list[ToolCase] = []
         for name in sorted(names):
             spec = next(tool.spec for tool in wrapped if tool.spec.name == name)
-            if spec.side_effect is not SideEffect.READ_ONLY:
-                continue
-            arguments = _schema_example(spec.input_schema)
-            try:
-                has_errors = bool(validation_messages(spec.input_schema, arguments))
-            except Exception:
-                has_errors = True
-            if not has_errors:
-                discovered.append(ToolCase(name=name, arguments=arguments))
+            arguments = arguments_from_input_schema(spec.input_schema)
+            errors = validation_messages(spec.input_schema, arguments)
+            if errors:
+                raise ContractViolation(
+                    f"Tool {spec.name!r} needs an explicit ToolCase; "
+                    f"derived arguments are invalid: {errors[0]['message']}"
+                )
+            discovered.append(ToolCase(name=name, arguments=arguments))
         normalized_cases = tuple(discovered)
     for case in normalized_cases:
         if case.tool_name not in names:
@@ -700,13 +763,13 @@ def assert_tool_contract(
                         f"Tool case {case.name!r} returned an awaitable"
                     ) from exc
                 raise ContractViolation(
-                    f"Tool case {case.name!r} raised {exc.code}, expected "
+                    f"Tool case {case.name!r} raised {exc.code}: {exc}, expected "
                     f"{case.expected_error_code or 'a ToolResult'}"
                 ) from exc
             continue
         except Exception as exc:
             raise ContractViolation(
-                f"Tool case {case.name!r} failed: {type(exc).__name__}"
+                f"Tool case {case.name!r} failed: {_exception_detail(exc)}"
             ) from exc
         if not isinstance(result, ToolResult):
             raise ContractViolation(
@@ -778,7 +841,7 @@ def assert_prompt_contract(provider: PromptProvider) -> None:
         raise
     except Exception as exc:
         raise ContractViolation(
-            f"PromptProvider.list_prompts failed: {type(exc).__name__}"
+            f"PromptProvider.list_prompts failed: {_exception_detail(exc)}"
         ) from exc
     if isinstance(specs, (str, bytes)):
         raise ContractViolation("PromptProvider.list_prompts must return a sequence")
@@ -808,7 +871,7 @@ def assert_prompt_contract(provider: PromptProvider) -> None:
             raise
         except Exception as exc:
             raise ContractViolation(
-                f"PromptProvider.render({spec.id}) failed: {type(exc).__name__}"
+                f"PromptProvider.render({spec.id}) failed: {_exception_detail(exc)}"
             ) from exc
         if not isinstance(rendered, RenderedPrompt):
             raise ContractViolation(f"Prompt {spec.id!r} did not return RenderedPrompt")

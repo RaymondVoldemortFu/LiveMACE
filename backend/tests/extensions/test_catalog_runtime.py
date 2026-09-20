@@ -134,7 +134,7 @@ def test_builtin_runtime_is_catalogued_and_frozen():
         "core.write_file",
         "core.run_python_script",
     }.issubset(tool_names)
-    assert "core.execute_trade" not in tool_names
+    assert "core.execute_trade" in tool_names
     assert any(name.startswith("public.") for name in tool_names)
     assert len(runtime.catalog.list_prompt_profiles()) == 9
     assert runtime.agents.frozen
@@ -286,14 +286,14 @@ def test_catalog_rejects_unknown_fields_and_tool_names():
     disabled = catalog.validate_account_config(
         AccountRuntimeConfigDTO(
             agent_id="core.react",
-            disabled_tools=("core.execute_trade",),
+            disabled_tools=("core.missing_trade",),
         )
     )
     assert not disabled.valid
     assert disabled.errors[0].code == "TOOL_NOT_FOUND"
 
 
-def test_toolset_validation_is_non_blocking_until_m06_m12():
+def test_unavailable_toolsets_are_rejected():
     catalog = build_extension_runtime(ExtensionSettings()).catalog
     report = catalog.validate_account_config(
         AccountRuntimeConfigDTO(
@@ -302,10 +302,8 @@ def test_toolset_validation_is_non_blocking_until_m06_m12():
         )
     )
 
-    assert report.valid
-    assert [issue.code for issue in report.warnings] == [
-        "TOOLSET_VALIDATION_DEFERRED"
-    ]
+    assert not report.valid
+    assert [issue.code for issue in report.errors] == ["TOOLSET_NOT_FOUND"]
 
 
 def test_entrypoint_module_must_be_inside_extension_root(tmp_path: Path):

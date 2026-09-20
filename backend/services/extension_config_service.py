@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
-from functools import lru_cache
+from datetime import datetime, timezone
 from typing import Any, Callable, Mapping
 
 from benchmark.accounts import (
@@ -14,12 +13,10 @@ from benchmark.accounts import (
     save_runtime_config,
 )
 from benchmark.contracts import to_jsonable
-from benchmark.extensions import (
-    ExtensionRuntime,
-    ExtensionSettings,
-    build_extension_runtime,
-)
+from benchmark.extensions import ExtensionRuntime
+from benchmark.extensions.host import get_extension_runtime
 from benchmark.persistence import SqlAlchemyUnitOfWork
+from config.api_feature_config import ApiFeatureConfig
 from database.connection import SessionLocal
 
 
@@ -36,6 +33,11 @@ class ExtensionConfigServiceError(RuntimeError):
 class AccountNotFoundError(ExtensionConfigServiceError):
     code = "ACCOUNT_NOT_FOUND"
     status_code = 404
+
+
+class AccountUpdateDisabledError(ExtensionConfigServiceError):
+    code = "ACCOUNT_UPDATE_DISABLED"
+    status_code = 403
 
 
 class ComponentNotFoundError(ExtensionConfigServiceError):
@@ -63,7 +65,10 @@ def _issue_dict(issue: Any) -> dict[str, Any]:
 
 
 def _iso(value: Any) -> str | None:
-    return value.isoformat() if isinstance(value, datetime) else None
+    if not isinstance(value, datetime):
+        return None
+    value = value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+    return value.isoformat()
 
 
 @dataclass
@@ -208,6 +213,10 @@ class ExtensionConfigService:
         config: Mapping[str, Any],
         expected_updated_at: str | None,
     ) -> dict[str, Any]:
+        if not ApiFeatureConfig.ENABLE_ACCOUNT_UPDATE_API:
+            raise AccountUpdateDisabledError(
+                "Account update API is disabled by deployment configuration"
+            )
         validation = self.validate(config)
         if not validation["valid"]:
             raise RuntimeConfigInvalidError(
@@ -230,6 +239,9 @@ class ExtensionConfigService:
         )
         try:
             expected = datetime.fromisoformat(expected_updated_at) if expected_updated_at else None
+            if expected is not None and expected.tzinfo is None:
+                # Older API responses exposed the database's naive-UTC token.
+                expected = expected.replace(tzinfo=timezone.utc)
         except ValueError as exc:
             raise RuntimeConfigInvalidError(
                 "expected_updated_at must be an ISO-8601 datetime"
@@ -264,9 +276,8 @@ class ExtensionConfigService:
         return self.get_runtime_config(account_id)
 
 
-@lru_cache(maxsize=1)
 def get_extension_config_service() -> ExtensionConfigService:
-    runtime = build_extension_runtime(ExtensionSettings())
+    runtime = get_extension_runtime()
     return ExtensionConfigService(
         runtime=runtime,
         uow_factory=lambda: SqlAlchemyUnitOfWork(SessionLocal),
@@ -275,6 +286,7 @@ def get_extension_config_service() -> ExtensionConfigService:
 
 __all__ = [
     "AccountNotFoundError",
+    "AccountUpdateDisabledError",
     "ComponentNotFoundError",
     "ExtensionConfigService",
     "ExtensionConfigServiceError",

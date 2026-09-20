@@ -5,7 +5,7 @@ from typing import Any
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from database.models import AIDecisionLog, Account, AgentTrace
+from database.models import AIDecisionLog, Account, AgentTrace, RuntimeEvent
 
 
 class TraceNotFoundError(LookupError):
@@ -43,13 +43,19 @@ class AgentApiService:
             .order_by(AgentTrace.step_number)
             .all()
         )
+        rows = self.db.query(RuntimeEvent).filter(RuntimeEvent.trace_id == trace_id).order_by(RuntimeEvent.sequence, RuntimeEvent.id).all()
+        events = [{"id": row.id, "type": row.event_type, "account_id": row.account_id,
+                   "decision_round_id": row.decision_round_id, "payload": json.loads(row.payload),
+                   "created_at": row.created_at} for row in rows]
         if not traces:
             decision = self.db.query(AIDecisionLog).filter(AIDecisionLog.trace_id == trace_id).first()
-            if not decision:
+            if not decision and not events:
                 raise TraceNotFoundError("Trace not found")
-            return {"trace_id": trace_id, "steps": []}
+            return {"trace_id": trace_id, "steps": [], "events": events, "schema_version": 1}
         return {
             "trace_id": trace_id,
+            "events": events,
+            "schema_version": 1,
             "steps": [
                 {
                     "step_number": trace.step_number,
@@ -69,21 +75,8 @@ class AgentApiService:
         account = self.db.query(Account).filter(Account.id == account_id).first()
         if not account:
             raise AccountNotFoundError("Account not found")
-        latest_trace = (
-            self.db.query(AgentTrace)
-            .filter(AgentTrace.account_id == account_id)
-            .order_by(AgentTrace.created_at.desc())
-            .first()
-        )
-        if latest_trace:
-            return {"trace_id": latest_trace.trace_id}
-        latest_decision = (
-            self.db.query(AIDecisionLog)
-            .filter(AIDecisionLog.account_id == account_id)
-            .order_by(AIDecisionLog.decision_time.desc())
-            .first()
-        )
-        return {"trace_id": latest_decision.trace_id if latest_decision and latest_decision.trace_id else None}
+        history = self.get_trace_history(account_id, 1)
+        return {"trace_id": history[0]["trace_id"] if history else None}
 
     def get_trace_history(self, account_id: int, limit: int):
         decisions = (
@@ -105,26 +98,15 @@ class AgentApiService:
                     "reason": reason_text[:50] + "..." if reason_text else "",
                 }
             )
-        if not history:
-            rows = (
-                self.db.query(
-                    AgentTrace.trace_id.label("trace_id"),
-                    func.max(AgentTrace.created_at).label("timestamp"),
-                )
-                .filter(AgentTrace.account_id == account_id, AgentTrace.trace_id.isnot(None))
-                .group_by(AgentTrace.trace_id)
-                .order_by(func.max(AgentTrace.created_at).desc())
-                .limit(limit)
-                .all()
-            )
-            history.extend(
-                {
-                    "trace_id": row.trace_id,
-                    "timestamp": row.timestamp,
-                    "operation": "trace",
-                    "symbol": None,
-                    "reason": "Agent trace session",
-                }
-                for row in rows
-            )
-        return history
+        known = {item["trace_id"] for item in history}
+        for model in (AgentTrace, RuntimeEvent):
+            rows = (self.db.query(model.trace_id.label("trace_id"), func.max(model.created_at).label("timestamp"))
+                .filter(model.account_id == account_id, model.trace_id.isnot(None))
+                .group_by(model.trace_id).order_by(func.max(model.created_at).desc()).limit(limit).all())
+            for row in rows:
+                if row.trace_id not in known:
+                    history.append({"trace_id": row.trace_id, "timestamp": row.timestamp,
+                        "operation": "trace", "symbol": None, "reason": "Agent runtime session"})
+                    known.add(row.trace_id)
+        history.sort(key=lambda item: item["timestamp"], reverse=True)
+        return history[:limit]

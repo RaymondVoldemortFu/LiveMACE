@@ -219,6 +219,7 @@ def build_fake_agent_build_context(
     account_id: int = 1,
     decision_round_id: str = "fake-round-1",
     trace_id: str = "fake-trace-1",
+    deadline_at: datetime | None = None,
 ) -> AgentBuildContext:
     """Build an ``AgentBuildContext`` backed solely by public test doubles."""
 
@@ -234,6 +235,7 @@ def build_fake_agent_build_context(
             decision_round_id=decision_round_id,
             trace_id=trace_id,
             capabilities=frozenset(KNOWN_CAPABILITIES),
+            deadline_at=deadline_at,
         )
     elif isinstance(tools, ToolRegistry):
         if not tools.frozen:
@@ -244,6 +246,7 @@ def build_fake_agent_build_context(
             decision_round_id=decision_round_id,
             trace_id=trace_id,
             capabilities=frozenset(KNOWN_CAPABILITIES),
+            deadline_at=deadline_at,
         )
     else:
         tool_port = tools

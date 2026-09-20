@@ -46,53 +46,64 @@ export default function AgentStatusView({ accounts }: AgentStatusViewProps) {
         })
     }, [agentTraceAccounts])
 
+    useEffect(() => {
+        setTraceId(null)
+        setTrace(null)
+        setHistory([])
+        setIsLiveMode(true)
+    }, [selectedAccountId])
+
     // Poll for latest trace ID (only in live mode)
     useEffect(() => {
         if (!selectedAccountId || !isLiveMode) return
 
+        let active = true
+        let inFlight = false
         const pollLatest = async () => {
+            if (inFlight) return
+            inFlight = true
             try {
                 const res = await getLatestTraceId(parseInt(selectedAccountId))
-                if (res.trace_id && res.trace_id !== traceId) {
-                    setTraceId(res.trace_id)
-                }
+                if (active) setTraceId(res.trace_id || null)
             } catch (e) {
                 console.error("Failed to poll latest trace", e)
-            }
+            } finally { inFlight = false }
         }
 
         pollLatest()
         const interval = setInterval(pollLatest, 2000)
-        return () => clearInterval(interval)
-    }, [selectedAccountId, traceId, isLiveMode])
+        return () => { active = false; clearInterval(interval) }
+    }, [selectedAccountId, isLiveMode])
 
     // Fetch history when sheet opens
     useEffect(() => {
+        let active = true
         if (sheetOpen && selectedAccountId) {
-            getTraceHistory(parseInt(selectedAccountId)).then(setHistory).catch(console.error)
+            getTraceHistory(parseInt(selectedAccountId)).then(data => { if (active) setHistory(data) }).catch(console.error)
         }
+        return () => { active = false }
     }, [sheetOpen, selectedAccountId])
 
     // Poll for trace details if we have a traceId
     useEffect(() => {
-        if (!traceId) return
-
+        if (!traceId) { setTrace(null); return }
+        let active = true
+        let inFlight = false
         const fetchTrace = async () => {
+            if (inFlight) return
+            inFlight = true
             try {
                 const data = await getAgentTrace(traceId)
-                setTrace(data)
+                if (active) setTrace(data)
             } catch (e) {
                 console.error("Failed to fetch trace details", e)
-            }
+            } finally { inFlight = false }
         }
 
         fetchTrace()
-        // Only poll if in live mode
-        if (isLiveMode) {
-            const interval = setInterval(fetchTrace, 2000)
-            return () => clearInterval(interval)
-        }
-    }, [traceId, isLiveMode])
+        const interval = isLiveMode ? setInterval(fetchTrace, 2000) : undefined
+        return () => { active = false; if (interval) clearInterval(interval) }
+    }, [traceId, isLiveMode, selectedAccountId])
 
     // Auto-scroll
     useEffect(() => {
@@ -109,12 +120,7 @@ export default function AgentStatusView({ accounts }: AgentStatusViewProps) {
 
     const handleGoLive = () => {
         setIsLiveMode(true)
-        // Trigger a poll immediately
-        if (selectedAccountId) {
-            getLatestTraceId(parseInt(selectedAccountId)).then(res => {
-                if (res.trace_id) setTraceId(res.trace_id)
-            })
-        }
+
     }
 
     const normalizeToolCalls = (toolCalls: any): any[] => {
@@ -368,6 +374,19 @@ export default function AgentStatusView({ accounts }: AgentStatusViewProps) {
                         </div>
                     ) : trace ? (
                         <div className="space-y-4 w-full min-w-0 max-w-full">
+                            {trace.events && trace.events.length > 0 && (
+                                <details className="rounded border p-3" open={trace.steps.length === 0}>
+                                    <summary className="cursor-pointer font-medium text-sm">Runtime events ({trace.events.length})</summary>
+                                    <div className="mt-3 space-y-2">
+                                        {trace.events.map(event => (
+                                            <details key={event.id} className="rounded bg-muted p-2 text-xs">
+                                                <summary className="cursor-pointer break-all">{event.type} · Round {event.decision_round_id}</summary>
+                                                <pre className="mt-2 whitespace-pre-wrap break-all">{JSON.stringify(event.payload, null, 2)}</pre>
+                                            </details>
+                                        ))}
+                                    </div>
+                                </details>
+                            )}
                             {trace.steps.map(renderStep)}
                         </div>
                     ) : (

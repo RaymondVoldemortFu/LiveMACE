@@ -27,7 +27,7 @@ from .hyperliquid_market_data import (
     get_all_symbols_from_hyperliquid,
 )
 from .alpaca_market_data import (
-    get_last_price_from_alpaca,
+    get_price_result_from_alpaca,
     get_last_close_price_from_alpaca,
     get_kline_data_from_alpaca,
     get_market_status_from_alpaca,
@@ -54,6 +54,8 @@ _us_market_status_cache: Dict[str, Any] = {
     "ts": 0,
 }
 _us_market_status_lock = Lock()
+# Bounded stripes coalesce concurrent cache misses across WS and scheduler callers.
+_price_refresh_locks = tuple(Lock() for _ in range(64))
 
 
 def _period_to_seconds(period: str) -> int | None:
@@ -91,7 +93,7 @@ def _create_market_data_port() -> RoutedMarketDataPort:
     )
     us = _FunctionMarketDataAdapter(
         provider_id="core.market.alpaca",
-        price_loader=get_last_price_from_alpaca,
+        price_loader=get_price_result_from_alpaca,
         kline_loader=get_kline_data_from_alpaca,
         status_loader=get_market_status_from_alpaca,
         supported_market=Market.US,
@@ -329,18 +331,19 @@ def get_price_result(
     allow_stale: bool = True,
 ) -> PriceResult:
     resolved = resolve_symbol_market(symbol, market)
-    port = _create_market_data_port()
-    cache = LegacyPriceCacheAdapter(price_cache)
-    if for_trading:
-        return TradingMarketDataService(port, price_cache=cache).require_price(
-            resolved.symbol,
-            resolved.market,
-        )
-    return DisplayMarketDataService(
-        port,
-        price_cache=cache,
-        fallback=_display_price_fallback,
-    ).get_price(resolved.symbol, resolved.market, allow_stale=allow_stale)
+    with _price_refresh_locks[hash((resolved.symbol, resolved.market.value)) % len(_price_refresh_locks)]:
+        port = _create_market_data_port()
+        cache = LegacyPriceCacheAdapter(price_cache)
+        if for_trading:
+            return TradingMarketDataService(port, price_cache=cache).require_price(
+                resolved.symbol,
+                resolved.market,
+            )
+        return DisplayMarketDataService(
+            port,
+            price_cache=cache,
+            fallback=_display_price_fallback,
+        ).get_price(resolved.symbol, resolved.market, allow_stale=allow_stale)
 
 
 def get_last_price(symbol: str, market: str = "CRYPTO") -> float:

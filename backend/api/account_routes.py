@@ -316,7 +316,7 @@ async def update_account_settings(account_id: int, payload: dict, db: Session = 
                 detail="Account update API is disabled by deployment configuration",
             )
 
-        logger.info(f"Updating account {account_id} with payload: {payload}")
+        logger.info("Updating account %s fields: %s", account_id, sorted(payload))
         
         account_service = AccountApiService(db)
         account = account_service.get_active_account(account_id)
@@ -324,6 +324,33 @@ async def update_account_settings(account_id: int, payload: dict, db: Session = 
         if not account:
             raise HTTPException(status_code=404, detail="Account not found")
         
+        # Validate the effective configuration before changing any ORM fields.
+        # Blank form credentials are omitted by the UI so the stored key survives.
+        from types import SimpleNamespace
+        from services.baselines import is_baseline_trading_account
+
+        candidate = SimpleNamespace(
+            agent_type=payload.get("agent_type", account.agent_type),
+            name=payload.get("name", account.name),
+        )
+        model_settings_updated = bool({"model", "base_url"}.intersection(payload))
+        switches_from_baseline = is_baseline_trading_account(account) and not is_baseline_trading_account(candidate)
+        if (
+            account.account_type == "AI"
+            and not is_baseline_trading_account(candidate)
+            and (model_settings_updated or switches_from_baseline)
+        ):
+            for field in ("model", "base_url"):
+                value = payload.get(field, getattr(account, field))
+                if not isinstance(value, str) or not value.strip():
+                    raise HTTPException(
+                        status_code=400,
+                        detail="AI accounts require a non-empty model and base_url",
+                    )
+
+        runtime_fields = {"agent_type", "memory_enabled", "tool_routing_enabled", "enable_rule_aware"}
+        previous_runtime = {key: getattr(account, key, None) for key in runtime_fields}
+
         # Update fields if provided (allow empty strings for api_key and base_url)
         if "name" in payload:
             if payload["name"]:
@@ -363,6 +390,10 @@ async def update_account_settings(account_id: int, payload: dict, db: Session = 
                 f"Updated api_key (input_length: {len(incoming_api_key) if incoming_api_key else 0}, stored_as_encrypted: {bool(incoming_api_key)})"
             )
         
+        changed_runtime = {key for key in runtime_fields if key in payload
+                           and getattr(account, key, None) != previous_runtime[key]}
+        if changed_runtime:
+            account_service.sync_runtime_switches(account, changed_runtime)
         account_service.persist(account)
         logger.info(f"Account {account_id} updated successfully")
         

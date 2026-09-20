@@ -3,9 +3,6 @@ import ReactDOM from 'react-dom/client'
 import './index.css'
 import { Toaster, toast } from 'react-hot-toast'
 
-// Create a module-level WebSocket singleton to avoid duplicate connections in React StrictMode
-let __WS_SINGLETON__: WebSocket | null = null;
-
 const resolveWsUrl = () => {
   if (typeof window === 'undefined') return 'ws://localhost:5611/ws'
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -63,6 +60,7 @@ const PAGE_TITLES: Record<string, string> = {
   portfolio: 'Crypto Paper Trading',
   comprehensive: '同花顺Bench - 曲线总览',
   'comprehensive-details': '同花顺Bench - 数据明细',
+  'agent-status': 'Agent Status',
   memory: 'Memory System',
   compliance: 'Rule Compliance',
 }
@@ -79,41 +77,64 @@ function App() {
   const [currentPage, setCurrentPage] = useState<string>('comprehensive')
   const [accountRefreshTrigger, setAccountRefreshTrigger] = useState<number>(0)
   const wsRef = useRef<WebSocket | null>(null)
+  const selectedAccountRef = useRef<number | null>(null)
+  const selectedUserRef = useRef<User | null>(null)
   const [accounts, setAccounts] = useState<any[]>([])
   const [accountsLoading, setAccountsLoading] = useState<boolean>(true)
 
   useEffect(() => {
     let reconnectTimer: NodeJS.Timeout | null = null
-    let ws = __WS_SINGLETON__
-    const created = !ws || ws.readyState === WebSocket.CLOSING || ws.readyState === WebSocket.CLOSED
+    let ws: WebSocket | null = null
+    let disposed = false
+    let removeHandlers = () => {}
     
     const connectWebSocket = () => {
+      if (disposed) return
+      removeHandlers()
       try {
-        ws = new WebSocket(resolveWsUrl())
-        __WS_SINGLETON__ = ws
-        wsRef.current = ws
+        const socket = new WebSocket(resolveWsUrl())
+        ws = socket
+        wsRef.current = socket
         
         const handleOpen = () => {
+          if (disposed) return
           console.log('WebSocket connected')
-          // Start with hardcoded default user for paper trading
-          ws!.send(JSON.stringify({ type: 'bootstrap', username: 'default', initial_capital: 10000 }))
+          socket.send(JSON.stringify({ type: 'bootstrap', username: selectedUserRef.current?.username || 'default', initial_capital: 10000 }))
         }
         
         const handleMessage = (e: MessageEvent) => {
+          if (disposed || wsRef.current !== socket) return
           try {
             const msg = JSON.parse(e.data)
             if (msg.type === 'bootstrap_ok') {
               if (msg.user) {
+                selectedUserRef.current = msg.user
                 setUser(msg.user)
               }
               if (msg.account) {
+                if (selectedAccountRef.current !== null && selectedAccountRef.current !== msg.account.id) {
+                  socket.send(JSON.stringify({ type: 'switch_account', account_id: selectedAccountRef.current }))
+                  refreshAccounts()
+                  return
+                }
+                selectedAccountRef.current = msg.account.id
                 setAccount(msg.account)
               }
               // refresh accounts list once bootstrapped
               refreshAccounts()
               // request initial snapshot
-              ws!.send(JSON.stringify({ type: 'get_snapshot' }))
+              socket.send(JSON.stringify({ type: 'get_snapshot' }))
             } else if (msg.type === 'snapshot' || msg.type === 'snapshot_full' || msg.type === 'snapshot_fast') {
+              const snapshotAccount = msg.overview?.account
+              if (!snapshotAccount) return
+              if (selectedAccountRef.current !== null && snapshotAccount.id !== selectedAccountRef.current) return
+              if (selectedAccountRef.current === null) {
+                // switch_user acknowledges only the user; its snapshot selects
+                // the new default account. Ignore queued snapshots from the old user.
+                if (snapshotAccount.user_id !== selectedUserRef.current?.id) return
+                selectedAccountRef.current = snapshotAccount.id
+                setAccount(snapshotAccount)
+              }
               setOverview(msg.overview)
               setPositions(msg.positions)
               setOrders(msg.orders)
@@ -127,15 +148,21 @@ function App() {
               setTrades(msg.trades || [])
             } else if (msg.type === 'order_filled') {
               toast.success('Order filled')
-              ws!.send(JSON.stringify({ type: 'get_snapshot' }))
+              socket.send(JSON.stringify({ type: 'get_snapshot' }))
             } else if (msg.type === 'order_pending') {
               toast('Order placed, waiting for fill', { icon: '⏳' })
-              ws!.send(JSON.stringify({ type: 'get_snapshot' }))
+              socket.send(JSON.stringify({ type: 'get_snapshot' }))
             } else if (msg.type === 'user_switched') {
               toast.success(`Switched to ${msg.user.username}`)
+              selectedUserRef.current = msg.user
+              selectedAccountRef.current = null
+              setAccount(null)
+              setOverview(null)
               setUser(msg.user)
             } else if (msg.type === 'account_switched') {
               toast.success(`Switched to ${msg.account.name}`)
+              if (selectedAccountRef.current !== msg.account.id) setOverview(null)
+              selectedAccountRef.current = msg.account.id
               setAccount(msg.account)
               refreshAccounts()
             } else if (msg.type === 'error') {
@@ -149,15 +176,12 @@ function App() {
         
         const handleClose = (event: CloseEvent) => {
           console.log('WebSocket closed:', event.code, event.reason)
-          __WS_SINGLETON__ = null
-          if (wsRef.current === ws) wsRef.current = null
-          
-          // Attempt to reconnect after 3 seconds if the close wasn't intentional
-          if (event.code !== 1000 && event.code !== 1001) {
-            reconnectTimer = setTimeout(() => {
-              console.log('Attempting to reconnect WebSocket...')
-              connectWebSocket()
-            }, 3000)
+          if (wsRef.current === socket) wsRef.current = null
+          // Server shutdown also uses normal close codes (1000/1001).
+          // Only this effect's cleanup makes a disconnect intentional.
+          if (!disposed) {
+            setOverview(null)
+            reconnectTimer = setTimeout(connectWebSocket, 3000)
           }
         }
         
@@ -167,16 +191,16 @@ function App() {
           // toast.error('Connection error')
         }
 
-        ws.addEventListener('open', handleOpen)
-        ws.addEventListener('message', handleMessage)
-        ws.addEventListener('close', handleClose)
-        ws.addEventListener('error', handleError)
+        socket.addEventListener('open', handleOpen)
+        socket.addEventListener('message', handleMessage)
+        socket.addEventListener('close', handleClose)
+        socket.addEventListener('error', handleError)
         
-        return () => {
-          ws?.removeEventListener('open', handleOpen)
-          ws?.removeEventListener('message', handleMessage)
-          ws?.removeEventListener('close', handleClose)
-          ws?.removeEventListener('error', handleError)
+        removeHandlers = () => {
+          socket.removeEventListener('open', handleOpen)
+          socket.removeEventListener('message', handleMessage)
+          socket.removeEventListener('close', handleClose)
+          socket.removeEventListener('error', handleError)
         }
       } catch (err) {
         console.error('Failed to create WebSocket:', err)
@@ -185,17 +209,14 @@ function App() {
       }
     }
     
-    if (created) {
-      connectWebSocket()
-    } else {
-      wsRef.current = ws
-    }
+    connectWebSocket()
 
     return () => {
-      if (reconnectTimer) {
-        clearTimeout(reconnectTimer)
-      }
-      // Don't close the socket in cleanup to avoid issues with React StrictMode
+      disposed = true
+      if (reconnectTimer) clearTimeout(reconnectTimer)
+      removeHandlers()
+      if (wsRef.current === ws) wsRef.current = null
+      ws?.close(1000, 'App unmounted')
     }
   }, [])
 
@@ -269,7 +290,7 @@ function App() {
 
     return (
       <main className="flex-1 min-h-0 overflow-auto">
-        <div className="min-h-full min-w-[1200px] p-4">
+        <div className="min-h-full min-w-0 p-4 pb-20 md:pb-4">
           {currentPage === 'portfolio' && (
             <Portfolio
               overview={overview}
@@ -337,7 +358,7 @@ function App() {
         onPageChange={setCurrentPage}
         onAccountUpdated={handleAccountUpdated}
       />
-      <div className="flex-1 flex flex-col">
+      <div className="flex-1 min-w-0 flex flex-col">
         <Header
           title={pageTitle}
           currentUser={user}

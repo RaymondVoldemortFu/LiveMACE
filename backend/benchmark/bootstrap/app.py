@@ -23,6 +23,7 @@ from benchmark.bootstrap.runtime import (
     StartupMode,
     bootstrap_runtime,
     shutdown_runtime,
+    RuntimeShutdownError,
 )
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,7 @@ class AppSettings:
     cors_allow_origins: List[str] = field(default_factory=lambda: ["*"])
     static_dir: Optional[str] = None  # default: backend/static
     startup_cleanup_timeout_seconds: float = 10.0
+    shutdown_cleanup_timeout_seconds: float = 90.0
 
     def resolved_static_dir(self) -> str:
         if self.static_dir is not None:
@@ -109,7 +111,19 @@ def create_app(
         try:
             yield
         finally:
-            await shutdown_runtime(handle)
+            # Stop callbacks can report a still-draining worker. Keep ownership
+            # and retry until cleanup completes instead of exiting ASGI early.
+            with anyio.CancelScope(shield=True):
+                deadline = time.monotonic() + max(settings.shutdown_cleanup_timeout_seconds, 0)
+                while True:
+                    try:
+                        await shutdown_runtime(handle)
+                    except RuntimeShutdownError:
+                        if time.monotonic() >= deadline:
+                            raise
+                        await anyio.sleep(0.1)
+                    else:
+                        break
 
     app = FastAPI(title=settings.title, lifespan=lifespan)
     app.state.startup_mode = mode
@@ -147,14 +161,21 @@ def _register_health(app: FastAPI) -> None:
         }
 
     @app.get("/api/ready")
-    async def readiness_check(request: Request):
+    def readiness_check(request: Request):
+        from fastapi.responses import JSONResponse
         handle = getattr(request.app.state, "runtime_handle", None)
         ready = bool(handle is not None and handle.is_ready())
-        return {
+        dependencies = {}
+        if ready and os.getenv("WAVE3_PRODUCTION", "").lower() == "true":
+            from .readiness import production_dependencies
+            dependencies = production_dependencies()
+            ready = all(value == "ready" for value in dependencies.values())
+        return JSONResponse(status_code=200 if ready else 503, content={
             "ready": ready,
             "status": "ready" if ready else "not_ready",
             "services": handle.health() if handle is not None else {},
-        }
+            "dependencies": dependencies,
+        })
 
 
 def _register_static(app: FastAPI, settings: AppSettings) -> None:

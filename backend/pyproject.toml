@@ -76,9 +76,8 @@ include = [
 ]
 
 
-# Keep the checked-in, catalog-loadable examples available after a wheel
-# install.  The CLI also discovers this top-level resource in installed
-# environments, so examples do not depend on the source checkout layout.
+# Package the catalog-loadable examples so an installed wheel can load them
+# from examples/extensions.
 [tool.hatch.build.targets.wheel.force-include]
 "../examples/extensions" = "examples/extensions"
 

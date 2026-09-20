@@ -395,7 +395,7 @@ def test_production_market_adapters_follow_the_same_contract(
     prefix = "hyperliquid" if market is Market.CRYPTO else "alpaca"
     monkeypatch.setattr(
         module,
-        f"get_last_price_from_{prefix}",
+        "get_price_result_from_alpaca" if market is Market.US else f"get_last_price_from_{prefix}",
         lambda symbol: 100.0,
     )
     monkeypatch.setattr(

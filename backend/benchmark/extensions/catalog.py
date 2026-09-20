@@ -164,6 +164,18 @@ class ExtensionCatalog:
                     )
                 )
 
+        families = {"core.react": "react", "core.multi-agent": "multi_agent",
+                    "core.advanced-multi-agent": "advanced_multi_agent", "core.rule-aware": "rule_aware"}
+        if dto.prompt_profile_id and dto.agent_id in families and resolved_profile_version:
+            from types import SimpleNamespace
+            from benchmark.builtin.prompts import validate_profile_contract
+            registry = self._result.prompts
+            resolver = SimpleNamespace(
+                get_profile=lambda profile_id: registry.get_profile(profile_id, version=resolved_profile_version),
+                get_prompt_spec=registry.get_prompt_spec)
+            profile_report = validate_profile_contract(resolver, dto.prompt_profile_id, families[dto.agent_id])
+            errors.extend(profile_report.errors)
+
         disabled = set(dto.disabled_tools)
         for tool_name in dto.disabled_tools:
             try:
@@ -193,12 +205,8 @@ class ExtensionCatalog:
                 )
 
         if dto.toolset_ids:
-            warnings.append(
-                ValidationIssue(
-                    path="toolset_ids",
-                    message="Toolset resolution is deferred until M06/M12",
-                    code="TOOLSET_VALIDATION_DEFERRED",
-                )
+            errors.append(
+                ValidationIssue(path="toolset_ids", message="Named toolsets are not available; use disabled_tools to select tools", code="TOOLSET_NOT_FOUND")
             )
 
         self._validate_component_versions(dto, errors)

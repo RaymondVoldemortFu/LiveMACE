@@ -7,6 +7,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from benchmark.contracts.errors import TradeGatewayError
 from schemas.order import OrderOut
 from services.http_order_service import (
     HttpOrderService,
@@ -61,6 +62,10 @@ def _call(operation):
         return operation()
     except OrderServiceError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+    except TradeGatewayError as exc:
+        if exc.code == "SIZING_VALUE_INVALID":
+            raise HTTPException(status_code=400, detail=exc.message) from exc
+        raise
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

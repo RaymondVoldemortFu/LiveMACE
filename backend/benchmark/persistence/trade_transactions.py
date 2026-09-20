@@ -22,6 +22,8 @@ class TradeTransactionOperations(Protocol):
 
     def execute_order(self, order: Any) -> bool: ...
 
+    def liquidate_if_required(self, account: Any, *, reason: str, is_cancelled=None) -> tuple[int, int]: ...
+
 
 class SqlAlchemyTradeTransactionOperations:
     def __init__(self, session_provider: Callable[[], Session]) -> None:
@@ -71,3 +73,52 @@ class SqlAlchemyTradeTransactionOperations:
             manage_transaction=False,
             raise_on_error=True,
         )
+
+
+    def liquidate_if_required(self, account, *, reason, is_cancelled=None):
+        """Evaluate risk and close positions inside the account-lock transaction."""
+        from decimal import Decimal
+        from uuid import uuid4
+        from benchmark.contracts import Market, TradeCommand
+        from database.models import Position
+        from services.asset_calculator import calculate_position_market_value
+        from services.market_data import get_trading_price
+        from services.order_executor_leverage import _calculate_position_interest
+
+        session = self._session_provider()
+        positions = session.query(Position).filter(
+            Position.account_id == account.id, Position.quantity > 0).all()
+        leveraged = [p for p in positions if (p.leverage or 1) > 1]
+        margin = Decimal(str(account.margin_used))
+        if not leveraged or margin <= 0:
+            return 0, 0
+        equity = Decimal(str(account.current_cash))
+        # Any missing/invalid quote aborts this entire transaction. Omitting a
+        # positive asset value could otherwise turn a healthy account insolvent.
+        for position in positions:
+            if is_cancelled is not None and is_cancelled():
+                return 0, 0
+            price = Decimal(str(get_trading_price(position.symbol, position.market)))
+            if not price.is_finite() or price <= 0:
+                raise ValueError("Margin valuation requires a finite positive quote")
+            equity += calculate_position_market_value(position, price)
+            equity -= _calculate_position_interest(position)
+        if equity / margin >= Decimal(str(account.maintenance_margin_ratio)):
+            return 0, 0
+        processed = executed = 0
+        for position in leveraged:
+            if is_cancelled is not None and is_cancelled():
+                break
+            command = TradeCommand(
+                account_id=account.id, operation="close", market=Market(position.market),
+                symbol=position.symbol, direction=(position.side or "LONG").lower(),
+                sizing_mode="close_ratio", sizing_value=Decimal("1"), leverage=1,
+                reason=reason, idempotency_key=f"liquidation:{uuid4()}",
+            )
+            processed += 1
+            result = self.execute_trade(command)
+            if result.get("executed") is not True:
+                # Keep the account batch atomic if a close fails at execution.
+                raise ValueError("Margin liquidation trade was rejected")
+            executed += 1
+        return processed, executed

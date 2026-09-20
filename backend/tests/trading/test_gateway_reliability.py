@@ -3,6 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 import json
+import os
 from dataclasses import dataclass
 from threading import Event, Lock
 
@@ -35,10 +36,15 @@ from database.models import (
 
 @pytest.fixture()
 def session_factory(tmp_path):
-    engine = create_engine(
-        f"sqlite:///{tmp_path / 'gateway.db'}",
-        connect_args={"check_same_thread": False, "timeout": 10},
-    )
+    mysql_url = os.getenv("MYSQL_TEST_DATABASE_URL") if os.getenv("WAVE3_MYSQL_REGRESSION") == "true" else None
+    if mysql_url:
+        from sqlalchemy.engine import make_url
+        assert make_url(mysql_url).database == "alpha_arena_wave3_test"
+        engine = create_engine(mysql_url, pool_pre_ping=True)
+        Base.metadata.drop_all(engine)
+    else:
+        engine = create_engine(f"sqlite:///{tmp_path / 'gateway.db'}",
+            connect_args={"check_same_thread": False, "timeout": 10})
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
     session = factory()
@@ -93,7 +99,8 @@ def _test_uow_factory(session_factory, executor):
 
 def _gateway(session_factory, executor=None):
     if executor is None:
-        uow_factory = lambda: SqlAlchemyUnitOfWork(session_factory)
+        def uow_factory():
+            return SqlAlchemyUnitOfWork(session_factory)
     else:
         uow_factory = _test_uow_factory(session_factory, executor)
     return SynchronousTradeCommandGateway(
@@ -647,3 +654,198 @@ def test_committed_trade_is_not_reported_as_rejected_when_session_refresh_fails(
         )
     assert caught.value.code == "TRADE_CALLER_SESSION_REFRESH_FAILED"
     assert "driver detail" not in str(caught.value)
+
+
+def _liquidation_gateway(session_factory, monkeypatch):
+    """Keep provider reads deterministic while exercising real financial writes."""
+    from datetime import datetime, timezone
+    from benchmark.application import trading
+    from services import order_executor_leverage, scheduler
+    from services.agent import trade_execution_tool
+
+    _set_liquidation_quote(monkeypatch, 100.0)
+    monkeypatch.setattr(trade_execution_tool, "calc_positions_value", lambda *args: 0.0)
+    monkeypatch.setattr(order_executor_leverage, "now_utc", lambda: datetime(2026, 9, 6, tzinfo=timezone.utc))
+    monkeypatch.setattr(scheduler, "shutdown_cancellation_requested", lambda: False)
+    gateway = _gateway(session_factory)
+    monkeypatch.setattr(trading, "get_default_trade_gateway", lambda: gateway)
+    return gateway
+
+
+def _set_liquidation_quote(monkeypatch, price):
+    from services import asset_calculator, market_data, order_executor_leverage
+    from services.agent import trade_execution_tool
+
+    def quote(*args, **kwargs):
+        return float(price)
+    monkeypatch.setattr(market_data, "get_last_price", quote)
+    monkeypatch.setattr(market_data, "get_trading_price", quote)
+    monkeypatch.setattr(asset_calculator, "get_last_price", quote)
+    monkeypatch.setattr(trade_execution_tool, "get_last_price", quote)
+    monkeypatch.setattr(order_executor_leverage, "get_last_price", quote)
+
+
+@pytest.mark.parametrize("direction,close_side", [("short", "BUY"), ("long", "SELL")])
+@pytest.mark.parametrize("accrual_hours", [0, 24])
+def test_scheduler_liquidates_leveraged_crypto_through_directional_gateway(
+    session_factory, monkeypatch, direction, close_side, accrual_hours,
+):
+    from datetime import datetime, timedelta, timezone
+    from services import scheduler
+
+    gateway = _liquidation_gateway(session_factory, monkeypatch)
+    opened = gateway.execute(_command(
+        key="liquidation-open", direction=direction, sizing_mode="usd",
+        sizing_value=Decimal("200"), leverage=5,
+    ))
+    assert opened.executed is True
+    # Free cash is exhausted and the adverse mark leaves $10 equity against
+    # $40 used margin: this account genuinely requires liquidation.
+    with session_factory() as session:
+        session.get(Account, 1).current_cash = 0
+        position = session.query(Position).filter(Position.account_id == 1).one()
+        position.last_interest_time = datetime(2026, 9, 6, tzinfo=timezone.utc) - timedelta(hours=accrual_hours)
+        session.commit()
+    _set_liquidation_quote(monkeypatch, 115 if direction == "short" else 85)
+    with session_factory() as session:
+        account = session.get(Account, 1)
+        position = session.query(Position).filter(Position.account_id == 1).one()
+        assert position.quantity == Decimal("2")
+        assert account.margin_used == Decimal("40")
+        scheduler.task_scheduler._liquidate_positions(
+            session, account, [position], reason="Regression margin call",
+        )
+
+    with session_factory() as session:
+        account = session.get(Account, 1)
+        position = session.query(Position).filter(Position.account_id == 1).one()
+        orders = session.query(Order).order_by(Order.id).all()
+        trades = session.query(Trade).order_by(Trade.id).all()
+        assert position.quantity == position.available_quantity == 0
+        assert position.side is None
+        assert position.leverage == 1
+        assert account.margin_used == 0
+        # Release $40 margin, settle the $30 loss and charge the closing fee.
+        closing_notional = Decimal("230") if direction == "short" else Decimal("170")
+        interest = Decimal("160") * Decimal("0.0000125") * accrual_hours
+        expected_cash = (Decimal("10") - closing_notional * Decimal("0.0007") - interest).quantize(Decimal("0.01"))
+        assert account.current_cash == expected_cash
+        assert position.accumulated_interest == interest
+        assert [order.side for order in orders] == [direction.upper(), close_side]
+        assert all(order.status == "FILLED" and order.filled_quantity == Decimal("2") for order in orders)
+        assert [trade.side for trade in trades] == [direction.upper(), close_side]
+        # Internal liquidation is serialized by the account lock; only the
+        # externally requested opening trade owns an idempotency receipt.
+        assert session.query(TradeCommandReceipt).count() == 1
+        assert session.query(AIDecisionLog).count() == 2
+
+
+@pytest.mark.parametrize("original_direction", ["short", "long"])
+def test_scheduler_liquidation_does_not_close_a_changed_position_direction(
+    session_factory, monkeypatch, original_direction,
+):
+    from services import scheduler
+
+    gateway = _liquidation_gateway(session_factory, monkeypatch)
+    opposite = "long" if original_direction == "short" else "short"
+    assert gateway.execute(_command(
+        key="before-direction-change", direction=original_direction, sizing_mode="usd",
+        sizing_value=Decimal("200"), leverage=5,
+    )).executed
+
+    with session_factory() as stale_session:
+        account = stale_session.get(Account, 1)
+        stale_position = stale_session.query(Position).filter(Position.account_id == 1).one()
+        assert gateway.execute(_command(
+            key="close-original-direction", operation="close", direction=original_direction,
+            sizing_mode="close_ratio", sizing_value=Decimal("1"),
+        )).executed
+        assert gateway.execute(_command(
+            key="open-opposite-direction", direction=opposite, sizing_mode="usd",
+            sizing_value=Decimal("200"), leverage=5,
+        )).executed
+        with session_factory() as verification:
+            current = verification.get(Account, 1)
+            expected_cash, expected_margin = current.current_cash, current.margin_used
+        scheduler.task_scheduler._liquidate_positions(
+            stale_session, account, [stale_position], reason="Stale margin snapshot",
+        )
+
+    with session_factory() as session:
+        position = session.query(Position).filter(Position.account_id == 1).one()
+        account = session.get(Account, 1)
+        assert position.side == opposite.upper()
+        assert position.quantity == position.available_quantity == Decimal("2")
+        assert account.current_cash == expected_cash
+        assert account.margin_used == expected_margin
+        assert session.query(Order).count() == 3
+        assert session.query(Trade).count() == 3
+        assert session.query(AIDecisionLog).count() == 3
+
+
+@pytest.mark.parametrize("direction", ["short", "long"])
+def test_scheduler_liquidation_rechecks_margin_before_closing_healthy_account(
+    session_factory, monkeypatch, direction,
+):
+    from services import scheduler
+
+    gateway = _liquidation_gateway(session_factory, monkeypatch)
+    assert gateway.execute(_command(
+        key="healthy-liquidation-open", direction=direction, sizing_mode="usd",
+        sizing_value=Decimal("200"), leverage=5,
+    )).executed
+    with session_factory() as session:
+        account = session.get(Account, 1)
+        position = session.query(Position).filter(Position.account_id == 1).one()
+        expected_cash = account.current_cash
+        scheduler.task_scheduler._liquidate_positions(
+            session, account, [position], reason="Margin recovered before dispatch",
+        )
+    with session_factory() as session:
+        account = session.get(Account, 1)
+        position = session.query(Position).filter(Position.account_id == 1).one()
+        assert account.current_cash == expected_cash
+        assert account.margin_used == Decimal("40")
+        assert position.side == direction.upper()
+        assert position.quantity == Decimal("2")
+        assert session.query(Order).count() == session.query(Trade).count() == 1
+
+
+def test_pending_manual_order_skips_new_short_and_fills_other_symbol(
+    session_factory, monkeypatch,
+):
+    from services import order_matching
+
+    gateway = _liquidation_gateway(session_factory, monkeypatch)
+    monkeypatch.setattr(order_matching, "get_last_price", lambda *args: 100.0)
+    pending = {}
+    for symbol in ("BTC", "ETH"):
+        created = gateway.create_order(CreateOrderCommand(
+            account_id=1, symbol=symbol, market=Market.CRYPTO, side="BUY",
+            order_type="LIMIT", quantity=Decimal("0.1"), price=Decimal("110"),
+        ))
+        assert created.accepted
+        pending[symbol] = created.order_id
+    assert gateway.execute(_command(
+        key="short-after-manual-limit", direction="short", sizing_mode="usd",
+        sizing_value=Decimal("200"), leverage=5,
+    )).executed
+
+    result = gateway.process_pending(ProcessPendingOrders(account_id=1))
+    assert result.processed == 2
+    assert result.executed == 1
+    with session_factory() as session:
+        short = session.query(Position).filter(Position.symbol == "BTC").one()
+        long = session.query(Position).filter(Position.symbol == "ETH").one()
+        assert short.side == "SHORT"
+        assert short.quantity == short.available_quantity == Decimal("2")
+        assert short.avg_cost == Decimal("100")
+        assert short.leverage == 5
+        assert session.get(Account, 1).margin_used == Decimal("40")
+        assert long.side in (None, "LONG")
+        assert long.quantity == long.available_quantity == Decimal("0.1")
+        assert session.get(Order, pending["BTC"]).status == "PENDING"
+        assert session.get(Order, pending["BTC"]).filled_quantity == 0
+        assert session.get(Order, pending["ETH"]).status == "FILLED"
+        assert session.query(Trade).filter(Trade.order_id == pending["BTC"]).count() == 0
+        assert session.query(Trade).filter(Trade.order_id == pending["ETH"]).count() == 1

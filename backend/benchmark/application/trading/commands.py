@@ -11,6 +11,8 @@ from benchmark.contracts.errors import TradeGatewayError
 
 @dataclass(frozen=True)
 class CreateOrderCommand:
+    """Manual order contract; CRYPTO orders support leverage up to 50."""
+
     account_id: int
     symbol: str
     market: Market
@@ -59,8 +61,8 @@ class CreateOrderCommand:
                 "price must be a finite positive Decimal or None",
                 code="SIZING_VALUE_INVALID",
             )
-        if not isinstance(self.leverage, int) or not 1 <= self.leverage <= 10:
-            raise ValueError("leverage must be an integer between 1 and 10")
+        if not isinstance(self.leverage, int) or not 1 <= self.leverage <= 50:
+            raise ValueError("leverage must be an integer between 1 and 50")
         if self.market is Market.US and self.leverage != 1:
             raise ValueError("US orders do not support leverage")
 

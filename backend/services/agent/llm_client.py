@@ -28,6 +28,16 @@ llm_client_logger = logging.getLogger("llm_client")
 _DEFAULT_LLM_REQUEST_TIMEOUT_SECONDS = 20 * 60
 
 
+def configured_extra_body(model: str, extra_body: Optional[dict[str, Any]] = None):
+    body = copy.deepcopy(extra_body) if extra_body else {}
+    mode = os.getenv("DEEPSEEK_THINKING_MODE", "").strip().lower()
+    if model.startswith("deepseek-") and mode and "thinking" not in body:
+        if mode not in {"enabled", "disabled"}:
+            raise ValueError("DEEPSEEK_THINKING_MODE must be enabled or disabled")
+        body["thinking"] = {"type": mode}
+    return body or None
+
+
 class LLMClient:
     MAX_TOOL_CALLS_PER_ASSISTANT_TURN = 20
     THINKING_TIMEOUT_GUARDRAIL_SECONDS = 10 * 60
@@ -72,7 +82,7 @@ class LLMClient:
         base_url: OpenAI 兼容 gateway，例如 "https://your-endpoint/v1"
         """
         self.model = model
-        self.extra_body = copy.deepcopy(extra_body) if extra_body else None
+        self.extra_body = configured_extra_body(model, extra_body)
         self.reasoning_effort = reasoning_effort
         normalized_base_url = self.normalize_base_url(base_url)
         # OpenAI SDK 解析响应时会丢掉 ChatCompletionMessageFunctionToolCall / Function 上未在 schema 声明的字段，
@@ -108,9 +118,10 @@ class LLMClient:
                 api_key=api_key,
                 base_url=normalized_base_url,
                 http_client=http_client,
+                max_retries=0,
             )
         else:
-            self.client = OpenAI(api_key=api_key, http_client=http_client)
+            self.client = OpenAI(api_key=api_key, http_client=http_client, max_retries=0)
 
         # Gemini 路径使用自定义 httpx.Client；OpenAI() 会持有其引用，须通过 client.close() 释放连接。
         self._closed = False
@@ -216,9 +227,9 @@ class LLMClient:
             "temperature": 0.4 if temperature is None else temperature,
         }
         if self.is_grok_model():
-            request_kwargs["max_completion_tokens"] = 4000 if max_tokens is None else max_tokens
+            request_kwargs["max_completion_tokens"] = int(os.getenv("LLM_MAX_OUTPUT_TOKENS", "4000")) if max_tokens is None else max_tokens
         else:
-            request_kwargs["max_tokens"] = 4000 if max_tokens is None else max_tokens
+            request_kwargs["max_tokens"] = int(os.getenv("LLM_MAX_OUTPUT_TOKENS", "4000")) if max_tokens is None else max_tokens
         request_kwargs["timeout"] = self.default_timeout_seconds if timeout is None else timeout
         if response_format is not None:
             request_kwargs["response_format"] = response_format
@@ -261,6 +272,8 @@ class LLMClient:
                 )
             raise
 
+        self.last_usage = response.usage.model_dump() if getattr(response, "usage", None) else None
+        self.last_finish_reason = getattr(response.choices[0], "finish_reason", None)
         return response.choices[0].message
 
     def _create_with_retry(
@@ -275,8 +288,24 @@ class LLMClient:
         last_err: Exception | None = None
         call_start = time.perf_counter()
         for attempt in range(1, attempts + 1):
+            from datetime import datetime, timezone
+            if getattr(self, "is_cancelled", lambda: False)():
+                raise TimeoutError("LLM call cancelled")
+            deadline = getattr(self, "deadline_at", None)
+            if deadline is not None:
+                remaining = (deadline - datetime.now(timezone.utc)).total_seconds()
+                if remaining <= 0:
+                    raise TimeoutError("LLM deadline exceeded")
+                request_kwargs = {**request_kwargs, "timeout": min(request_kwargs.get("timeout", remaining), remaining)}
+            from services.agent.request_scope import current_request_scope
+            scope = current_request_scope()
+            if scope is not None:
+                request_kwargs = scope.before_attempt(request_kwargs)
             try:
                 response = self.client.chat.completions.create(**request_kwargs)
+                if scope is not None:
+                    scope.events.record('llm.usage', {'model': self.model,
+                        'usage': response.usage.model_dump() if getattr(response, 'usage', None) else None})
                 elapsed_ms = int((time.perf_counter() - call_start) * 1000)
                 llm_client_logger.info(
                     "llm_call_success call_id=%s model=%s attempt=%s/%s elapsed_ms=%s message_count=%s tool_count=%s",
@@ -301,7 +330,8 @@ class LLMClient:
                     elapsed_ms,
                     str(err),
                 )
-                if attempt >= attempts:
+                code = getattr(err, "code", None)
+                if attempt >= attempts or code == "insufficient_quota" or getattr(err, "status_code", None) in {400, 401, 403, 404}:
                     break
                 logger.warning(
                     "LLM request failed (attempt %s/%s), retrying: %s",

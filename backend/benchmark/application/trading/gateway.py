@@ -14,7 +14,6 @@ from typing import runtime_checkable
 from benchmark.contracts import Market, TradeCommand, TradeCommandResult, to_jsonable
 from benchmark.contracts.errors import TradeGatewayError
 from benchmark.persistence import (
-    UnitOfWork,
     UnitOfWorkFactory,
     PersistenceConflictError,
     default_unit_of_work_factory,
@@ -174,12 +173,33 @@ class SynchronousTradeCommandGateway:
         except Exception as exc:
             raise _unexpected_gateway_error("cancel_order", exc) from exc
 
-    def process_pending(self, command: ProcessPendingOrders) -> ProcessingResult:
+    def liquidate_if_required(self, account_id: int, *, reason="Insufficient margin", is_cancelled=None) -> ProcessingResult:
+        """Recheck eligibility and liquidate under one account-first write lock."""
+        if not isinstance(account_id, int) or account_id <= 0:
+            raise ValueError("account_id must be a positive integer")
+        try:
+            with self.uow_factory() as uow:
+                account = uow.accounts.get_for_update(account_id)
+                if account is None:
+                    uow.rollback()
+                    return ProcessingResult(0, 0)
+                processed, executed = uow.trade_operations.liquidate_if_required(
+                    account, reason=reason, is_cancelled=is_cancelled)
+                uow.commit()
+                return ProcessingResult(processed, executed)
+        except (KeyboardInterrupt, SystemExit, GeneratorExit):
+            raise
+        except TradeGatewayError:
+            raise
+        except Exception as exc:
+            raise _unexpected_gateway_error("liquidate_if_required", exc) from exc
+
+    def process_pending(self, command: ProcessPendingOrders, *, is_cancelled=None) -> ProcessingResult:
         if not isinstance(command, ProcessPendingOrders):
             raise TypeError("command must be ProcessPendingOrders")
         try:
             if command.account_id is not None:
-                return self._process_pending_for_account(command.account_id)
+                return self._process_pending_for_account(command.account_id, is_cancelled=is_cancelled)
 
             # Discover only account ids in this short read transaction. Each
             # account is then processed in its own account-first transaction,
@@ -190,7 +210,9 @@ class SynchronousTradeCommandGateway:
             processed = 0
             executed = 0
             for account_id in account_ids:
-                result = self._process_pending_for_account(account_id)
+                if is_cancelled is not None and is_cancelled():
+                    break
+                result = self._process_pending_for_account(account_id, is_cancelled=is_cancelled)
                 processed += result.processed
                 executed += result.executed
             return ProcessingResult(processed=processed, executed=executed)
@@ -201,7 +223,7 @@ class SynchronousTradeCommandGateway:
         except Exception as exc:
             raise _unexpected_gateway_error("process_pending", exc) from exc
 
-    def _process_pending_for_account(self, account_id: int) -> ProcessingResult:
+    def _process_pending_for_account(self, account_id: int, *, is_cancelled=None) -> ProcessingResult:
         with self.uow_factory() as uow:
             account = uow.accounts.get_for_update(account_id)
             if account is None:
@@ -209,11 +231,15 @@ class SynchronousTradeCommandGateway:
                 return ProcessingResult(processed=0, executed=0)
             pending = tuple(uow.orders.list_pending_for_update(account_id))
             executed = 0
+            processed = 0
             for order in pending:
+                if is_cancelled is not None and is_cancelled():
+                    break
+                processed += 1
                 if uow.trade_operations.execute_order(order):
                     executed += 1
             uow.commit()
-            return ProcessingResult(processed=len(pending), executed=executed)
+            return ProcessingResult(processed=processed, executed=executed)
 
     def _execute_durable(self, command: TradeCommand) -> TradeCommandResult:
         command_json = _encode_command(command)

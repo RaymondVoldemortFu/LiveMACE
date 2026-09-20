@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import os
 from typing import Any
 
 from benchmark.contracts import NETWORK_READ, JsonValue, SideEffect, ToolContext
@@ -15,13 +16,18 @@ _PUBLIC_NAMESPACE = "public"
 def _load_schema_entries() -> list[dict[str, Any]]:
     from services.agent.public_apis_registry import _load_tools_schema, _normalize_json_schema
 
+    is_unavailable = None
+    if os.getenv("WAVE3_PRODUCTION", "false").lower() == "true":
+        from services.agent.public_apis_registry import _load_api_server_module
+
+        is_unavailable = _load_api_server_module()._wave3_api_unavailable
     entries: list[dict[str, Any]] = []
     for entry in _load_tools_schema():
         if not isinstance(entry, dict) or entry.get("type") != "function":
             continue
         function_block = entry.get("function") or {}
         name = function_block.get("name")
-        if not name:
+        if not name or (is_unavailable is not None and is_unavailable(name)):
             continue
         parameters = function_block.get("parameters") or {
             "type": "object",

@@ -21,6 +21,7 @@ components:
       factory: benchmark.builtin.agents.rule_aware:RuleAwareAgentFactory
       config_schema: schemas/rule-aware.json
   tools:
+    - provider: benchmark.builtin.tools.trading:TradingToolsProvider
     - provider: benchmark.builtin.tools.market:MarketToolsProvider
     - provider: benchmark.builtin.tools.account:AccountToolsProvider
     - provider: benchmark.builtin.tools.search:SearchToolsProvider

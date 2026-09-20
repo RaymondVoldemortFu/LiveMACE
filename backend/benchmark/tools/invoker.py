@@ -187,7 +187,10 @@ class SynchronousToolInvoker:
     ) -> ToolResult:
         """Run the complete synchronous Tool pipeline for one invocation."""
 
-        call_id = self._call_id_factory()
+        return self.call_with_id(name, arguments, self._call_id_factory())
+
+    def call_with_id(self, name: str, arguments: Mapping[str, JsonValue], call_id: str) -> ToolResult:
+        """Host bridge entrypoint preserving a trusted provider call identity."""
         if not isinstance(call_id, str) or not call_id:
             raise ToolRuntimeError(
                 "Tool call id factory returned an invalid id",

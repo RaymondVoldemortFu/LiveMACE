@@ -3,14 +3,11 @@ Order scheduling service
 Background task for periodically processing pending orders
 """
 
-import asyncio
 import threading
 import time
 import logging
 from typing import Optional
 
-from database.connection import SessionLocal
-from .order_matching import process_all_pending_orders
 
 logger = logging.getLogger(__name__)
 
@@ -108,19 +105,16 @@ class OrderScheduler:
         logger.info("Order scheduler main loop ended")
     
     def _process_orders(self):
-        """Process pending orders"""
-        db = SessionLocal()
+        """Process each account under the same write lock as API and Agent trades."""
+        from benchmark.application.trading import get_default_trade_gateway, ProcessPendingOrders
         try:
-            executed_count, total_checked = process_all_pending_orders(db)
-            
-            if total_checked > 0:
-                logger.debug(f"Order processing: checked {total_checked}, executed {executed_count}")
-            
-        except Exception as e:
-            logger.error(f"Error processing orders: {e}")
-        finally:
-            db.close()
-    
+            result = get_default_trade_gateway().process_pending(
+                ProcessPendingOrders(), is_cancelled=self._stop_event.is_set)
+            if result.processed:
+                logger.debug("Order processing: checked %s, executed %s", result.processed, result.executed)
+        except Exception:
+            logger.exception("Error processing orders")
+
     def process_orders_once(self):
         """Manually execute order processing once"""
         if not self.running:

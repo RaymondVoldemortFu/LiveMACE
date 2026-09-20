@@ -3,12 +3,14 @@ Price caching service to reduce API calls and improve performance
 """
 
 import logging
+from dataclasses import replace
 from threading import Lock
 from decimal import Decimal
 from typing import Dict, Optional, Tuple
 
 from benchmark.infrastructure.market.symbols import resolve_symbol_market
 from benchmark.providers import Freshness, PriceResult
+from config.market_data_config import alpaca_quote_is_fresh
 from services.time_source import now_timestamp, now_utc
 logger = logging.getLogger(__name__)
 
@@ -66,6 +68,18 @@ class PriceCache:
             if current_time - timestamp >= self.ttl_seconds:
                 del self.cache[key]
                 return None
+            if (
+                resolved.market.value == "US"
+                and result.source == "core.market.alpaca"
+                and result.freshness is Freshness.FRESH
+                and not alpaca_quote_is_fresh(result.as_of, now_utc())
+            ):
+                result = replace(
+                    result,
+                    freshness=Freshness.STALE,
+                    error="quote timestamp is missing, future, or older than the allowed age",
+                )
+                self.cache[key] = (result, timestamp)
             return result
 
     def set_result(self, symbol: str, market: str, result: PriceResult) -> None:

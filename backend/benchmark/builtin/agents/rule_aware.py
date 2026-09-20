@@ -20,6 +20,7 @@ from benchmark.builtin.agents._legacy_context import (
     prices_from_context,
     termination_from_legacy_decision,
 )
+from benchmark.builtin.agents._legacy_ports import tool_error_payload
 from benchmark.builtin.prompts import get_prompt_resolver
 from benchmark.contracts import (
     AgentRunResult,
@@ -168,7 +169,12 @@ class _PublicToolBridge:
                     if key not in _LEGACY_TRADE_RUNTIME_ARGUMENTS
                 }
             try:
-                result = self._tools.call(public_name, public_arguments)
+                call_id = arguments.get("tool_call_id") if public_name == "core.execute_trade" else None
+                call_with_id = getattr(self._tools, "call_with_id", None)
+                if call_id and callable(call_with_id):
+                    result = call_with_id(public_name, public_arguments, call_id)
+                else:
+                    result = self._tools.call(public_name, public_arguments)
             except ToolRuntimeError as exc:
                 if isinstance(self._tools, ToolRegistry) and isinstance(
                     exc.__cause__, Exception
@@ -183,13 +189,7 @@ class _PublicToolBridge:
                 )
             if result.ok:
                 return to_jsonable(result.value)
-            payload: dict[str, JsonValue] = {
-                "error": result.error_message
-                or result.error_code
-                or "Tool call failed",
-                "error_code": result.error_code,
-                "retryable": result.retryable,
-            }
+            payload = tool_error_payload(result)
             if public_name == "core.execute_trade":
                 payload["executed"] = False
                 payload["reject_code"] = result.error_code
@@ -319,13 +319,18 @@ class RuleAwareAgentAdapter:
                 )
             )
 
-        legacy_result = self._agent.run(
-            portfolio=portfolio_from_context(context),
-            prices=prices_from_context(context),
-            on_step=on_step,
-            trace_id=context.trace_id,
-            decision_round_id=context.decision_round_id,
-        )
+        try:
+            legacy_result = self._agent.run(
+                portfolio=portfolio_from_context(context),
+                prices=prices_from_context(context),
+                on_step=on_step,
+                trace_id=context.trace_id,
+                decision_round_id=context.decision_round_id,
+            )
+        finally:
+            auditor = getattr(self._agent, "llm_auditor", None)
+            if auditor is not None:
+                auditor.llm_client.close()
         if not isinstance(legacy_result, dict):
             raise AgentRuntimeError(
                 "legacy RuleAwareAgent must return a dict",

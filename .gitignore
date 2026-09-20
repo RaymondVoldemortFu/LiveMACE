@@ -345,7 +345,11 @@ backend/tests/trading/__pycache__/
 !backend/tests/accounts/
 !backend/tests/accounts/**
 backend/tests/accounts/__pycache__/
+!backend/tests/api/
+!backend/tests/api/**
+backend/tests/api/__pycache__/
 .vscode/
+.wave3/
 backend/.DS_Store
 
 verify_setup.py
@@ -370,4 +374,4 @@ backend/eval/eval_output/
 __pycache__
 *.pyc
 
-
+!backend/tests/test_wave3_*.py

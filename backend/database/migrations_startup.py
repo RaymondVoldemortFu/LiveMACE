@@ -627,6 +627,9 @@ def run_startup_migrations(
     migrations are logged and skipped; failures follow the migration's
     ``fatal`` flag.
     """
+    from database.safety import validate_database_target
+
+    validate_database_target(engine.url)
     applied: List[str] = []
     for migration in STARTUP_MIGRATIONS if migrations is None else migrations:
         if migration.dialect is not None and engine.dialect.name != migration.dialect:

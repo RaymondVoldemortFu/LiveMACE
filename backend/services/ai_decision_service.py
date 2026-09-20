@@ -2,31 +2,14 @@
 AI Decision Service - Handles AI model API calls for trading decisions
 """
 import logging
-import random
 import json
-import time
-import os
 from decimal import Decimal
-from typing import Dict, Optional, List, Any
+from typing import Dict, Optional, List
 
-import requests
 from sqlalchemy.orm import Session
-
-from database.models import Position, Account, AIDecisionLog, AgentTrace
-import uuid
-import asyncio
+from database.models import Position, Account, AIDecisionLog
 from services.asset_calculator import calc_positions_market_value
-from services.news_feed import fetch_latest_news
-
-from services.agent.core import *
-from services.agent.env_wrapper import *
-from services.agent.llm_client import *
-from services.agent.tools import *
-from services.agent.public_apis_registry import register_public_api_tools
-from services.agent.history_tool import HistoryTool
-from services.container_service import ContainerService
-from services.security.api_key_security import is_default_api_key, resolve_runtime_api_key
-from services.tool_cache import tool_cache
+from services.security.api_key_security import is_default_api_key
 
 
 logger = logging.getLogger(__name__)
@@ -90,7 +73,7 @@ def _clip_reason_for_db(reason: object, max_bytes: int = 65000) -> str:
     return "..."
 
 
-def save_ai_decision(db: Session, account_id: int, decision: Dict, portfolio: Dict, executed: bool = False, order_id: Optional[int] = None, execution_price: Optional[float] = None, execution_quantity: Optional[float] = None) -> None:
+def save_ai_decision(db: Session, account_id: int, decision: Dict, portfolio: Dict, executed: bool = False, order_id: Optional[int] = None, execution_price: Optional[float] = None, execution_quantity: Optional[float] = None, *, snapshot_prices=None) -> None:
     """Save AI decision to the decision log"""
     try:
         # Check if logging should be skipped (e.g., when execute_trade already logged)
@@ -159,7 +142,7 @@ def save_ai_decision(db: Session, account_id: int, decision: Dict, portfolio: Di
         try:
             from services.snapshot_service import create_account_snapshot
             from datetime import datetime, timezone
-            snapshot = create_account_snapshot(db, account_id, timestamp=datetime.now(timezone.utc).replace(tzinfo=None))
+            snapshot = create_account_snapshot(db, account_id, timestamp=datetime.now(timezone.utc).replace(tzinfo=None), prices=snapshot_prices)
             if snapshot:
                 logger.info(f"Created account snapshot for account_id={account_id}")
             else:
@@ -170,7 +153,7 @@ def save_ai_decision(db: Session, account_id: int, decision: Dict, portfolio: Di
         # Save rule evaluation results if this is a rule-aware agent
         # Use fresh_account which is attached to the current session
         enable_rule_aware = getattr(fresh_account, 'enable_rule_aware', 'false')
-        is_rule_aware = enable_rule_aware == 'true' or enable_rule_aware == True
+        is_rule_aware = enable_rule_aware == 'true' or enable_rule_aware is True
 
         if is_rule_aware and "compliance_audit" in decision:
             _save_rule_evaluation(db, account_id, decision, trace_id)
@@ -270,10 +253,10 @@ def _save_rule_evaluation(db: Session, account_id: int, decision: Dict, trace_id
             llm_audit_json=json.dumps(llm_audit, ensure_ascii=False) if llm_audit else None
         )
 
-        logger.info(f"Adding rule evaluation record to database...")
+        logger.info("Adding rule evaluation record to database...")
         db.add(eval_result)
         db.commit()
-        logger.info(f"✓ Rule evaluation committed successfully")
+        logger.info("✓ Rule evaluation committed successfully")
 
         # Format scores for logging
         s_rule_sat_str = f"{s_rule_sat:.3f}" if s_rule_sat is not None else "N/A"
@@ -307,223 +290,3 @@ def get_active_ai_accounts(db: Session) -> List[Account]:
         return []
 
     return valid_accounts
-
-
-def call_agent_for_decision(
-    account: Account,
-    portfolio: Dict,
-    prices: Dict[str, float],
-    db: Session,
-    decision_round_id: Optional[str] = None,
-) -> Optional[Dict]:
-    """基于 Agent（多轮+工具）的唯一决策接口。"""
-
-    account_id = account.id
-    account_name = getattr(account, "name", f"account_{account_id}")
-    account_type = getattr(account, "agent_type", "react")
-    account_model = account.model
-    account_api_key = resolve_runtime_api_key(account.api_key)
-    account_base_url = account.base_url
-
-    if _is_default_api_key(account_api_key):
-        logger.info(f"Skipping AI trading for account {account_name} - using default API key")
-        return None
-
-    # Lease a container for the agent session
-    container_service = ContainerService()
-    leased_container_id = container_service.lease_container(account_id)
-    if not leased_container_id:
-        logger.error(f"Failed to lease sandbox container for account {account_name} (ID: {account_id})")
-        return {
-            "operation": "hold",
-            "symbol": "",
-            "direction": "long",
-            "target_portion_of_balance": 0.0,
-            "leverage": 1,
-            "reason": "Container unavailable, fallback hold",
-        }
-
-    trace_id = str(uuid.uuid4())
-    step_counter = 0
-    created_local_round = False
-
-    def on_step(message: Dict[str, Any]):
-        nonlocal step_counter
-        step_counter += 1
-        try:
-            role = message.get("role", "unknown")
-            content = message.get("content")
-            if content in (None, ""):
-                # Some OpenAI-compatible providers return reasoning text in
-                # reasoning_content while keeping content=null when tool_calls exist.
-                reasoning_content = message.get("reasoning_content")
-                if reasoning_content not in (None, ""):
-                    content = reasoning_content
-                else:
-                    reasoning = message.get("reasoning")
-                    if reasoning not in (None, ""):
-                        content = reasoning
-
-            # Skip saving if content is empty and no tool_calls (empty assistant response)
-            tool_calls_data = message.get("tool_calls")
-            if role == "assistant" and not content and not tool_calls_data:
-                logger.debug(f"Skipping empty assistant response at step {step_counter}")
-                step_counter -= 1  # Don't count empty responses
-                return
-
-            # Handle tool calls serialization
-            tool_calls_str = None
-            if tool_calls_data:
-                tool_calls_list = []
-                for t in tool_calls_data:
-                    if isinstance(t, dict):
-                        tool_calls_list.append(t)
-                    elif hasattr(t, "function") and hasattr(t, "id"):
-                        tool_calls_list.append(LLMClient._tool_call_dict_roundtrip(t))
-                    elif hasattr(t, "model_dump"):
-                        tool_calls_list.append(t.model_dump())
-                    elif hasattr(t, "dict"):
-                        tool_calls_list.append(t.dict())
-                    else:
-                        tool_calls_list.append(str(t))
-                tool_calls_str = json.dumps(tool_calls_list, ensure_ascii=False)
-
-            # For tool output, content is the output
-            tool_output_str = None
-            if role == "tool":
-                tool_output_str = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
-
-            trace = AgentTrace(
-                trace_id=trace_id,
-                account_id=account_id,
-                step_number=step_counter,
-                role=role,
-                content=str(content) if content is not None else None,
-                tool_calls=tool_calls_str,
-                tool_output=tool_output_str
-            )
-            db.add(trace)
-            db.commit()
-        except Exception as e:
-            logger.error(f"Failed to save agent trace: {e}")
-            try:
-                db.rollback()
-            except Exception:
-                pass
-
-    try:
-        llm = LLMClient(
-            model=account_model,
-            api_key=account_api_key,
-            base_url=account_base_url,  # 注意要和 OpenAI SDK 预期的 base_url 对齐
-        )
-
-        # Check account capability switches before tool registration.
-        enable_rule_aware = getattr(account, 'enable_rule_aware', 'false')
-        is_rule_aware = enable_rule_aware == 'true' or enable_rule_aware == True
-        tool_routing_raw = getattr(account, "tool_routing_enabled", "true")
-        tool_routing_enabled = (
-            tool_routing_raw is True
-            or (
-                isinstance(tool_routing_raw, str)
-                and tool_routing_raw.strip().lower() in {"1", "true", "yes", "on"}
-            )
-        )
-
-        registry = ToolRegistry()
-        register_default_tools(registry, db, account_id, trace_id=trace_id, runtime_api_key=account_api_key)
-
-        # Register public-apis tools only when tool routing is enabled.
-        # Rule-aware agents also skip public-apis to avoid tool namespace pollution and provider limits.
-        if tool_routing_enabled and not is_rule_aware:
-            try:
-                public_api_tool_limit = max(0, int(os.getenv("PUBLIC_API_TOOL_LIMIT", "80")))
-                public_api_limit = public_api_tool_limit or None
-                registered_count = register_public_api_tools(registry, limit=public_api_limit)
-                logger.info(
-                    "Registered %s public-apis tools (limit=%s)",
-                    registered_count,
-                    public_api_limit if public_api_limit is not None else "unlimited",
-                )
-            except Exception as e:
-                logger.warning(f"Failed to register public-apis tools: {e}")
-        else:
-            logger.info(
-                "Skipped public-apis registration for account %s: tool_routing_enabled=%s, is_rule_aware=%s",
-                account_name,
-                tool_routing_enabled,
-                is_rule_aware,
-            )
-
-        # Register the new history tool
-        registry.register(HistoryTool(db, account_id))
-
-        logger.info(f"Initiating agent decision for account: {account_name} (ID: {account_id}) Type: {account_type}")
-
-        logger.info(f"Account {account.name} - enable_rule_aware: {enable_rule_aware}, is_rule_aware: {is_rule_aware}")
-
-        # Use factory to create agent based on account config
-        if is_rule_aware:
-            # Use rule-aware agent with rule evaluation pipeline
-            logger.info(f"Creating Rule-Aware Agent for account {account.name}")
-            agent = create_agent(
-                agent_type="rule_aware",
-                llm=llm,
-                tools=registry,
-                max_steps=AgentConfig.MAX_STEPS,
-                user_id=str(account.id),
-                account_id=account.id,
-                agent_name=account_name,
-                enable_llm_audit=True  # Enable LLM-based audit scoring
-            )
-            logger.info(f"Rule-Aware Agent created successfully for account {account.name}")
-        else:
-            # Use standard agent (react, multi_agent, advanced_multi_agent) without rule evaluation
-            agent_type = getattr(account, "agent_type", "react")
-            logger.info(f"Creating standard {agent_type} agent for account {account.name}")
-            agent = create_agent(
-                agent_type=agent_type,
-                llm=llm,
-                tools=registry,
-                max_steps=AgentConfig.MAX_STEPS,
-                user_id=str(account.id),
-                agent_name=account_name
-            )
-            if hasattr(agent, "set_tool_routing_enabled"):
-                agent.set_tool_routing_enabled(tool_routing_enabled)
-                logger.info(f"Tool routing enabled={tool_routing_enabled} for account {account.name}")
-            logger.info(f"Standard {agent_type} agent created successfully for account {account.name}")
-
-        # Get account info before run (to avoid DetachedInstanceError later)
-        account_id = account.id
-        account_name = account.name
-
-        if not decision_round_id:
-            decision_round_id = tool_cache.create_round_id(scope=f"account_{account_id}")
-            created_local_round = True
-
-        logger.info(f"Calling agent.run() for account {account_name} with decision_round_id={decision_round_id}")
-        with tool_cache.use_round(decision_round_id):
-            decision = agent.run(
-                portfolio=portfolio,
-                prices=prices,
-                on_step=on_step,
-                trace_id=trace_id,
-                decision_round_id=decision_round_id,
-            )
-        logger.info(f"Agent.run() completed for account {account_name}, decision: {decision}")
-
-        if decision:
-            decision["trace_id"] = trace_id
-
-        logger.info(f"Agent decision for {account_name}: {decision}")
-        return decision
-
-    except Exception as e:
-        logger.error(f"call_agent_for_decision failed: {e}", exc_info=True)
-        return None
-    finally:
-        if decision_round_id and created_local_round:
-            tool_cache.clear_round(decision_round_id)
-        # Always release the container (use saved account_id to avoid DetachedInstanceError)
-        container_service.release_container(account_id)

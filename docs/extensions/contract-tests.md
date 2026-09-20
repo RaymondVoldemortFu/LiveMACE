@@ -52,8 +52,8 @@ Run the same checks from the command line with
 `alpha-arena extension test path/to/extension`.  The command loads only the
 selected catalog and never starts the application runtime.
 
-When `assert_tool_contract()` is called without cases, it automatically probes
-only read-only Tools for which it can derive a schema-valid example.  Write or
-externally effectful Tools are still checked for a valid specification; pass
-explicit `ToolCase` values when their invocation is part of the extension's
-test suite.
+When `assert_tool_contract()` is called without cases, it derives schema
+examples and invokes every listed Tool.  If a derived example is not schema
+valid, the helper fails and the caller must pass an explicit `ToolCase`.
+`trading.write` is authorized only for `core.execute_trade`, matching the
+production Tool registry.

@@ -9,6 +9,7 @@ from sqlalchemy.dialects.mysql import (
 )
 
 from .connection import Base
+from .sql_defaults import PreciseCurrentTimestamp
 
 
 class User(Base):
@@ -126,8 +127,8 @@ class AccountRuntimeConfig(Base):
     updated_at = Column(
         TIMESTAMP().with_variant(MYSQL_TIMESTAMP(fsp=6), "mysql"),
         nullable=False,
-        server_default=func.current_timestamp(),
-        onupdate=func.current_timestamp(),
+        server_default=PreciseCurrentTimestamp(),
+        onupdate=PreciseCurrentTimestamp(),
     )
 
     account = relationship("Account", back_populates="runtime_config")
@@ -572,3 +573,16 @@ class ScheduledJobOccurrence(Base):
             name="uix_scheduled_job_occurrence_key",
         ),
     )
+
+
+class RuntimeEvent(Base):
+    """Versioned runtime observations; each write uses its own short transaction."""
+    __tablename__ = "runtime_events"
+    id = Column(String(36), primary_key=True)
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False, index=True)
+    decision_round_id = Column(String(128), nullable=False, index=True)
+    trace_id = Column(String(36), nullable=False, index=True)
+    event_type = Column(String(64), nullable=False)
+    sequence = Column(Integer, nullable=False, default=0)
+    payload = Column(Text().with_variant(LONGTEXT(), "mysql"), nullable=False)
+    created_at = Column(TIMESTAMP, server_default=func.current_timestamp())

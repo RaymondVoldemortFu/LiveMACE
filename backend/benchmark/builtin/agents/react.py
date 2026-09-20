@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import re
 from typing import Any, Mapping
 
 from benchmark.agents import (
@@ -179,9 +180,25 @@ class ReActAgentAdapter:
             decision_round_id=context.decision_round_id,
             termination_reason=termination,
             executed_trades=trades,
-            summary=str(legacy_result.get("reason") or ""),
+            summary=_summary_from_legacy_result(legacy_result, steps),
             metadata=metadata,
         )
+
+
+def _summary_from_legacy_result(result: Mapping[str, Any], steps: list[dict[str, Any]]) -> str:
+    reason = str(result.get("reason") or "").strip()
+    # Legacy tool-mode completion clears reason to avoid logging another trade.
+    # Its final assistant response is retained in on_step, not in that placeholder.
+    if reason and not reason.startswith("Tool-mode terminated by token "):
+        return reason
+    for message in reversed(steps):
+        if message.get("role") != "assistant" or message.get("tool_calls"):
+            continue
+        content = message.get("content")
+        if isinstance(content, str):
+            return re.sub(r"`*<?\s*TRADE_DONE\s*>?`*", "", content, flags=re.IGNORECASE).strip()
+        break
+    return reason
 
 
 def _step_event_metadata(step_number: int, message: Mapping[str, Any]) -> dict[str, Any]:

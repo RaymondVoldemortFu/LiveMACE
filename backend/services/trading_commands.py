@@ -7,31 +7,25 @@ import threading
 import os
 from decimal import Decimal
 from typing import Dict, Optional, Tuple, List
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
 from database.connection import SessionLocal
-from database.models import Position, Account
+from database.models import Account
 from services.asset_calculator import calc_positions_value
-from services.market_data import get_market_status, get_trading_price as get_last_price
+from services.market_data import get_trading_price as get_last_price
 from services.order_matching import create_order, check_and_execute_order
-from services.order_executor_leverage import place_and_execute_crypto
 from services.ai_decision_service import (
-    save_ai_decision, 
     get_active_ai_accounts, 
-    _get_portfolio_data,
-    SUPPORTED_SYMBOLS,
-    call_agent_for_decision
+    SUPPORTED_SYMBOLS
 )
 from services.baselines import BuyHoldBaseline, GridBaseline, is_baseline_trading_account
 from benchmark.infrastructure.market.symbols import CRYPTO_SYMBOLS, US_SYMBOLS
 from config.agent_config import AgentConfig
 from config.market_data_config import ALPACA_US_FEED_ENABLED
-from repositories.account_repo import get_account, list_active_ai_accounts
+from repositories.account_repo import list_active_ai_accounts
 from repositories.position_repo import get_position
-from services.tool_cache import tool_cache
 
 
 logger = logging.getLogger(__name__)
@@ -92,6 +86,8 @@ def _get_market_prices(symbols: List[str], market: str, suppress_symbol_warnings
     non_positive_symbols: List[str] = []
     exception_symbols: List[str] = []
     for symbol in symbols:
+        if _shutdown_requested():
+            break
         try:
             price = float(get_last_price(symbol, market))
             if price > 0:
@@ -177,11 +173,13 @@ def _run_baseline_accounts(db: Session, accounts: List[Account], prices: Dict[st
         if agent_type == "buy_hold":
             try:
                 _buy_hold_baseline.run_tick(db, account, prices, now=now)
+                logger.info("Baseline tick returned: account=%s agent=buy_hold", account.id)
             except Exception as e:
                 logger.error(f"BuyHold baseline failed for account={account.id} ({account.name}): {e}", exc_info=True)
         elif agent_type == "grid":
             try:
                 _grid_baseline.run_tick(db, account, prices)
+                logger.info("Baseline tick returned: account=%s agent=grid", account.id)
             except Exception as e:
                 logger.error(f"Grid baseline failed for account={account.id} ({account.name}): {e}", exc_info=True)
 
@@ -221,188 +219,14 @@ def _select_side(db: Session, account: Account, symbol: str, max_value: float) -
     return side, quantity
 
 
-def _collect_account_decision(
-    account_id: int,
-    prices: Dict[str, float],
-    decision_round_id: Optional[str] = None,
-) -> Optional[Dict]:
-    """
-    Collect agent decision for one account in an isolated DB session.
-    This is safe to run in worker threads.
-    """
-    if _shutdown_requested():
-        logger.info(
-            "Scheduler shutdown requested; skipping decision collection for account %s",
-            account_id,
-        )
-        return None
-    db = SessionLocal()
-    try:
-        account = get_account(db, account_id)
-        if not account:
-            logger.warning(f"Account {account_id} not found while collecting decision")
-            return None
-
-        portfolio = _get_portfolio_data(db, account)
-        if portfolio["total_assets"] <= 0:
-            logger.debug(f"Account {account.name} has non-positive total assets, skip decision")
-            return None
-
-        decision = call_agent_for_decision(
-            account,
-            portfolio,
-            prices,
-            db,
-            decision_round_id=decision_round_id,
-        )
-
-        if not decision or not isinstance(decision, dict):
-            return None
-
-        return {
-            "account_id": account.id,
-            "account_name": account.name,
-            "portfolio": portfolio,
-            "decision": decision,
-        }
-    except Exception as e:
-        logger.error(f"Decision collection failed for account {account_id}: {e}", exc_info=True)
-        return None
-    finally:
-        db.close()
-
-
-def _process_account_decision_payload(db: Session, payload: Dict, prices: Dict[str, float]) -> None:
-    """Persist one completed Agent decision without executing legacy JSON orders."""
-    account = get_account(db, payload["account_id"])
-    if not account:
-        logger.warning(f"Account {payload['account_id']} disappeared before decision logging")
-        return
-
-    if is_baseline_trading_account(account):
-        return
-
-    account_agent_type = str(getattr(account, "agent_type", "react") or "react").strip().lower()
-    if account_agent_type not in AGENT_DECISION_TYPES:
-        return
-
-    portfolio = payload["portfolio"]
-    decision = payload["decision"]
-    if not decision or not isinstance(decision, dict):
-        logger.warning(f"Invalid decision payload for account {account.name}, skipping")
-        return
-
-    executed = bool(decision.get("executed"))
-    order_id = decision.get("order_id")
-    execution_price = decision.get("execution_price")
-    execution_quantity = decision.get("execution_quantity")
-
-    normalized_order_id = None
-    if order_id is not None:
-        try:
-            parsed_order_id = int(order_id)
-        except (TypeError, ValueError):
-            parsed_order_id = None
-        if parsed_order_id is not None and parsed_order_id > 0:
-            normalized_order_id = parsed_order_id
-
-    try:
-        save_ai_decision(
-            db,
-            account.id,
-            decision,
-            portfolio,
-            executed=executed,
-            order_id=normalized_order_id,
-            execution_price=float(execution_price) if execution_price is not None else None,
-            execution_quantity=float(execution_quantity) if execution_quantity is not None else None,
-        )
-    except Exception as account_err:
-        logger.error(f"AI decision logging failed for account {account.name}: {account_err}", exc_info=True)
-
-
-def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
-    """Place crypto order based on AI model decision for all active accounts"""
-    if not _ai_trade_run_lock.acquire(blocking=False):
-        logger.warning("AI trading loop is already running; skip this trigger to avoid overlap")
-        return
-
-    db = None
-    try:
-        db = SessionLocal()
-        accounts = _load_trading_accounts(db)
-        if not accounts:
-            logger.debug("No available accounts, skipping AI trading")
-            return
-
-        # Get latest market prices once for all accounts
-        prices = {}
-        prices.update(_get_market_prices(AI_TRADING_SYMBOLS, "CRYPTO"))
-        prices.update(_get_market_prices(US_TRADING_SYMBOLS, "US"))
-        if not prices:
-            logger.warning("Failed to fetch market prices, skipping AI trading")
-            return
-
-        # Collect and process account decisions concurrently.
-        # Each completed decision is handled immediately (no end-of-batch cache).
-        concurrency = min(
-            len(accounts),
-            max(1, int(getattr(AgentConfig, "AGENT_MAX_CONCURRENCY", 1))),
-        )
-
-        decision_round_id = tool_cache.create_round_id(scope="ai_trade")
-        logger.info(f"Started AI trading decision round: {decision_round_id}")
-
-        agent_accounts = [
-            a
-            for a in accounts
-            if str(getattr(a, "agent_type", "react") or "react").strip().lower() in AGENT_DECISION_TYPES
-            and not is_baseline_trading_account(a)
-        ]
-        if agent_accounts:
-            with ThreadPoolExecutor(max_workers=min(concurrency, len(agent_accounts))) as executor:
-                future_map = {
-                    executor.submit(
-                        _collect_account_decision,
-                        account.id,
-                        prices,
-                        decision_round_id,
-                    ): account.id
-                    for account in agent_accounts
-                }
-                for fut in as_completed(future_map):
-                    account_id = future_map[fut]
-                    if _shutdown_requested():
-                        logger.info(
-                            "Scheduler shutdown requested; cancelling remaining AI decision workers"
-                        )
-                        for pending in future_map:
-                            pending.cancel()
-                        break
-                    try:
-                        result = fut.result()
-                        if result:
-                            _process_account_decision_payload(db, result, prices)
-                    except Exception as worker_err:
-                        logger.error(
-                            f"Decision worker crashed for account_id={account_id}: {worker_err}",
-                            exc_info=True,
-                        )
-
-        # Clear failed-transaction state from agent workers before baseline DB writes.
-        try:
-            db.rollback()
-        except Exception:
-            pass
-
-    except Exception as err:
-        logger.error(f"AI-driven order placement failed: {err}", exc_info=True)
-        if db is not None:
-            db.rollback()
-    finally:
-        if db is not None:
-            db.close()
-        _ai_trade_run_lock.release()
+def place_ai_driven_crypto_order(max_ratio: float = 0.2):
+    """Scheduler facade for the synchronous decision application service."""
+    from benchmark.application.decisions.service import DecisionRoundService, RunDecisionRound
+    result = DecisionRoundService().run(RunDecisionRound(
+        account_ids=None, max_concurrency=AgentConfig.AGENT_MAX_CONCURRENCY, trigger="scheduler"))
+    logger.info("Decision round %s completed: accounts=%s errors=%s",
+                result.decision_round_id, result.processed_accounts, dict(result.errors))
+    return result
 
 
 def place_baseline_driven_order() -> None:

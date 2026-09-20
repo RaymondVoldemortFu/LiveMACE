@@ -8,7 +8,7 @@ bootstrap is imported or started.
 from __future__ import annotations
 
 import argparse
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 import json
 from pathlib import Path
 from typing import Any
@@ -30,6 +30,7 @@ from benchmark.prompts import parse_prompt_directory
 from benchmark.testing import (
     AgentCase,
     FakeEventSink,
+    arguments_from_input_schema,
     assert_agent_contract,
     assert_prompt_contract,
     assert_tool_contract,
@@ -186,44 +187,20 @@ def _list_payload(directory: Path) -> tuple[int, dict[str, Any]]:
     }
 
 
-def _schema_example(schema: Any) -> Any:
-    if not isinstance(schema, dict):
-        return {}
-    if "default" in schema:
-        return schema["default"]
-    if (
-        "examples" in schema
-        and isinstance(schema["examples"], list)
-        and schema["examples"]
-    ):
-        return schema["examples"][0]
-    if "enum" in schema and isinstance(schema["enum"], list) and schema["enum"]:
-        return schema["enum"][0]
-    for branch in ("anyOf", "oneOf"):
-        values = schema.get(branch)
-        if isinstance(values, list) and values:
-            return _schema_example(values[0])
-    if schema.get("type") == "object" or "properties" in schema:
-        properties = schema.get("properties", {})
-        if not isinstance(properties, dict):
-            return {}
-        required = schema.get("required", ())
-        if not isinstance(required, list):
-            required = ()
-        return {
-            key: _schema_example(properties.get(key, {}))
-            for key, value in properties.items()
-            if key in required or (isinstance(value, dict) and "default" in value)
-        }
-    if schema.get("type") == "array":
-        return []
-    if schema.get("type") == "integer":
-        return 1
-    if schema.get("type") == "number":
-        return 1
-    if schema.get("type") == "boolean":
-        return True
-    return {}
+def _agent_contract_config(result: Any, descriptor: Any) -> dict[str, Any]:
+    example = arguments_from_input_schema(dict(descriptor.config_schema))
+    report = result.agents.validate_config(
+        descriptor.id, example, version=descriptor.version
+    )
+    if not report.valid:
+        issues = "; ".join(f"{issue.path}: {issue.message}" for issue in report.errors)
+        raise AssertionError(f"agent {descriptor.id} config is invalid: {issues}")
+    normalized = report.normalized_config
+    if not isinstance(normalized, Mapping):
+        raise AssertionError(
+            f"agent {descriptor.id} normalized config must be a mapping"
+        )
+    return dict(normalized)
 
 
 class _LoadedToolProvider:
@@ -259,7 +236,12 @@ def _test_payload(directory: Path) -> tuple[int, dict[str, Any]]:
     root = directory.expanduser().resolve()
     try:
         result = load_extensions(ExtensionSettings(extension_roots=(root,)))
-        record = result.records[0]
+        records = [
+            record for record in result.records if record.source.value == "external"
+        ]
+        if not records:
+            raise AssertionError(f"no extension loaded from {root}")
+        record = records[0]
         if record.status != ExtensionStatus.LOADED:
             details = "; ".join(issue.message for issue in record.errors)
             raise AssertionError(f"catalog load status is {record.status}: {details}")
@@ -282,11 +264,12 @@ def _test_payload(directory: Path) -> tuple[int, dict[str, Any]]:
 
         for descriptor in result.agents.list():
             registered = result.agents.get(descriptor.id, descriptor.version)
-            config = _schema_example(dict(descriptor.config_schema))
+            config = _agent_contract_config(result, descriptor)
             assert_agent_contract(
                 registered.factory,
                 (
                     AgentCase(
+                        name=descriptor.id,
                         context=build_fake_context(
                             account_id=1,
                             decision_round_id="cli-test-round",

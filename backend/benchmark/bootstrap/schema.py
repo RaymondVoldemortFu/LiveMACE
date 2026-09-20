@@ -29,6 +29,9 @@ def run_schema_bootstrap(engine: Optional[Engine] = None) -> SchemaReport:
     from database.migrations_startup import run_startup_migrations
 
     engine = engine if engine is not None else default_engine
+    from database.safety import validate_database_target
+
+    validate_database_target(engine.url)
     report = SchemaReport()
 
     # MySQL only: auto-create the target database (moved here from

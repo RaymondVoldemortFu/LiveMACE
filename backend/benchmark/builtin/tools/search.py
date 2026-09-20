@@ -51,7 +51,9 @@ def _default_search_runner_factory(context: ToolContext) -> SearchRunner:
     from repositories.account_repo import get_account
     from services.agent.sub_agents.search_agent import SearchSubAgent
     from services.security.api_key_security import resolve_runtime_api_key
+    from services.agent.request_scope import current_request_scope
 
+    scope = current_request_scope()
     db = SessionLocal()
     try:
         account = get_account(db, context.account_id)
@@ -60,12 +62,17 @@ def _default_search_runner_factory(context: ToolContext) -> SearchRunner:
             api_key=resolve_runtime_api_key(account.api_key),
             base_url=account.base_url,
             agent_name=account.name,
+            deadline_at=context.deadline_at,
+            is_cancelled=scope.is_cancelled if scope is not None else None,
         )
     finally:
         db.close()
 
     def run(query: str, topic: str, time_range: str, max_results: int) -> Any:
-        return agent.run(query, topic, time_range, max_results)
+        try:
+            return agent.run(query, topic, time_range, max_results)
+        finally:
+            agent.llm_client.close()
 
     return run
 

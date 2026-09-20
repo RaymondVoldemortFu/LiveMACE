@@ -56,6 +56,12 @@ SHELL_SPEC = spec(
     side_effect=SideEffect.SANDBOX_WRITE,
     capabilities=(SANDBOX_WRITE,),
     timeout_seconds=120.0,
+    output_schema={
+        "type": "array",
+        "prefixItems": [{"type": "integer"}, {"type": "string"}],
+        "minItems": 2,
+        "maxItems": 2,
+    },
 )
 
 READ_SPEC = spec(
@@ -64,6 +70,7 @@ READ_SPEC = spec(
     _READ_PARAMETERS,
     side_effect=SideEffect.SANDBOX_WRITE,
     capabilities=(SANDBOX_WRITE,),
+    output_schema={"type": "string"},
 )
 
 WRITE_SPEC = spec(
@@ -72,6 +79,7 @@ WRITE_SPEC = spec(
     _WRITE_PARAMETERS,
     side_effect=SideEffect.SANDBOX_WRITE,
     capabilities=(SANDBOX_WRITE,),
+    output_schema={"type": "string"},
 )
 
 PYTHON_SPEC = spec(

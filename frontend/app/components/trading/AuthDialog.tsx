@@ -22,6 +22,7 @@ interface AuthDialogProps {
     order_type: 'MARKET' | 'LIMIT'
     price?: number
     quantity: number
+    leverage?: number
   }
 }
 
@@ -57,7 +58,7 @@ export default function AuthDialog({
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
       <div className="bg-background rounded-lg p-6 w-80 max-w-sm mx-4">
         <h3 className="text-lg font-semibold mb-4">
-          Confirm Trade - {pendingTrade?.side === 'BUY' ? 'Buy' : 'Sell'}
+          Confirm Trade - {pendingTrade ? { BUY: 'Buy (Long)', SELL: 'Sell (Long)' }[pendingTrade.side] : ''}
         </h3>
         
         <div className="space-y-4">

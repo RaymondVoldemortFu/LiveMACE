@@ -34,14 +34,14 @@ def test_buy_hold_baseline_places_market_buy_without_live_market(monkeypatch):
     )
     orders = []
 
-    def create_order(**kwargs):
+    def create_order(db, account, symbol, market, side, order_type, quantity, price=None):
+        kwargs = dict(symbol=symbol, market=market, side=side, order_type=order_type, quantity=quantity, price=price)
         orders.append(kwargs)
         return SimpleNamespace(id=1, price=50_000.0, filled_quantity=0.01)
 
     monkeypatch.setattr(baselines, "_is_trading_open", lambda *args: True)
     monkeypatch.setattr(baselines, "calc_positions_value", lambda *args: 0.0)
-    monkeypatch.setattr(baselines, "create_order", create_order)
-    monkeypatch.setattr(baselines, "check_and_execute_order", lambda *args: True)
+    monkeypatch.setattr(baselines, "_submit_order", create_order)
     baseline = baselines.BuyHoldBaseline(
         baselines.BuyHoldConfig(
             universe=["BTC"],
@@ -75,15 +75,15 @@ def test_grid_baseline_places_limit_orders_without_live_market(monkeypatch):
     )
     orders = []
 
-    def create_order(**kwargs):
+    def create_order(db, account, symbol, market, side, order_type, quantity, price=None):
+        kwargs = dict(symbol=symbol, market=market, side=side, order_type=order_type, quantity=quantity, price=price)
         orders.append(kwargs)
         return SimpleNamespace(id=len(orders), price=kwargs["price"], filled_quantity=0.0)
 
     monkeypatch.setattr(baselines, "_is_trading_open", lambda *args: True)
     monkeypatch.setattr(baselines, "calc_positions_value", lambda *args: 0.0)
-    monkeypatch.setattr(baselines, "create_order", create_order)
-    monkeypatch.setattr(baselines, "check_and_execute_order", lambda *args: False)
-    monkeypatch.setattr(baselines, "process_all_pending_orders", lambda *args: (0, 0))
+    monkeypatch.setattr(baselines, "_submit_order", create_order)
+    monkeypatch.setattr(baselines, "_process_pending_account", lambda *args: None)
     baseline = baselines.GridBaseline(
         baselines.GridConfig(
             universe=["BTC"],

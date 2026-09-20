@@ -11,7 +11,7 @@ interface User {
   has_password: boolean
 }
 
-interface PositionLite { symbol: string; market: string; available_quantity: number }
+interface PositionLite { symbol: string; market: string; available_quantity: number; side?: string }
 
 interface TradingPanelProps {
   onPlace: (payload: any) => void
@@ -22,12 +22,12 @@ interface TradingPanelProps {
 
 export default function TradingPanel({ onPlace, user, positions = [], lastPrices = {} }: TradingPanelProps) {
   const [symbol, setSymbol] = useState('BTC')
-  const [market] = useState<'US'>('US')
+  const market = 'CRYPTO' as const
   const [orderType, setOrderType] = useState<'MARKET' | 'LIMIT'>('LIMIT')
   const [price, setPrice] = useState<number>(190)
   const [quantity, setQuantity] = useState<number>(2)
   const [leverage, setLeverage] = useState<number>(1)
-  const [side, setSide] = useState<'LONG' | 'SHORT' | 'BUY' | 'SELL'>('LONG')
+  const [side, setSide] = useState<'BUY' | 'SELL'>('BUY')
   const [showPasswordDialog, setShowPasswordDialog] = useState<boolean>(false)
   const [pendingTrade, setPendingTrade] = useState<{side: 'BUY' | 'SELL'} | null>(null)
   const [authSessionToken, setAuthSessionToken] = useState<string>('')
@@ -92,7 +92,7 @@ export default function TradingPanel({ onPlace, user, positions = [], lastPrices
       })
       const data = await response.json()
       
-      if (data.valid && data.user_id === user?.id) {
+      if (data.valid && String(data.user_id) === user?.id) {
         setAuthSessionToken(token)
         setIsAuthenticated(true)
       } else {
@@ -125,8 +125,12 @@ export default function TradingPanel({ onPlace, user, positions = [], lastPrices
   }
 
   const handlePlaceOrder = () => {
+    if (positions.some(p => p.symbol === symbol && p.market === market && p.side === 'SHORT' && p.available_quantity > 0)) {
+      toast.error('This panel manages long positions. Close the existing short through your directional trading strategy first.')
+      return
+    }
     // Validate price
-    if (orderType === 'LIMIT' && price <= 0) {
+    if (orderType === 'LIMIT' && (!Number.isFinite(price) || price <= 0)) {
       toast.error('Please input a valid limit price')
       return
     }
@@ -138,7 +142,7 @@ export default function TradingPanel({ onPlace, user, positions = [], lastPrices
     }
     
     // Validate based on side
-    if (side === 'LONG' || side === 'SHORT') {
+    if (side === 'BUY') {
       // Opening position - check cash
       const notional = price * quantity
       const marginNeeded = leverage > 1 ? notional / leverage : notional
@@ -173,13 +177,13 @@ export default function TradingPanel({ onPlace, user, positions = [], lastPrices
       onPlace(orderData)
     } else {
       // Not authenticated, show password dialog
-      setPendingTrade({side: side as 'BUY' | 'SELL'})
+      setPendingTrade({side})
       setShowPasswordDialog(true)
     }
   }
 
   return (
-    <div className="space-y-4 w-[320px] flex-shrink-0">
+    <div className="space-y-4 w-full min-w-0">
       <OrderForm
         symbol={symbol}
         orderType={orderType}

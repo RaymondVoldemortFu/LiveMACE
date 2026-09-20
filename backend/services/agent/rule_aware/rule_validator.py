@@ -1,11 +1,9 @@
 """
 Rule Validator - Validates trading decisions against rules
 """
+import json
 import logging
-import sys
-import os
 from typing import Dict, Any, List, Tuple, Optional
-from decimal import Decimal
 from datetime import datetime, timedelta, timezone
 
 from .rule_engine import RuleEngine, Rule, RuleLevel
@@ -23,18 +21,19 @@ get_db = None
 AssetMetadata = None
 Position = None
 AIDecisionLog = None
+RuntimeEvent = None
 Order = None
 Trade = None
 
 try:
     # First try relative import (when running from backend/)
     from database.connection import get_db
-    from database.models import AssetMetadata, Position, AIDecisionLog, Order, Trade, Account, AccountSnapshot
+    from database.models import AssetMetadata, Position, AIDecisionLog, Account, AccountSnapshot, RuntimeEvent
 except ImportError:
     try:
         # Fallback for absolute import (when running from project root)
         from backend.database.connection import get_db
-        from backend.database.models import AssetMetadata, Position, AIDecisionLog, Order, Trade, Account, AccountSnapshot
+        from backend.database.models import AssetMetadata, Position, AIDecisionLog, Account, AccountSnapshot, RuntimeEvent
     except ImportError:
         # If both fail, log warning
         pass
@@ -81,7 +80,88 @@ class RuleValidator:
     
     def __init__(self, rule_engine: RuleEngine):
         self.rule_engine = rule_engine
-    
+
+    def _check_post_execution_state(self, rule, decision, portfolio, severity):
+        """Check one committed portfolio; filled actions must not be added again."""
+        positions = portfolio["positions"]
+        equity = portfolio["total_equity"]
+        notionals = {}
+        for position in positions:
+            symbol = position["symbol"]
+            value = abs(position["quantity"] * position["valuation_price"])
+            notionals[symbol] = notionals.get(symbol, 0.0) + value
+        params = rule.parameters
+        if rule.id == "R0-01":
+            limit = params.get("max_leverage", 5)
+            leverage = decision.get("leverage", 1)
+            if leverage > limit:
+                return RuleViolation(
+                    rule,
+                    severity,
+                    f"Order leverage {leverage}x exceeds maximum {limit}x",
+                    leverage,
+                    f"<= {limit}",
+                )
+            exposure = sum(notionals.values())
+            if equity > 0 and exposure / equity > limit:
+                return RuleViolation(
+                    rule,
+                    severity,
+                    f"Portfolio leverage {exposure / equity:.2f}x exceeds maximum {limit}x",
+                    exposure / equity,
+                    f"<= {limit}",
+                )
+        elif rule.id == "R0-02":
+            margin = portfolio["margin_used"]
+            limit = params.get("min_margin_level", 0.10)
+            if margin > 0 and equity / margin < limit:
+                return RuleViolation(
+                    rule,
+                    severity,
+                    f"Margin level {equity / margin:.2%} below minimum {limit:.2%}",
+                    equity / margin,
+                    f">= {limit}",
+                )
+        elif rule.id == "R1-02":
+            limit = params.get("max_single_asset_pct", 0.15)
+            if equity > 0 and notionals:
+                symbol, value = max(notionals.items(), key=lambda item: item[1])
+                ratio = value / equity
+                if ratio > limit:
+                    return RuleViolation(
+                        rule,
+                        severity,
+                        f"Post-execution {symbol} exposure {ratio:.2%} exceeds limit {limit:.2%}",
+                        ratio,
+                        f"<= {limit}",
+                    )
+        elif rule.id == "R2-03":
+            preferred = {
+                item.lower()
+                for item in params.get("preferred_sectors", [])
+                + params.get("preferred_crypto_themes", [])
+            }
+            preferred_value = sum(
+                value
+                for symbol, value in notionals.items()
+                if CRYPTO_SECTOR_MAP.get(symbol, "").lower() in preferred
+            )
+            total = sum(notionals.values())
+            ratio = preferred_value / total if total > 0 else 0.0
+            lower = params.get("target_allocation_min", 0.30)
+            upper = params.get("target_allocation_max", 0.70)
+            if ratio < lower or ratio > upper:
+                score = max(0.0, 1.0 - abs(ratio - (lower + upper) / 2.0) / 0.40)
+                return RuleViolation(
+                    rule,
+                    severity,
+                    f"Preferred sector allocation {ratio:.2%} of position notional outside target range {lower:.2%}-{upper:.2%}",
+                    ratio,
+                    f"{lower:.2%}-{upper:.2%}",
+                    score=score,
+                )
+        return None
+
     def validate_decision(
         self, 
         decision: Dict[str, Any], 
@@ -137,6 +217,8 @@ class RuleValidator:
                     violations.append(violation)
             except Exception as e:
                 logger.error(f"Error validating rule {rule.id}: {e}")
+                if portfolio.get("audit_phase") == "post_execution":
+                    raise RuntimeError(f"Compliance check unavailable: {rule.id}") from e
         
         return violations
     
@@ -157,6 +239,8 @@ class RuleValidator:
                     violations.append(violation)
             except Exception as e:
                 logger.error(f"Error validating rule {rule.id}: {e}")
+                if portfolio.get("audit_phase") == "post_execution":
+                    raise RuntimeError(f"Compliance check unavailable: {rule.id}") from e
         
         return violations
     
@@ -177,6 +261,8 @@ class RuleValidator:
                     violations.append(violation)
             except Exception as e:
                 logger.error(f"Error validating rule {rule.id}: {e}")
+                if portfolio.get("audit_phase") == "post_execution":
+                    raise RuntimeError(f"Compliance check unavailable: {rule.id}") from e
         
         return violations
     
@@ -194,6 +280,8 @@ class RuleValidator:
         """
         rule_id = rule.id
         params = rule.parameters
+        if portfolio.get("audit_phase") == "post_execution" and rule_id in {"R0-01", "R0-02", "R1-02", "R2-03"}:
+            return self._check_post_execution_state(rule, decision, portfolio, severity)
         
         # R0-01: Maximum Leverage Limit
         # Checks both (a) the individual order's leverage and (b) the resulting
@@ -298,6 +386,8 @@ class RuleValidator:
                                 )
                 except Exception as e:
                     logger.warning(f"R0-03: Could not query account snapshots: {e}")
+                    if portfolio.get("audit_phase") == "post_execution":
+                        raise
                 finally:
                     db.close()
         
@@ -386,6 +476,8 @@ class RuleValidator:
                 # Gracefully handle database errors (e.g., missing tables in test environment)
                 import logging
                 logging.warning(f"R1-01: Could not query asset metadata for {symbol}: {e}")
+                if portfolio.get("audit_phase") == "post_execution":
+                    raise
             finally:
                 db.close()
         
@@ -479,19 +571,33 @@ class RuleValidator:
             db = next(get_db())
             try:
                 cutoff_time = datetime.utcnow() - timedelta(minutes=reversal_window_minutes)
-                recent_decisions = db.query(AIDecisionLog).filter(
+                recent_query = db.query(AIDecisionLog).filter(
                     AIDecisionLog.account_id == account_id,
                     AIDecisionLog.symbol == symbol,
                     AIDecisionLog.created_at >= cutoff_time,
                     AIDecisionLog.operation.in_(["open", "close"])
-                ).order_by(AIDecisionLog.created_at.desc()).all()
+                )
+                decision_time = datetime.utcnow()
+                if portfolio.get("audit_phase") == "post_execution" and decision.get("order_id"):
+                    current_log = db.query(AIDecisionLog).filter(
+                        AIDecisionLog.account_id == account_id,
+                        AIDecisionLog.order_id == decision["order_id"],
+                    ).order_by(AIDecisionLog.id.asc()).first()
+                    if current_log is not None:
+                        # The audit runs after all tools commit. Check the history
+                        # before this fill, excluding its own and later tool logs.
+                        recent_query = recent_query.filter(AIDecisionLog.id < current_log.id)
+                        decision_time = current_log.created_at
+                recent_decisions = recent_query.order_by(
+                    AIDecisionLog.created_at.desc(), AIDecisionLog.id.desc()
+                ).all()
                 
                 if recent_decisions:
                     latest = recent_decisions[0]
                     # Check for direction reversal (open->close or close->open)
                     if latest.operation != operation:
                         # Calculate time since reversal
-                        time_diff = datetime.utcnow() - latest.created_at
+                        time_diff = decision_time - latest.created_at
                         interval_minutes = time_diff.total_seconds() / 60.0
                         
                         # Score: quadratic (smooth) function for gradual penalty
@@ -509,6 +615,8 @@ class RuleValidator:
                         )
             except Exception as e:
                 logger.warning(f"R2-01: Could not query decision history: {e}")
+                if portfolio.get("audit_phase") == "post_execution":
+                    raise
             finally:
                 db.close()
         
@@ -643,7 +751,6 @@ class RuleValidator:
         # R2-04: Position Scaling Smoothness
         elif rule_id == "R2-04":
             significant_threshold = params.get("significant_change_threshold", 0.10)
-            max_single_move = params.get("max_single_move", 0.10)
             
             target_portion = decision.get("target_portion_of_balance", 0)
             symbol = decision.get("symbol")
@@ -728,7 +835,6 @@ class RuleValidator:
             
             max_consecutive_before_penalty = params.get("max_consecutive_holds_before_penalty", 1)
             penalty_max_reference = params.get("hold_penalty_max_reference", 3)
-            low_volatility_threshold = params.get("low_volatility_threshold", 0.005)
             
             operation = decision.get("operation", "").lower()
             account_id = portfolio.get("account_id")
@@ -740,19 +846,41 @@ class RuleValidator:
             # Query recent decisions to count consecutive HOLDs
             db = next(get_db())
             try:
-                # Get last 20 decisions
-                recent_decisions = db.query(AIDecisionLog).filter(
-                    AIDecisionLog.account_id == account_id
-                ).order_by(AIDecisionLog.decision_time.desc()).limit(20).all()
-                
-                # Count consecutive HOLDs (including current one)
-                consecutive_holds = 1  # Current decision is HOLD
-                for past_decision in recent_decisions:
-                    past_op = past_decision.operation.lower() if past_decision.operation else ""
-                    if past_op in ["hold", ""] or past_op is None:
+                consecutive_holds = 1  # Current decision is HOLD.
+                if portfolio.get("audit_phase") == "post_execution":
+                    # Tool logs and the display summary are observations of one
+                    # round. Only completed runtime results identify its outcome.
+                    rounds = db.query(RuntimeEvent).filter(
+                        RuntimeEvent.account_id == account_id,
+                        RuntimeEvent.event_type == "run.result",
+                    ).order_by(RuntimeEvent.created_at.desc(), RuntimeEvent.sequence.desc()).yield_per(50)
+                    seen_rounds = {portfolio.get("decision_round_id")}
+                    for event in rounds:
+                        if event.decision_round_id in seen_rounds:
+                            continue
+                        seen_rounds.add(event.decision_round_id)
+                        result = json.loads(event.payload)
+                        # A fill breaks the streak even if the agent subsequently
+                        # reached its step limit or reported HOLD.
+                        if any(
+                            trade.get("executed") is True
+                            and trade.get("operation") in {"open", "close", "all_in", "close_all"}
+                            for trade in result.get("executed_trades", [])
+                        ):
+                            break
+                        if result.get("termination_reason") != "hold":
+                            break
                         consecutive_holds += 1
-                    else:
-                        break
+                else:
+                    recent_decisions = db.query(AIDecisionLog).filter(
+                        AIDecisionLog.account_id == account_id,
+                        AIDecisionLog.operation != "summary",
+                    ).order_by(AIDecisionLog.decision_time.desc()).limit(20).all()
+                    for past_decision in recent_decisions:
+                        past_op = (past_decision.operation or "").lower()
+                        if past_op not in {"hold", ""}:
+                            break
+                        consecutive_holds += 1
                 
                 # Check if we should apply penalty
                 if consecutive_holds > max_consecutive_before_penalty:
@@ -774,6 +902,8 @@ class RuleValidator:
                     )
             except Exception as e:
                 logger.warning(f"R2-06: Could not query decision history: {e}")
+                if portfolio.get("audit_phase") == "post_execution":
+                    raise
             finally:
                 db.close()
         

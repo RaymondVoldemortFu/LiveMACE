@@ -1,22 +1,31 @@
-"""Account selection helpers for decision rounds."""
+"""Select active Agent accounts while keeping baselines on their own schedule."""
 
-from __future__ import annotations
-
-from sqlalchemy.orm import Session
-
-from database.models import Account
 from services.baselines import is_baseline_trading_account
-
-def select_agent_accounts(db: Session, requested_account_ids: tuple[int, ...] | None = None) -> list[Account]:
-    from services.trading_commands import _load_trading_accounts
-
-    accounts = _load_trading_accounts(db)
-    if requested_account_ids is not None:
-        wanted = set(requested_account_ids)
-        accounts = [account for account in accounts if account.id in wanted]
-    # TODO: Replace the baseline exclusion fallback with an explicit agent capability registry
-    # once agent metadata/discovery interfaces are available.
-    return [account for account in accounts if not is_baseline_trading_account(account)]
+from repositories.account_repo import list_active_ai_accounts
 
 
-__all__ = ["select_agent_accounts"]
+def select_agent_accounts(db, requested_account_ids=None):
+    wanted = None if requested_account_ids is None else set(requested_account_ids)
+    return [
+        account
+        for account in list_active_ai_accounts(db)
+        if (wanted is None or account.id in wanted)
+        and not is_baseline_trading_account(account)
+    ]
+
+
+def select_manual_account_ids(requested):
+    """Explicit operator selection, without enabling recurring AI scheduling."""
+    from database.connection import SessionLocal
+    from database.models import Account
+
+    with SessionLocal() as db:
+        accounts = (
+            db.query(Account)
+            .filter(Account.id.in_(requested), Account.is_active == "true")
+            .all()
+        )
+        ids = [a.id for a in accounts if not is_baseline_trading_account(a)]
+    if set(ids) != set(requested):
+        raise ValueError("Select active non-baseline accounts")
+    return ids

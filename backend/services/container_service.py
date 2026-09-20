@@ -222,6 +222,7 @@ class ContainerService:
         return {
             "open-alpha-arena-bench.managed": "true",
             "open-alpha-arena-bench.component": "agent-sandbox",
+            "open-alpha-arena-bench.instance": os.getenv("SANDBOX_INSTANCE", "default"),
         }
 
     def _create_container(self):
@@ -253,7 +254,7 @@ class ContainerService:
         try:
             stale_managed = self.client.containers.list(
                 all=True,
-                filters={"label": "open-alpha-arena-bench.managed=true"},
+                filters={"label": [f"{key}={value}" for key, value in self._container_labels().items()]},
             )
             for c in stale_managed:
                 self._remove_container_quietly(c)
@@ -264,7 +265,8 @@ class ContainerService:
         try:
             exited = self.client.containers.list(
                 all=True,
-                filters={"ancestor": AgentConfig.DOCKER_IMAGE_NAME, "status": "exited"},
+                filters={"ancestor": AgentConfig.DOCKER_IMAGE_NAME, "status": "exited",
+                         "label": [f"{key}={value}" for key, value in self._container_labels().items()]},
             )
             for c in exited:
                 self._remove_container_quietly(c)
@@ -625,7 +627,7 @@ class ContainerService:
                     tracked_ids = self._tracked_container_ids()
                     leaked = self.client.containers.list(
                         all=True,
-                        filters={"label": "open-alpha-arena-bench.managed=true"},
+                        filters={"label": [f"{key}={value}" for key, value in self._container_labels().items()]},
                     )
                     for container in leaked:
                         container_id = getattr(container, "id", None)

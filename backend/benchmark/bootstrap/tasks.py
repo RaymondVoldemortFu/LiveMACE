@@ -339,13 +339,12 @@ class TaskRegistry:
 
 
 def _load_extension_catalog() -> None:
-    """Extension catalog load slot (M13).
+    """Load and freeze the shared catalog before scheduling decisions."""
+    from benchmark.extensions.host import get_extension_runtime
 
-    The catalog must be deterministically loaded and frozen before any
-    scheduler job can create an Agent. Until M13 lands this is a no-op
-    hook so the ordering contract is already in place.
-    """
-    logger.info("extension catalog load: pending M13 integration (no-op)")
+    runtime = get_extension_runtime()
+    for record in runtime.catalog.list_extensions():
+        logger.info("extension id=%s version=%s status=%s", record.id, record.version, record.status)
 
 
 def default_task_descriptors() -> List[TaskDescriptor]:
@@ -368,8 +367,14 @@ def default_task_descriptors() -> List[TaskDescriptor]:
 
     def _docker_sandbox_stop() -> None:
         from services.container_service import ContainerService
+        from services.trading_commands import _ai_trade_run_lock
 
-        ContainerService().shutdown()
+        if not _ai_trade_run_lock.acquire(blocking=False):
+            raise RuntimeError("Decision workers still own sandbox leases")
+        try:
+            ContainerService().shutdown()
+        finally:
+            _ai_trade_run_lock.release()
 
     def _scheduler_start() -> None:
         from services.scheduler import start_scheduler

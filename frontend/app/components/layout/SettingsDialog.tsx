@@ -52,6 +52,7 @@ interface AIAccountCreate extends TradingAccountCreate {
 
 const AGENT_TYPE_OPTIONS = [
   { value: 'react', label: 'ReAct Agent' },
+  { value: 'rule_aware', label: 'Rule-Aware Agent' },
   { value: 'multi_agent', label: 'Multi-Agent System' },
   { value: 'advanced_multi_agent', label: 'Advanced Multi-Agent System' },
   { value: 'buy_hold', label: 'Baseline: Buy & Hold' },
@@ -147,7 +148,6 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
         setTestResult('Testing LLM connection...')
 
         console.log('[SettingsDialog] Starting LLM test')
-        console.log('[SettingsDialog] newAccount:', newAccount)
         console.log('[SettingsDialog] enable_rule_aware:', newAccount.enable_rule_aware, typeof newAccount.enable_rule_aware)
 
         try {
@@ -225,13 +225,18 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
         return
       }
       
-      const hasAnyLLMField = Boolean(editAccount.model || editAccount.base_url || editAccount.api_key)
-      const hasAllLLMFields = Boolean(editAccount.model && editAccount.base_url && editAccount.api_key)
-
-      if (hasAnyLLMField && !hasAllLLMFields) {
+      const hasNewKey = Boolean(editAccount.api_key?.trim())
+      const hasModelAndUrl = Boolean(editAccount.model?.trim() && editAccount.base_url?.trim())
+      const isBaseline = ['buy_hold', 'grid'].includes((editAccount.agent_type || '').trim().toLowerCase())
+        || isBaselineAccountName(editAccount.name)
+      const requiresModel = accounts.find(account => account.id === editingId)?.account_type === 'AI' && !isBaseline
+      if (requiresModel && !hasModelAndUrl) {
+        setError('AI account requires Model and Base URL. Leave API Key blank to keep the current key.')
+        return
+      }
+      const hasAllLLMFields = hasModelAndUrl && hasNewKey
+      if (hasNewKey && !hasAllLLMFields) {
         setError('Model、Base URL 和 API Key 必须同时填写')
-        setLoading(false)
-        setTesting(false)
         return
       }
 
@@ -266,10 +271,9 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
       }
       
       setTesting(false)
-      setTestResult('✅ Test passed! Saving account...')
+      setTestResult('Saving account...')
       
-      console.log('Updating account with data:', editAccount)
-      await updateAccount(editingId, editAccount)
+      await updateAccount(editingId, { ...editAccount, api_key: hasNewKey ? editAccount.api_key : undefined })
       setEditingId(null)
       setEditAccount({
         name: '',
@@ -305,7 +309,7 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
       name: account.name,
       model: account.model || '',
       base_url: account.base_url || '',
-      api_key: account.api_key || '',
+      api_key: '',
       agent_type: account.agent_type || 'react',
       memory_enabled: account.memory_enabled || 'false',
       tool_routing_enabled: account.tool_routing_enabled || 'true',
@@ -451,7 +455,7 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
                           onChange={(e) => setEditAccount({ ...editAccount, base_url: e.target.value })}
                         />
                         <Input
-                          placeholder="API Key"
+                          placeholder="API Key (leave blank to keep current)"
                           type="password"
                           value={editAccount.api_key || ''}
                           onChange={(e) => setEditAccount({ ...editAccount, api_key: e.target.value })}
@@ -483,7 +487,7 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
                         )}
                         <div className="flex gap-2">
                           <Button onClick={handleUpdateAccount} disabled={loading || testing} size="sm">
-                            {testing ? 'Testing...' : 'Test and Save'}
+                            {testing ? 'Saving...' : editAccount.api_key ? 'Test and Save' : 'Save'}
                           </Button>
                           <Button onClick={cancelEdit} variant="outline" size="sm" disabled={loading || testing}>
                             Cancel
@@ -512,7 +516,7 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
                           )}
                           {account.api_key && (
                             <div className="text-xs text-muted-foreground">
-                              API Key: {'*'.repeat(Math.max(0, (account.api_key?.length || 0) - 4))}{account.api_key?.slice(-4) || '****'}
+                              API Key: Configured
                             </div>
                           )}
                           <div className="text-xs text-muted-foreground">
@@ -521,6 +525,7 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
                         </div>
                         <div className="flex gap-2">
                           <Button
+                            aria-label={`View prompt for ${account.name}`}
                             onClick={() => handleViewPrompt(account)}
                             variant="outline"
                             size="sm"
@@ -528,6 +533,7 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
                             <Eye className="h-4 w-4" />
                           </Button>
                           <Button
+                            aria-label={`Edit ${account.name}`}
                             onClick={() => startEdit(account)}
                             variant="outline"
                             size="sm"

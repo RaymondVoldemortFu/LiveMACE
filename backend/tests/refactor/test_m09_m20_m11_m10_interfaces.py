@@ -279,13 +279,15 @@ def test_m11_gateway_maps_rejects_to_stable_codes():
 def test_m10_run_decision_round_validates_sync_request_shape():
     called = []
 
-    def fake_entrypoint():
-        called.append("ran")
+    def fake_entrypoint(request):
+        from benchmark.application.decisions.service import DecisionRoundResult
+        called.append(request.trigger)
+        return DecisionRoundResult("round", 0, {})
 
 
     result = DecisionRoundService(entrypoint=fake_entrypoint).run(RunDecisionRound(account_ids=None, max_concurrency=2, trigger="test"))
 
-    assert called == ["ran"]
+    assert called == ["test"]
     assert result.processed_accounts == 0
     with pytest.raises(ValueError, match="max_concurrency"):
         RunDecisionRound(account_ids=None, max_concurrency=0, trigger="test")

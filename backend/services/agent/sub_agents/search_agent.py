@@ -2,6 +2,7 @@ import json
 import logging
 import re
 import time
+from datetime import datetime, timedelta, timezone
 from html import unescape
 from typing import Dict, Any, List, Optional
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
@@ -17,6 +18,10 @@ llm_logger = logging.getLogger("llm_trace")
 agent_logger = logging.getLogger("agent_decision")
 search_logger = logging.getLogger("search_results")
 
+
+class _SearchProviderError(RuntimeError):
+    """Safe provider failure text, containing neither bodies nor credentials."""
+
 # Try to import tiktoken for accurate token counting
 try:
     import tiktoken
@@ -27,16 +32,22 @@ except ImportError:
 
 
 class SearchSubAgent:
-    def __init__(self, model: str = "gpt-4o-mini", api_key: str = None, base_url: str = None, agent_name: Optional[str] = None, prompt_resolver=None):
+    def __init__(self, model: str = "gpt-4o-mini", api_key: str = None, base_url: str = None, agent_name: Optional[str] = None, prompt_resolver=None, *, deadline_at=None, is_cancelled=None):
+        self.search_provider = ToolConfig.SEARCH_PROVIDER
+        if self.search_provider not in {"brightdata", "tavily"}:
+            raise ValueError("SEARCH_PROVIDER must be brightdata or tavily")
+        self.tavily_api_key = ToolConfig.tavily_api_key
+        self.deadline_at = deadline_at
+        self.is_cancelled = is_cancelled or (lambda: False)
         self.brightdata_api_key = ToolConfig.brightdata_api_key
         self._brightdata_client_cls = None
-        if self.brightdata_api_key:
+        if self.search_provider == "brightdata" and self.brightdata_api_key:
             try:
                 from brightdata import SyncBrightDataClient
                 self._brightdata_client_cls = SyncBrightDataClient
             except ImportError:
                 logger.error("Bright Data SDK not installed. Please run `uv add brightdata-sdk`.")
-        else:
+        elif self.search_provider == "brightdata":
             logger.warning("BRIGHTDATA_API_KEY not found in environment variables.")
 
         # LLM client for sub-agent reasoning
@@ -44,6 +55,9 @@ class SearchSubAgent:
             api_key=api_key,
             base_url=base_url,
         ) if api_key else None
+        if self.llm_client:
+            self.llm_client.deadline_at = self.deadline_at
+            self.llm_client.is_cancelled = self.is_cancelled
         self.model = model
         self.max_steps = ToolConfig.MAX_SEARCH_STEPS
         self.max_context_tokens = ToolConfig.MAX_CONTEXT_TOKENS
@@ -85,6 +99,8 @@ class SearchSubAgent:
         """
         Executes a search query using Bright Data Google SERP (`query`, `num_results`, optional `time_range` tbs).
         """
+        if self.search_provider == "tavily":
+            return self._tavily_search(query, topic, time_range, max_results)
         if not self._brightdata_client_cls:
             return {"error": "Bright Data client not initialized."}
 
@@ -110,6 +126,73 @@ class SearchSubAgent:
             logger.exception(f"Search failed: {e}")
             return {"error": str(e)}
 
+    def _remaining_timeout(self, timeout_seconds: float) -> float:
+        if self.is_cancelled():
+            raise TimeoutError("Search cancelled")
+        if self.deadline_at is not None:
+            remaining = (self.deadline_at - datetime.now(timezone.utc)).total_seconds()
+            if remaining <= 0:
+                raise TimeoutError("Search deadline exceeded")
+            return min(timeout_seconds, remaining)
+        return timeout_seconds
+
+    def _tavily_search(self, query, topic, time_range, max_results):
+        if not self.tavily_api_key:
+            return {"error": "Tavily API key is not configured."}
+        if not isinstance(query, str) or not query.strip():
+            return {"error": "Search query must be a non-empty string."}
+        if topic not in {"general", "news", "finance"}:
+            return {"error": "Unsupported search topic."}
+        recency = str(time_range or "none").lower()
+        if recency not in {"none", "day", "week", "month", "year"}:
+            return {"error": "Unsupported search time range."}
+        if isinstance(max_results, bool) or not isinstance(max_results, int) or not 1 <= max_results <= 20:
+            return {"error": "max_results must be an integer between 1 and 20."}
+        merged_query = self._merge_topic_into_query(query, topic)
+        body = {
+            "query": merged_query, "topic": "news" if topic == "news" else "general",
+            "max_results": max_results, "search_depth": "basic",
+            "include_answer": False, "include_raw_content": False,
+        }
+        if recency != "none":
+            body["time_range"] = recency
+
+        def request():
+            try:
+                timeout = self._remaining_timeout(self.search_timeout_seconds)
+                with requests.post(
+                    "https://api.tavily.com/search", json=body,
+                    headers={"Authorization": f"Bearer {self.tavily_api_key}"},
+                    timeout=(min(5.0, timeout), timeout), allow_redirects=False,
+                ) as response:
+                    if response.status_code != 200:
+                        # Provider bodies/exceptions may echo credentials; expose only status.
+                        raise _SearchProviderError(f"Tavily search failed (HTTP {response.status_code}).")
+                    payload = response.json()
+                    if not isinstance(payload, dict) or not isinstance(payload.get("results"), list):
+                        raise _SearchProviderError("Tavily returned an invalid search response.")
+                    return {"results": payload["results"][:max_results]}
+            except _SearchProviderError:
+                raise
+            except Exception:
+                raise _SearchProviderError("Tavily search request failed.") from None
+
+        try:
+            payload = self._call_with_retry(
+                "tavily_search", self.search_timeout_seconds, request, max_retries=0,
+            )
+            return self._normalize_serp_results(query, merged_query, topic, time_range, payload)
+        except Exception as exc:
+            # Do not emit request objects, headers or response bodies to logs/tool output.
+            if isinstance(exc, TimeoutError):
+                return {"error": str(exc)}
+            message = str(exc)
+            if "Tavily search failed (HTTP " in message:
+                status = re.search(r"HTTP (\d{3})", message)
+                if status:
+                    return {"error": f"Tavily search failed (HTTP {status.group(1)})."}
+            return {"error": "Tavily search failed."}
+
     def _extract_tool(self, url: str) -> Dict[str, Any]:
         """
         Extracts content from a URL.
@@ -117,6 +200,9 @@ class SearchSubAgent:
         """
         local_result = self._extract_with_local_fetch(url)
         if not local_result.get("error"):
+            return local_result
+
+        if self.search_provider == "tavily":
             return local_result
 
         if not self._brightdata_client_cls:
@@ -260,14 +346,24 @@ class SearchSubAgent:
         with self._brightdata_client_cls(token=self.brightdata_api_key) as client:
             return client.scrape_url(url=url)
 
-    def _call_with_retry(self, operation_name: str, timeout_seconds: float, func):
+    def _call_with_retry(self, operation_name: str, timeout_seconds: float, func, *, max_retries=None):
         last_err: Optional[Exception] = None
-        total_attempts = self.max_retries + 1
+        total_attempts = (self.max_retries if max_retries is None else max_retries) + 1
         for attempt in range(1, total_attempts + 1):
+            wait_seconds = self._remaining_timeout(timeout_seconds)
             executor = ThreadPoolExecutor(max_workers=1)
             try:
                 future = executor.submit(func)
-                return future.result(timeout=timeout_seconds)
+                deadline = time.monotonic() + wait_seconds
+                while True:
+                    remaining = self._remaining_timeout(deadline - time.monotonic())
+                    if remaining <= 0:
+                        raise FuturesTimeoutError()
+                    try:
+                        return future.result(timeout=min(0.1, remaining))
+                    except FuturesTimeoutError:
+                        if future.done():
+                            raise
             except FuturesTimeoutError as err:
                 last_err = TimeoutError(
                     f"{operation_name} timeout after {timeout_seconds}s (attempt {attempt}/{total_attempts})"
@@ -284,6 +380,7 @@ class SearchSubAgent:
                 )
             finally:
                 executor.shutdown(wait=False, cancel_futures=True)
+            self._remaining_timeout(timeout_seconds)
             if attempt < total_attempts:
                 time.sleep(min(1.0, 0.2 * attempt))
         raise RuntimeError(
@@ -582,8 +679,13 @@ class SearchSubAgent:
         Main entry point for the sub-agent.
         Orchestrates the search and extraction process.
         """
-        if not self.llm_client or not self._brightdata_client_cls:
-            return {"error": "Sub-agent not fully initialized (missing LLM or Bright Data key)."}
+        provider_ready = self.tavily_api_key if self.search_provider == "tavily" else self._brightdata_client_cls
+        if not self.llm_client or not provider_ready:
+            return {"error": "Sub-agent not fully initialized (missing LLM or search provider key)."}
+        round_deadline = datetime.now(timezone.utc) + timedelta(seconds=ToolConfig.SEARCH_AGENT_ROUND_TIMEOUT_SECONDS)
+        self.deadline_at = min(self.deadline_at, round_deadline) if self.deadline_at else round_deadline
+        self.llm_client.deadline_at = self.deadline_at
+        self.llm_client.is_cancelled = self.is_cancelled
 
         agent_name = self.agent_name
         agent_logger.info(f"[{agent_name}] === Starting Search Sub-Agent ===")
@@ -606,7 +708,7 @@ class SearchSubAgent:
                 "type": "function",
                 "function": {
                     "name": "search_tool",
-                    "description": "Google SERP search via Bright Data (query + optional recency and result count).",
+                    "description": "Web search with optional recency and result count.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -619,7 +721,7 @@ class SearchSubAgent:
                             "time_range": {
                                 "type": "string",
                                 "enum": ["day", "week", "month", "year", "none"],
-                                "description": "Google recency filter (tbs qdr); none = no date filter.",
+                                "description": "Recency filter; none = no date filter.",
                             },
                             "max_results": {"type": "integer", "description": "Number of organic results to fetch."},
                         },
@@ -644,6 +746,10 @@ class SearchSubAgent:
         ]
 
         for step in range(self.max_steps):
+            try:
+                self._remaining_timeout(self.search_timeout_seconds)
+            except TimeoutError as exc:
+                return {"error": str(exc)}
             agent_logger.info(f"[{agent_name}] --- Sub-Agent Step {step+1}/{self.max_steps} ---")
             
             # Check token count before making request
@@ -700,6 +806,7 @@ class SearchSubAgent:
 
                     agent_logger.info(f"[{agent_name}] Sub-Agent requested {len(tool_calls)} tools")
                     for tc in tool_calls:
+                        self._remaining_timeout(self.search_timeout_seconds)
                         tc_id, func_name, tc_arguments = LLMClient.tool_call_parts(tc)
                         try:
                             args = json.loads(tc_arguments or "{}")
@@ -720,6 +827,8 @@ class SearchSubAgent:
                             # Log that we are searching, but put results in search_logger
                             logger.info(f"Sub-Agent performing search: {t_query}")
                             result = self._search_tool(t_query, t_topic, t_time, t_max)
+                            if self.search_provider == "tavily" and result.get("error"):
+                                return result
                             if isinstance(result, dict) and result.get("error"):
                                 logger.error(
                                     f"search_tool returned error for query={t_query!r}: {result.get('error')}"
