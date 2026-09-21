@@ -375,3 +375,11 @@ __pycache__
 *.pyc
 
 !backend/tests/test_wave3_*.py
+
+docs/contributor-commit-timing.md
+docs/contributor-commit-timing.pdf
+docs/contributor-analysis/timing.json
+docs/contributor-analysis/figures/timing/
+docs/contributor-analysis
+docs/contributor-contribution-analysis.md
+docs/contributor-contribution-analysis.pdf
