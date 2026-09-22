@@ -1,5 +1,6 @@
 import json
 import logging
+import math
 import uuid
 import inspect
 from typing import Dict, Any, List, Optional, Callable
@@ -12,6 +13,48 @@ from .llm_client import LLMClient
 from .tools import ToolRegistry
 
 logger = logging.getLogger(__name__)
+
+MULTI_AGENT_FINAL_TOOL_CALL_ID = "multi-agent-final"
+MULTI_AGENT_TRADE_OPERATIONS = frozenset({"open", "close", "all_in", "close_all"})
+
+
+def _absent(value: Any) -> bool:
+    return value in (None, "")
+
+
+def _finite_number(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number):
+        return None
+    return number
+
+
+def manager_close_ratio(decision: Dict[str, Any]) -> tuple[Any, str | None]:
+    """Map Manager close sizing to execute_trade close_ratio.
+
+    Missing close_ratio with missing or 0 remaining target is a full close.
+    An explicit non-positive, non-finite, or >1 close_ratio is rejected.
+    """
+    raw_close = decision.get("close_ratio")
+    if not _absent(raw_close):
+        parsed = _finite_number(raw_close)
+        if parsed is None or parsed <= 0 or parsed > 1:
+            return None, "close_ratio must be in (0, 1]"
+        return raw_close, None
+
+    raw_portion = decision.get("target_portion_of_balance")
+    if _absent(raw_portion):
+        return 1, None
+    parsed = _finite_number(raw_portion)
+    if parsed is None or parsed < 0 or parsed > 1:
+        return None, "target_portion_of_balance must be in [0, 1]"
+    if parsed == 0:
+        return 1, None
+    return raw_portion, None
+
 
 class MultiAgent(BaseAgent):
     """
@@ -247,6 +290,160 @@ class MultiAgent(BaseAgent):
         
         return current_response
 
+    def _has_execute_trade(self) -> bool:
+        try:
+            self.tools.get("execute_trade")
+        except KeyError:
+            return False
+        return True
+
+    def _final_trade_arguments(
+        self, decision: Dict[str, Any]
+    ) -> tuple[Dict[str, Any], Dict[str, Any] | None]:
+        operation = str(decision.get("operation") or "").strip().lower()
+        arguments: Dict[str, Any] = {"operation": operation}
+        symbol = decision.get("symbol")
+        if symbol not in (None, ""):
+            arguments["symbol"] = str(symbol).strip().upper()
+        direction = decision.get("direction")
+        if direction not in (None, ""):
+            arguments["direction"] = str(direction).strip().lower()
+        market = decision.get("market")
+        if market not in (None, ""):
+            arguments["market"] = str(market).strip().upper()
+        elif arguments.get("symbol"):
+            arguments["market"] = "CRYPTO"
+        leverage = decision.get("leverage")
+        if leverage not in (None, ""):
+            arguments["leverage"] = leverage
+        portion = decision.get("target_portion_of_balance")
+        usd_amount = decision.get("usd_amount")
+        if usd_amount not in (None, ""):
+            arguments["usd_amount"] = usd_amount
+        size_mode = decision.get("size_mode")
+        if size_mode not in (None, ""):
+            arguments["size_mode"] = size_mode
+        reject: Dict[str, Any] | None = None
+        if operation == "close":
+            size_mode_norm = str(size_mode or "").strip().lower()
+            if size_mode_norm == "usd":
+                parsed_usd = None if _absent(usd_amount) else _finite_number(usd_amount)
+                if parsed_usd is None or parsed_usd <= 0:
+                    reject = {
+                        "executed": False,
+                        "error": (
+                            "usd_amount must be a positive finite number "
+                            "when size_mode is usd"
+                        ),
+                        "reject_code": "SIZING_VALUE_INVALID",
+                        "operation": operation,
+                        "symbol": arguments.get("symbol") or "",
+                        "market": arguments.get("market") or "CRYPTO",
+                    }
+            else:
+                ratio, error = manager_close_ratio(decision)
+                if error is not None:
+                    reject = {
+                        "executed": False,
+                        "error": error,
+                        "reject_code": "SIZING_VALUE_INVALID",
+                        "operation": operation,
+                        "symbol": arguments.get("symbol") or "",
+                        "market": arguments.get("market") or "CRYPTO",
+                    }
+                else:
+                    arguments["close_ratio"] = ratio
+        elif portion not in (None, ""):
+            arguments["target_portion_of_balance"] = portion
+        reason = decision.get("reason")
+        if reason not in (None, ""):
+            arguments["reason"] = reason
+        return arguments, reject
+
+    def _execute_final_decision(
+        self,
+        final_decision: Dict[str, Any],
+        *,
+        on_step: Optional[Callable] = None,
+        decision_round_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        if not isinstance(final_decision, dict):
+            return final_decision
+        operation = str(final_decision.get("operation") or "").strip().lower()
+        if operation not in MULTI_AGENT_TRADE_OPERATIONS:
+            return final_decision
+
+        arguments, reject = self._final_trade_arguments(final_decision)
+        tool_call_id = MULTI_AGENT_FINAL_TOOL_CALL_ID
+        if reject is not None:
+            result = reject
+        elif self._has_execute_trade():
+            result = self._invoke_llm_tool(
+                "execute_trade",
+                arguments,
+                tool_call_id=tool_call_id,
+                decision_round_id=decision_round_id,
+            )
+        else:
+            result = {
+                "executed": False,
+                "error": "execute_trade is not available for the Multi-Agent final decision",
+                "reject_code": "TOOL_UNAVAILABLE",
+                "operation": arguments["operation"],
+                "symbol": arguments.get("symbol") or "",
+                "market": arguments.get("market") or "CRYPTO",
+            }
+
+        if isinstance(result, dict):
+            payload = dict(result)
+            payload.setdefault("operation", arguments["operation"])
+            if arguments.get("symbol"):
+                payload.setdefault("symbol", arguments["symbol"])
+            payload.setdefault("market", arguments.get("market") or "CRYPTO")
+        else:
+            payload = {
+                "raw_result": str(result),
+                "operation": arguments["operation"],
+                "symbol": arguments.get("symbol") or "",
+                "market": arguments.get("market") or "CRYPTO",
+            }
+
+        if on_step:
+            on_step(
+                {
+                    "role": "assistant",
+                    "content": (
+                        "[Manager] Executing final decision via execute_trade: "
+                        f"{arguments['operation']} {arguments.get('symbol') or ''}"
+                    ).strip(),
+                    "tool_calls": [
+                        {
+                            "id": tool_call_id,
+                            "type": "function",
+                            "function": {
+                                "name": "execute_trade",
+                                "arguments": json.dumps(arguments, ensure_ascii=False),
+                            },
+                        }
+                    ],
+                    "metadata": {"agent": "Manager"},
+                }
+            )
+            on_step(
+                {
+                    "role": "tool",
+                    "tool_call_id": tool_call_id,
+                    "name": "execute_trade",
+                    "content": json.dumps(payload, ensure_ascii=False),
+                    "metadata": {"agent": "Manager"},
+                }
+            )
+
+        executed = dict(final_decision)
+        executed["protocol"] = "tool"
+        executed["executed_trades"] = [payload]
+        return executed
+
     def run(
         self,
         portfolio: Dict[str, Any],
@@ -351,4 +548,8 @@ class MultiAgent(BaseAgent):
                 "reason": "MultiAgent Manager did not reach a conclusion within max steps.",
             }
 
-        return final_decision
+        return self._execute_final_decision(
+            final_decision,
+            on_step=on_step,
+            decision_round_id=decision_round_id,
+        )

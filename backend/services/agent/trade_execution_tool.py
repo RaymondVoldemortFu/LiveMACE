@@ -95,10 +95,11 @@ def execute_trade_tool(
     from benchmark.contracts import Market, TradeCommand, to_jsonable
 
     normalized_size_mode = (size_mode or "portion").strip().lower()
+    normalized_operation = (operation or "").strip().lower()
     sizing_value = None
     if normalized_size_mode == "usd" and usd_amount is not None:
         sizing_value = Decimal(str(usd_amount))
-    elif (operation or "").strip().lower() == "close" and close_ratio is not None:
+    elif normalized_operation == "close" and close_ratio is not None:
         normalized_size_mode = "close_ratio"
         sizing_value = Decimal(str(close_ratio))
     elif target_portion_of_balance is not None:

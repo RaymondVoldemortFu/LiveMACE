@@ -1,6 +1,6 @@
 # WAVE3 完整开发与生产运行计划
 
-状态：核心实现已落地，收尾复核发现 Multi-Agent 最终决策未执行，完整验收未通过；按用户要求于 2026-09-19 收尾，连续三个完整周期的观察尚未完成。当前证据见 [生产验证记录](wave3-production-validation.md)，启动/恢复命令见 [运行手册](wave3-operations.md)。
+状态：核心实现已落地，四种内置 Agent 真实闭环与连续三个完整调度周期已于 2026-09-21 验收。隔离实例已停止；本机为测试环境。当前证据见 [生产验证记录](wave3-production-validation.md)，启动/恢复命令见 [运行手册](wave3-operations.md)。
 
 ## 1. 已确定的目标与运行边界
 
@@ -213,16 +213,16 @@ W3-01 的 IEX 修复可与 W3-02 并行；Trace 契约可先设计，持久化�
 
 ## 10. 最终完成定义与交付
 
-- [ ] 连续三个完整生产调度周期：按用户要求停止追加验收。
+- [x] 连续三个完整生产调度周期：`b21faae3-...`、`317f5f15-...`、`8ec75181-...`，证据 `wave3-three-complete-cycles.json`。
 
 - [x] WAVE3 的生产入口实际使用共享 runtime、账户配置、同步 AgentRuntime、ToolInvoker 和 Trade Gateway。
-- [ ] 四种内置 Agent 完整真实闭环：Multi-Agent 最终开仓决策执行仍有缺口；其余三种已验证。
+- [x] 四种内置 Agent 完整真实闭环：ReAct / Advanced / Rule-Aware 调度成交；Multi-Agent 操作员轮次 `c069322a-...` 经 Gateway 开仓 SOL。
 - [x] MySQL 下并发、幂等、回滚、migration、Trace 持久化和配置冲突通过。
 - [x] 主模型为已验证的 DeepSeek 官方 `deepseek-flash`；调用数和成本可追踪。
 - [x] IEX 全路径验证完成，实时新鲜度已在适当交易时段验收。
 - [x] 全套相关后端测试、lint、前端生产构建和真实 computer-use 用例通过。
-- [ ] 独立审查无阻断缺陷：收尾复核发现 Multi-Agent 执行接线缺口，未修复。
-- [x] 当前机器的隔离生产实例已启动、观察、重启验证，并留下可访问 URL 与停止/恢复步骤。
+- [x] 独立审查无阻断缺陷：close 映射、Invoker 工具错误分类与三周期判定的复审无 P1/P2。
+- [x] 当前机器的隔离实例已启动、观察、重启验证后停止；启动/恢复步骤见运行手册。本机工作区为测试环境。
 - [x] 原始 `alpha_arena_final.sqlite` 指纹未改变；新数据只写入本次数据库/卷。
 
 交付物包括：代码与测试、`compose.wave3.yml`、脱敏环境示例、preflight/启动与停止说明、migration 说明、模型与 IEX 验证记录、computer-use 验收证据、独立审查结论，以及 `wave3-production-validation.md` 运行报告。报告必须区分已通过、失败和待验收项目。

@@ -444,6 +444,80 @@ def test_m11_execute_trade_tool_without_stable_key_is_rejected(monkeypatch):
     assert captured_keys == []
 
 
+def test_m11_close_zero_portion_keeps_zero_portion_sizing(monkeypatch):
+    from decimal import Decimal
+
+    from benchmark.contracts import TradeCommandResult
+
+    monkeypatch.setenv("ALPACA_KEY", "dummy")
+    monkeypatch.setenv("ALPACA_SECRET", "dummy")
+
+    import benchmark.application.trading as trading_app
+    from services.agent import trade_execution_tool
+
+    captured = []
+
+    class FakeGateway:
+        def execute(self, command):
+            captured.append(command)
+            return TradeCommandResult(True, True, None, None, 3, 4, command)
+
+    monkeypatch.setattr(trading_app, "get_default_trade_gateway", lambda: FakeGateway())
+
+    trade_execution_tool.execute_trade_tool(
+        db=object(),
+        account_id=1,
+        operation="close",
+        symbol="SOL",
+        market="CRYPTO",
+        direction="long",
+        target_portion_of_balance=0.0,
+        decision_round_id="round-close-zero",
+        tool_call_id="call-1",
+    )
+
+    assert len(captured) == 1
+    assert captured[0].operation == "close"
+    assert captured[0].sizing_mode == "portion"
+    assert captured[0].sizing_value == Decimal("0.0")
+
+
+def test_m11_close_usd_without_amount_does_not_default_full_close(monkeypatch):
+    from benchmark.contracts import TradeCommandResult
+
+    monkeypatch.setenv("ALPACA_KEY", "dummy")
+    monkeypatch.setenv("ALPACA_SECRET", "dummy")
+
+    import benchmark.application.trading as trading_app
+    from services.agent import trade_execution_tool
+
+    captured = []
+
+    class FakeGateway:
+        def execute(self, command):
+            captured.append(command)
+            return TradeCommandResult(True, True, None, None, 3, 4, command)
+
+    monkeypatch.setattr(trading_app, "get_default_trade_gateway", lambda: FakeGateway())
+
+    trade_execution_tool.execute_trade_tool(
+        db=object(),
+        account_id=1,
+        operation="close",
+        symbol="SOL",
+        market="CRYPTO",
+        direction="long",
+        size_mode="usd",
+        decision_round_id="round-close-usd-missing",
+        tool_call_id="call-1",
+    )
+
+    assert len(captured) == 1
+    assert captured[0].operation == "close"
+    assert captured[0].sizing_mode == "usd"
+    assert captured[0].sizing_value is None
+
+
 
 
 

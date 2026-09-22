@@ -1,8 +1,8 @@
 # WAVE3 本机生产验证记录
 
-环境：本机 Docker / MySQL，分支 `refactor/main`。验收日期：2026-09-18 至 2026-09-19（Asia/Shanghai）。改动保留在工作区；运行地址 http://127.0.0.1:15621 。恢复、停机与模型设置见 [运行手册](wave3-operations.md)。
+环境：本机 Docker / MySQL，分支 `refactor/main`。验收日期：2026-09-18 至 2026-09-21（Asia/Shanghai）。改动保留在工作区；运行地址 http://127.0.0.1:15621 。恢复、停机与模型设置见 [运行手册](wave3-operations.md)。
 
-WAVE3 核心实现与隔离生产部署已落地，三类 Agent 的真实交易闭环通过。收尾独立复核发现 Multi-Agent 未执行最终开仓决策，WAVE3 尚未完全验收通过。按用户 2026-09-19 的收尾要求，停止追加验收；原计划连续三个完整周期的观察未完成，不能登记为已通过。
+WAVE3 核心实现、隔离生产部署、四种内置 Agent 真实交易闭环，以及连续三个完整调度周期均已验收。完整周期要求四账户 `run.result` 且终止原因为 `trade_done` 或 `hold`。当前后端镜像 `sha256:8bce522420c06fa2050fdc0a125ce0c3b4d33ac5437e4d91173e831557b2dd06`。调度间隔已恢复 14400 秒，账户 1–4 已切回 MANUAL，隔离 Compose 实例已停止。本机工作区为测试环境，见仓库根目录 `AGENTS.md`。
 
 ## 实现范围
 
@@ -44,17 +44,33 @@ WAVE3 核心实现与隔离生产部署已落地，三类 Agent 的真实交易�
 | Agent | 正常结束原因 | HTTP 模型请求数 |
 | --- | --- | --- |
 | ReAct | trade_done | 17 |
-| Multi-Agent | 返回 hold，但开仓决策未执行，验收不通过 | 37 |
+| Multi-Agent | 返回 hold，但开仓决策未执行；2026-09-21 已在后续轮次补执行并验收 | 37 |
 | Advanced Multi-Agent | trade_done | 24 |
 | Rule-Aware | trade_done | 12 |
 
 未出现 max_steps、预算耗尽或 run.failed。Advanced 的一次搜索达到自身截止时间后正常完成本轮，保留该降级记录。Rule-Aware 程序化审计正常生成，策略违规分数不等同于程序故障；可选 LLM 审计当前关闭，未登记为真实验证通过。
 
-ReAct、Advanced、Rule-Aware 启用 AI；Multi-Agent 因下述缺口暂停为 MANUAL。常规周期恢复为 14400 秒，baseline 为 300 秒；连续三个完整调度周期仍未验收。当前下一次调度以 `/api/account/decision-schedule` 为准。
+2026-09-18 该轮将 Multi-Agent 记为待修复。2026-09-21 用稳定调用身份 `multi-agent-final` 把 Manager 最终决策接到 `execute_trade` → Gateway。操作员轮次 `c069322a-8c22-429d-a5bc-eca8b8037d6c` 开仓 SOL 15.5487 @ 115.765，现金 10000→8198.74，receipt `c069322a-...:multi-agent-final` COMPLETED，`termination_reason=trade_done`。生产 Invoker+Gateway 回归覆盖同键重放幂等，以及 `close` + `target_portion_of_balance=0.0` 按 `close_ratio=1` 全平。
 
-## 未解决问题（收尾独立复核）
+调度间隔在验收观察期间为 300 秒，观察结束后恢复 14400 秒，随后停止隔离实例。baseline 周期为 300 秒。
 
-**P1：Multi-Agent 最终开仓决策没有进入交易执行。** 本轮 metadata.legacy_operation=open，摘要决定 SOL 23% 开仓，但 executed_trades=[]、余额仍为 10000。`services/agent/multi_agent.py` 返回 final_decision，`benchmark/builtin/agents/multi_agent.py` 只根据 executed_trades 判断结束原因；新 runner 仅记录摘要，缺少最终决策经 Gateway 的执行接线。因此本轮的 HOLD 不能认作正确的策略 HOLD。已暂停账户 2 自动调度，后续应补齐稳定调用身份、Gateway 执行、成交引用和重复调用幂等回归，再做真实闭环验证。按用户节省额度并立即收尾的要求，本次不继续修复。
+## Multi-Agent 最终决策执行（已通过）
+
+HOLD 不调用 `execute_trade`；open 使用 `target_portion_of_balance`。Manager `close` 在 `size_mode=usd` 时要求正的 `usd_amount`，缺额或无效金额拒绝执行。缺省比例模式下，缺省 `close_ratio` 且目标仓位缺省或为 0 时映射为 `close_ratio=1`；显式非正、非有限或大于 1 的 `close_ratio` 拒绝执行。工具校验失败（含 Invoker `error_code`，例如 `TOOL_INPUT_INVALID`）记 `tool_error`。共享 `execute_trade` 按调用方给出的 sizing 透传；`close` + `size_mode=usd` 且未给 `usd_amount` 时保持 `sizing_mode=usd`、`sizing_value=None`，由 Gateway 拒绝。
+
+调度轮次 `718e4499-904d-410d-8540-5c646a7a292d` 账户 2 曾因 `close` + `target_portion_of_balance=0.0` 触发 `SIZING_VALUE_INVALID`，整轮 `TOOL_INVOKE_FAILED` / `run.failed`。该轮证据保留在 `.wave3/evidence/wave3-three-cycles-before-close-fix.json`。映射修复后，同参数在 Invoker+Gateway 测试中将 SOL 仓位平到 0，receipt 为 `sizing_mode=close_ratio`、`sizing_value="1"`。
+
+## 连续三个完整调度周期（已通过）
+
+2026-09-21 20:27–20:54（Asia/Shanghai）在重建后的后端镜像上观察连续三个完整调度周期，证据 `.wave3/evidence/wave3-three-complete-cycles.json`。完整周期只计 `run.result` 且终止原因为 `trade_done` 或 `hold`。
+
+| 周期 | round | ReAct | Multi-Agent | Advanced | Rule-Aware |
+| --- | --- | --- | --- | --- | --- |
+| 1 | `b21faae3-f570-4ffc-930b-146a474d4c3c` | hold | hold | trade_done | trade_done |
+| 2 | `317f5f15-9993-43b8-afaf-0a05c0675583` | hold | hold | trade_done | hold |
+| 3 | `8ec75181-b906-4240-95ff-68e639c8eb0c` | hold | hold | trade_done | trade_done |
+
+三轮均无 `max_steps`、`tool_error` 或 `run.failed`。观察结束时现金：ReAct 10234.55，Multi-Agent 8198.74，Advanced 9127.98，Rule-Aware 1311.85。Multi-Agent 三轮均为策略 HOLD。更早一次观察（证据 `wave3-three-cycles-after-close-fix.json`）第三轮 ReAct 为 `max_steps`，按完成定义中断连续计数，保留为诊断记录。本次观察结束后账户 1–4 切回 MANUAL，调度间隔恢复 14400 秒，随后停止隔离实例。
 
 ## 真实轮次驱动的修复
 
@@ -71,6 +87,8 @@ ReAct、Advanced、Rule-Aware 启用 AI；Multi-Agent 因下述缺口暂停为 M
 - Rule-Aware 审计使用统一成交后快照，按实际订单核对成交，避免重复计入敞口；规则失败明确报告 ERROR。
 - Grid 新卖单扣除现有卖单占用的库存，正常维护取消历史超量卖单，控制挂单数量。
 - WebSocket 正常停机关闭码 1000/1001 同样重连，卸载时取消监听和定时器，恢复已选账户。
+- Multi-Agent Manager 最终 `open`/`close`/`all_in`/`close_all` 经 `execute_trade` 进入 Gateway，调用身份 `multi-agent-final`，幂等键 `{decision_round_id}:multi-agent-final`。
+- Manager `close` 在 `size_mode=usd` 时要求正的 `usd_amount`；缺省比例模式下，缺省 `close_ratio` 且目标仓位缺省或为 0 时按该标的 `close_ratio=1` 全平；显式无效 `close_ratio` 拒绝执行。open 仍忽略仅用于平仓的 `close_ratio`。
 
 ## Computer-use 实际操作
 
@@ -92,7 +110,7 @@ ReAct、Advanced、Rule-Aware 启用 AI；Multi-Agent 因下述缺口暂停为 M
 
 ## 独立审查与运行边界
 
-两个子智能体均阅读代码、复现实际调用链缺陷并进行独立复审。审查内容包括交易与清算一致性、模型边界、IEX 源时间、配置保存、sandbox 工具契约、审计和前端恢复。未向 GitHub 发布 comment/review。
+两个子智能体均阅读代码、复现实际调用链缺陷并进行独立复审。审查内容包括交易与清算一致性、模型边界、IEX 源时间、配置保存、sandbox 工具契约、审计、前端恢复，以及 Multi-Agent 最终 close 映射、共享交易工具 sizing、工具故障分类和三周期判定。2026-09-21 复审结论：上述路径以及 Manager 美元平仓缺金额、Invoker `error_code` 分类均已修到根因，无阻断缺陷。未向 GitHub 发布 comment/review。
 
 此实例使用测试资金和项目模拟撮合，真实服务仅提供行情、搜索和模型推理。部署限定本机 loopback、单 backend/scheduler 进程。Docker socket 由后端管理本机 sandbox；此部署不作为公网多租户运行方案。
 

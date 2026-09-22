@@ -67,11 +67,53 @@ def _unwrap_legacy_llm(llm: Any) -> Any:
     )
 
 
+TOOL_FAILURE_CODES = frozenset({"SIZING_VALUE_INVALID", "IDEMPOTENCY_KEY_REQUIRED"})
+
+
+def _raw_trade_items(decision: Mapping[str, Any]) -> tuple[dict[str, Any], ...]:
+    items = decision.get("executed_trades") or ()
+    if not isinstance(items, (list, tuple)):
+        return ()
+    return tuple(item for item in items if isinstance(item, dict))
+
+
+def _item_failure_codes(item: Mapping[str, Any]) -> tuple[str, ...]:
+    codes: list[str] = []
+    for key in ("reject_code", "error_code"):
+        raw = item.get(key)
+        if isinstance(raw, str) and raw.strip():
+            codes.append(raw.strip())
+    return tuple(codes)
+
+
+def _is_tool_failure_code(code: str) -> bool:
+    return code.startswith("TOOL_") or code in TOOL_FAILURE_CODES
+
+
+def _legacy_trades_are_tool_failures(decision: Mapping[str, Any]) -> bool:
+    items = _raw_trade_items(decision)
+    if not items:
+        return False
+    if any(item.get("executed") is True for item in items):
+        return False
+    return any(
+        _is_tool_failure_code(code)
+        for item in items
+        for code in _item_failure_codes(item)
+    )
+
+
 def _termination_from_legacy_result(decision: Mapping[str, Any]) -> TerminationReason:
     if str(decision.get("reason") or "") == MULTI_AGENT_MAX_STEPS_REASON:
         return TerminationReason.MAX_STEPS
-    trades, _, _ = executed_trades_from_legacy(decision.get("executed_trades") or ())
-    if trades:
+    if _legacy_trades_are_tool_failures(decision):
+        return TerminationReason.TOOL_ERROR
+    trades, incomplete, trade_errors = executed_trades_from_legacy(
+        decision.get("executed_trades") or ()
+    )
+    if trades or incomplete or trade_errors:
+        return TerminationReason.TRADE_DONE
+    if str(decision.get("protocol") or "") == "tool" and decision.get("executed_trades"):
         return TerminationReason.TRADE_DONE
     return TerminationReason.HOLD
 

@@ -185,7 +185,11 @@ def _invoker_func(invoker: Any, public_name: str):
             )
         if result.ok:
             return to_jsonable(result.value)
-        return tool_error_payload(result)
+        payload = tool_error_payload(result)
+        if public_name == "core.execute_trade":
+            payload["executed"] = False
+            payload["reject_code"] = result.error_code
+        return payload
 
     return invoke
 
