@@ -11,11 +11,11 @@ interface SidebarProps {
 export default function Sidebar({ currentPage = 'comprehensive', onPageChange, onAccountUpdated }: SidebarProps) {
   const [settingsOpen, setSettingsOpen] = useState(false)
   // NOTE: 业务要求临时隐藏 Paper Trading 入口；请保留相关代码，勿删除（DO NOT DELETE）。
-  const SHOW_PAPER_TRADING_ENTRY = false
+  const SHOW_PAPER_TRADING_ENTRY = import.meta.env.VITE_ENABLE_PAPER_TRADING === "true"
 
   return (
     <>
-      <aside className="w-16 border-r h-full p-2 flex flex-col items-center fixed md:relative left-0 top-0 z-50 bg-background md:inset-auto md:bg-transparent md:flex md:flex-col md:space-y-4 md:items-center md:justify-start md:p-2 md:w-16 md:h-full md:border-r">
+      <aside className="w-0 md:w-16 shrink-0 md:border-r h-full md:p-2 flex flex-col items-center relative z-50 bg-background">
         {/* Desktop Navigation */}
         <nav className="hidden md:flex md:flex-col md:space-y-4">
           <button

@@ -7,7 +7,7 @@
 ## 文件边界
 
 - 读取/迁移：`backend/services/agent/prompts/*.py`、`backend/services/agent/rule_aware/prompts.py`、`llm_auditor.py` 中 Prompt。
-- 新增：`backend/alpha_arena/builtin/prompts/`、`index.yaml`、Prompt golden fixtures。
+- 新增：`backend/benchmark/builtin/prompts/`、`index.yaml`、Prompt golden fixtures。
 - 修改 Agent 文件只允许将常量引用替换为 `PromptResolver.render()`。
 
 ## Prompt profile
@@ -31,7 +31,7 @@ profile 只描述多个 prompt id 的绑定，不复制内容。
 - [ ] 将 `get_trade_agent_prompt()` 的条件 block 变成显式 profile/变量组合，输出保持一致。
 - [ ] 将 `.format()` 变量列入 index，并为每个 Agent 建真实变量 fixture。
 - [ ] 为迁移前 Python 函数和迁移后 renderer 建 golden text/hash 对比。
-- [ ] 去除 Agent 对 Prompt 常量模块的 import；Prompt Python 文件最终删除或只留 deprecated re-export，M17 后删除 re-export。
+- [x] 去除 Agent 对旧 Prompt 常量模块的 import；WAVE 4 已删除生产兼容模块，旧常量仅留测试 fixture。
 - [ ] 账户 system-prompt API 改为通过 resolver 预览实际 Prompt，并返回 prompt id/version/hash。
 
 ## 验收

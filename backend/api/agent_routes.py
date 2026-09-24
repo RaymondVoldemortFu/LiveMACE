@@ -1,139 +1,81 @@
+from schemas.domain_reads import LatestTrace, ManualDecisionResponse
+from schemas.control_plane import AgentTrace, TraceSummary
+from fastapi import Header
+from pydantic import BaseModel, Field
+import os
+import secrets
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from sqlalchemy import func
-from typing import List, Dict, Any
-import json
-import ast
 
 from database.connection import get_db
-from database.models import AgentTrace, AIDecisionLog, Account
+from services.agent_api_service import (
+    AccountNotFoundError,
+    AgentApiService,
+    TraceNotFoundError,
+)
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
 
 
-def _parse_maybe_json(raw: Any) -> Any:
-    """
-    Parse JSON-like payloads stored in trace fields.
-    Falls back to Python literal parsing for legacy rows and returns
-    original text when parsing fails.
-    """
-    if raw is None or not isinstance(raw, str):
-        return raw
-
-    text = raw.strip()
-    if not text:
-        return None
-
-    try:
-        return json.loads(text)
-    except Exception:
-        pass
-
-    try:
-        return ast.literal_eval(text)
-    except Exception:
-        return raw
-
-@router.get("/trace/{trace_id}")
+@router.get("/trace/{trace_id}", response_model=AgentTrace)
 def get_agent_trace(trace_id: str, db: Session = Depends(get_db)):
-    """Get detailed execution trace for a specific session"""
-    # Query first to get data, avoiding lazy loading issues if session closes
-    traces_query = db.query(AgentTrace).filter(AgentTrace.trace_id == trace_id).order_by(AgentTrace.step_number)
-    traces = traces_query.all()
-    
-    if not traces:
-        # check if it exists in decision logs (maybe empty trace?)
-        decision = db.query(AIDecisionLog).filter(AIDecisionLog.trace_id == trace_id).first()
-        if not decision:
-            raise HTTPException(status_code=404, detail="Trace not found")
-        return {"trace_id": trace_id, "steps": []}
+    try:
+        return AgentApiService(db).get_trace(trace_id)
+    except TraceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    steps = []
-    for t in traces:
-        steps.append({
-            "step_number": t.step_number,
-            "role": t.role,
-            "content": t.content,
-            "tool_calls": _parse_maybe_json(t.tool_calls),
-            "tool_output": _parse_maybe_json(t.tool_output) if t.role == "tool" else t.tool_output,
-            "created_at": t.created_at
-        })
-    
-    return {
-        "trace_id": trace_id,
-        "steps": steps
-    }
 
-@router.get("/latest/{account_id}")
+@router.get("/latest/{account_id}", response_model=LatestTrace, response_model_exclude_unset=True)
 def get_latest_trace(account_id: int, db: Session = Depends(get_db)):
-    """Get the latest trace ID for an account"""
-    # Check account exists
-    account = db.query(Account).filter(Account.id == account_id).first()
-    if not account:
-        raise HTTPException(status_code=404, detail="Account not found")
+    try:
+        return AgentApiService(db).get_latest_trace(account_id)
+    except AccountNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    # Try to find latest from AgentTrace (more accurate for running sessions)
-    latest_trace = db.query(AgentTrace).filter(AgentTrace.account_id == account_id).order_by(AgentTrace.created_at.desc()).first()
-    
-    if latest_trace:
-        return {"trace_id": latest_trace.trace_id}
-        
-    # Fallback to decision log
-    latest_decision = db.query(AIDecisionLog).filter(AIDecisionLog.account_id == account_id).order_by(AIDecisionLog.decision_time.desc()).first()
-    
-    if latest_decision and latest_decision.trace_id:
-        return {"trace_id": latest_decision.trace_id}
-        
-    return {"trace_id": None}
 
-@router.get("/history/{account_id}")
+@router.get("/history/{account_id}", response_model=list[TraceSummary])
 def get_trace_history(account_id: int, limit: int = 20, db: Session = Depends(get_db)):
-    """Get history of agent execution traces"""
-    decisions = db.query(AIDecisionLog).filter(
-        AIDecisionLog.account_id == account_id,
-        AIDecisionLog.trace_id.isnot(None)
-    ).order_by(AIDecisionLog.decision_time.desc()).limit(limit).all()
-    
-    history = []
-    for d in decisions:
-        reason_text = ""
-        if d.reason is not None:
-            reason_text = str(d.reason)
-        history.append({
-            "trace_id": d.trace_id,
-            "timestamp": d.decision_time,
-            "operation": d.operation,
-            "symbol": d.symbol,
-            "reason": reason_text[:50] + "..." if reason_text else ""
-        })
+    return AgentApiService(db).get_trace_history(account_id, limit)
 
-    # Backward compatibility:
-    # older tool-mode runs may have trace rows but no trace_id on decision logs.
-    if not history:
-        trace_rows = (
-            db.query(
-                AgentTrace.trace_id.label("trace_id"),
-                func.max(AgentTrace.created_at).label("timestamp"),
+
+# Operator requests execute inside the scheduler process, sharing its round lock
+# and sandbox pool. The endpoint is disabled unless an operator secret is set.
+
+
+class ManualDecisionRequest(BaseModel):
+    account_ids: list[int] = Field(min_length=1, max_length=20)
+    max_concurrency: int = Field(default=1, ge=1, le=4)
+
+
+@router.post("/round", response_model=ManualDecisionResponse, response_model_exclude_unset=True)
+def run_manual_decision_round(
+    request: ManualDecisionRequest,
+    x_operator_token: str = Header(default=""),
+):
+    expected = os.getenv("DECISION_OPERATOR_TOKEN", "")
+    if not expected:
+        raise HTTPException(status_code=404, detail="Manual decisions are disabled")
+    if not secrets.compare_digest(expected, x_operator_token):
+        raise HTTPException(status_code=403, detail="Invalid operator token")
+    if any(account_id <= 0 for account_id in request.account_ids):
+        raise HTTPException(status_code=422, detail="account_ids must be positive")
+    from benchmark.application.decisions.service import (
+        DecisionRoundService,
+        RunDecisionRound,
+    )
+    from benchmark.application.decisions.selection import select_manual_account_ids
+
+    try:
+        result = DecisionRoundService(selector=select_manual_account_ids).run(
+            RunDecisionRound(
+                tuple(request.account_ids), request.max_concurrency, "operator"
             )
-            .filter(
-                AgentTrace.account_id == account_id,
-                AgentTrace.trace_id.isnot(None),
-            )
-            .group_by(AgentTrace.trace_id)
-            .order_by(func.max(AgentTrace.created_at).desc())
-            .limit(limit)
-            .all()
         )
-        for row in trace_rows:
-            history.append(
-                {
-                    "trace_id": row.trace_id,
-                    "timestamp": row.timestamp,
-                    "operation": "trace",
-                    "symbol": None,
-                    "reason": "Agent trace session",
-                }
-            )
-
-    return history
-
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if result.decision_round_id is None:
+        raise HTTPException(
+            status_code=409, detail="A decision round is already running"
+        )
+    return result

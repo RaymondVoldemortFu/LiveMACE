@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
+from decimal import Decimal, ROUND_DOWN
+from uuid import uuid4
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 
@@ -12,15 +14,60 @@ from database.models import Account, Order, Position
 from services.asset_calculator import calc_positions_value
 from services.market_data import get_market_status
 from services.alpaca_market_data import SUPPORTED_STOCKS
-from services.order_matching import (
-    cancel_order,
-    check_and_execute_order,
-    create_order,
-    process_all_pending_orders,
-)
 from services.trading_symbols import AI_TRADING_SYMBOLS
 
 logger = logging.getLogger(__name__)
+
+
+def _process_pending_account(account_id):
+    from benchmark.application.trading import get_default_trade_gateway, ProcessPendingOrders
+    from services.scheduler import shutdown_cancellation_requested
+    return get_default_trade_gateway().process_pending(
+        ProcessPendingOrders(account_id=account_id), is_cancelled=shutdown_cancellation_requested)
+
+
+def _submit_order(db, account, symbol, market, side, order_type, quantity, price=None):
+    from benchmark.application.trading import get_default_trade_gateway, CreateOrderCommand
+    from benchmark.contracts import Market
+    quantity = int(quantity) if market == "US" else round(quantity, 8)
+    if quantity <= 0:
+        return
+    if market == "US" and price is not None:
+        price = round(price, 2)
+    # Release the caller's read snapshot before the independent write transaction.
+    account_id = account.id
+    db.rollback()
+    result = get_default_trade_gateway().create_order(CreateOrderCommand(
+        account_id=account_id, symbol=symbol, market=Market(market), side=side,
+        order_type=order_type, quantity=Decimal(str(quantity)),
+        price=None if price is None else Decimal(str(price)), leverage=1,
+    ))
+    db.expire_all()
+    if not result.accepted:
+        raise ValueError(f"Baseline order rejected: {result.reject_code}")
+
+
+def _cancel_order(db, order, reason):
+    from benchmark.application.trading import get_default_trade_gateway, CancelOrderCommand
+    command = CancelOrderCommand(order.account_id, order.order_no, reason)
+    db.rollback()
+    result = get_default_trade_gateway().cancel_order(command)
+    db.expire_all()
+    return result.accepted
+
+
+def _close_short(db, account, symbol, market):
+    from benchmark.application.trading import get_default_trade_gateway
+    from benchmark.contracts import Market, TradeCommand
+    command = TradeCommand(account_id=account.id, operation="close", market=Market(market),
+        symbol=symbol, direction="short", sizing_mode="close_ratio", sizing_value=Decimal("1"),
+        leverage=1, reason="Baseline neutralize short", idempotency_key=f"baseline-close:{uuid4()}")
+    db.rollback()
+    result = get_default_trade_gateway().execute(command)
+    db.expire_all()
+    if not result.executed:
+        raise ValueError(f"Baseline close rejected: {result.reject_code}")
+
 
 BASELINE_AGENT_TYPES = frozenset({"buy_hold", "grid"})
 BASELINE_ACCOUNT_NAMES = frozenset({"buy_hold", "grid"})
@@ -209,7 +256,7 @@ class BuyHoldBaseline:
                         if market == "US":
                             close_qty = float(int(close_qty))
                         if close_qty > 0:
-                            self._place_market_order(db, account, symbol, market=market, side="BUY", quantity=close_qty)
+                            _close_short(db, account, symbol, market)
                         continue
 
                     if abs(delta_value) < float(self.config.min_trade_usd):
@@ -240,48 +287,7 @@ class BuyHoldBaseline:
             self._last_rebalance_end[account.id] = period_end
 
     def _place_market_order(self, db: Session, account: Account, symbol: str, market: str, side: str, quantity: float) -> None:
-        name = symbol
-        if market == "US":
-            quantity = float(int(quantity))
-            if quantity <= 0:
-                return
-        try:
-            order = create_order(
-                db=db,
-                account=account,
-                symbol=symbol,
-                name=name,
-                side=side,
-                order_type="MARKET",
-                price=None,
-                quantity=float(int(quantity)) if market == "US" else float(round(quantity, 8)),
-                leverage=1,
-                market=market,
-            )
-            db.commit()
-            db.refresh(order)
-            executed = check_and_execute_order(db, order)
-            if not executed:
-                logger.info(
-                    "BuyHold MARKET order not executed immediately: account=%s %s %s qty=%s",
-                    account.id,
-                    side,
-                    symbol,
-                    quantity,
-                )
-        except Exception:
-            logger.exception(
-                "Error placing MARKET order in BuyHold baseline: account=%s side=%s symbol=%s qty=%s market=%s",
-                account.id,
-                side,
-                symbol,
-                quantity,
-                market,
-            )
-            try:
-                db.rollback()
-            except Exception:
-                logger.exception("Error rolling back DB session after failed BuyHold MARKET order")
+        _submit_order(db, account, symbol, market, side, "MARKET", quantity)
 
 
 class GridBaseline:
@@ -307,7 +313,7 @@ class GridBaseline:
 
         # 2) Try executing any pending orders (in case order scheduler isn't running)
         try:
-            process_all_pending_orders(db)
+            _process_pending_account(account.id)
         except Exception as e:
             logger.warning(f"process_all_pending_orders failed: {e}")
 
@@ -339,14 +345,47 @@ class GridBaseline:
         for o in pending:
             ref_price = float(o.price or 0.0)
             if ref_price <= 0:
-                cancel_order(db, o, reason="grid: invalid price")
+                _cancel_order(db, o, reason="grid: invalid price")
                 continue
             if ref_price < lower or ref_price > upper:
-                cancel_order(db, o, reason="grid: stale level")
+                _cancel_order(db, o, reason="grid: stale level")
                 continue
             still_pending.append(o)
 
-        # Cap max pending
+        pos: Optional[Position] = (
+            db.query(Position)
+            .filter(
+                Position.account_id == account.id,
+                Position.market == market,
+                Position.symbol == symbol,
+            )
+            .first()
+        )
+        # LIMIT creation does not reduce available_quantity. Keep the nearest
+        # existing sells within real inventory before applying the pending cap;
+        # this also repairs grids created by earlier overcommitting ticks.
+        inventory = (
+            Decimal(str(pos.available_quantity))
+            if pos is not None and (pos.side or "LONG").upper() != "SHORT"
+            else Decimal(0)
+        )
+        for order in sorted(
+            (o for o in still_pending if o.side.upper() == "SELL"),
+            key=lambda o: (Decimal(str(o.price)), o.id),
+        ):
+            if order.status != "PENDING":
+                continue
+            remaining = max(
+                Decimal(str(order.quantity)) - Decimal(str(order.filled_quantity or 0)),
+                Decimal(0),
+            )
+            if remaining > inventory:
+                _cancel_order(db, order, reason="grid: sell quantity exceeds inventory")
+            else:
+                inventory -= remaining
+        still_pending = [order for order in still_pending if order.status == "PENDING"]
+
+        # Cap max pending after obsolete inventory commitments have been removed.
         if len(still_pending) >= cfg.max_pending_per_symbol:
             return
 
@@ -364,21 +403,12 @@ class GridBaseline:
             buy_qty = float(int(buy_qty))
 
         # Ensure we have some inventory to sell: if no position, buy a small seed
-        pos: Optional[Position] = (
-            db.query(Position)
-            .filter(
-                Position.account_id == account.id,
-                Position.market == market,
-                Position.symbol == symbol,
-            )
-            .first()
-        )
         if pos is not None and (pos.side or "LONG").upper() == "SHORT" and float(pos.quantity) > 0:
             close_qty = float(pos.quantity)
             if market == "US":
                 close_qty = float(int(close_qty))
             if close_qty > 0:
-                self._place_market_order(db, account, symbol, market=market, side="BUY", quantity=close_qty)
+                _close_short(db, account, symbol, market)
             pos = (
                 db.query(Position)
                 .filter(
@@ -407,10 +437,19 @@ class GridBaseline:
             )
 
         is_long_position = pos is not None and (pos.side or "LONG").upper() != "SHORT" and float(pos.quantity) > 0
-        available_to_sell = float(pos.available_quantity) if is_long_position else 0.0
-        per_sell_level_qty = max(0.0, available_to_sell / max(1, cfg.levels))
-        if market == "US":
-            per_sell_level_qty = float(int(per_sell_level_qty))
+        reserved_to_sell = sum(
+            (max(Decimal(str(o.quantity)) - Decimal(str(o.filled_quantity or 0)), Decimal(0))
+             for o in still_pending if o.side.upper() == "SELL"),
+            Decimal(0),
+        )
+        available_to_sell = max(
+            (Decimal(str(pos.available_quantity)) if is_long_position else Decimal(0)) - reserved_to_sell,
+            Decimal(0),
+        )
+        quantity_step = Decimal("1") if market == "US" else Decimal("0.00000001")
+        per_sell_level_qty = (available_to_sell / max(1, cfg.levels)).quantize(
+            quantity_step, rounding=ROUND_DOWN,
+        )
 
         price_precision = 2 if market == "US" else 8
 
@@ -438,88 +477,26 @@ class GridBaseline:
                     try:
                         self._place_limit_order(db, account, symbol, market=market, side="BUY", price=buy_price, quantity=qty)
                         created += 1
+                        existing_keys.add(buy_key)
                     except Exception as e:
                         logger.debug(f"grid BUY order skipped: {e}")
 
+            if len(still_pending) + created >= cfg.max_pending_per_symbol:
+                break
             sell_key = ("SELL", _price_key(sell_price))
             if sell_key not in existing_keys:
-                qty = float(int(per_sell_level_qty)) if market == "US" else float(round(per_sell_level_qty, 8))
+                qty = float(min(per_sell_level_qty, available_to_sell))
                 if qty * sell_price >= cfg.min_order_usd and qty > 0:
                     try:
                         self._place_limit_order(db, account, symbol, market=market, side="SELL", price=sell_price, quantity=qty)
                         created += 1
+                        available_to_sell -= Decimal(str(qty))
+                        existing_keys.add(sell_key)
                     except Exception as e:
                         logger.debug(f"grid SELL order skipped: {e}")
 
     def _place_limit_order(self, db: Session, account: Account, symbol: str, market: str, side: str, price: float, quantity: float) -> None:
-        name = symbol
-        if market == "US":
-            quantity = float(int(quantity))
-            if quantity <= 0:
-                return
-            price = float(round(price, 2))
-        try:
-            order = create_order(
-                db=db,
-                account=account,
-                symbol=symbol,
-                name=name,
-                side=side,
-                order_type="LIMIT",
-                price=float(price),
-                quantity=float(int(quantity)) if market == "US" else float(quantity),
-                leverage=1,
-                market=market,
-            )
-            db.commit()
-            db.refresh(order)
-        except Exception:
-            logger.exception(
-                "Error placing LIMIT order in Grid baseline: account=%s side=%s symbol=%s qty=%s price=%s market=%s",
-                account.id,
-                side,
-                symbol,
-                quantity,
-                price,
-                market,
-            )
-            try:
-                db.rollback()
-            except Exception:
-                logger.exception("Error rolling back DB session after failed Grid LIMIT order")
+        _submit_order(db, account, symbol, market, side, "LIMIT", quantity, price)
 
     def _place_market_order(self, db: Session, account: Account, symbol: str, market: str, side: str, quantity: float) -> None:
-        name = symbol
-        if market == "US":
-            quantity = float(int(quantity))
-            if quantity <= 0:
-                return
-        try:
-            order = create_order(
-                db=db,
-                account=account,
-                symbol=symbol,
-                name=name,
-                side=side,
-                order_type="MARKET",
-                price=None,
-                quantity=float(int(quantity)) if market == "US" else float(round(quantity, 8)),
-                leverage=1,
-                market=market,
-            )
-            db.commit()
-            db.refresh(order)
-            check_and_execute_order(db, order)
-        except Exception:
-            logger.exception(
-                "Error placing MARKET order in Grid baseline: account=%s side=%s symbol=%s qty=%s market=%s",
-                account.id,
-                side,
-                symbol,
-                quantity,
-                market,
-            )
-            try:
-                db.rollback()
-            except Exception:
-                logger.exception("Error rolling back DB session after failed Grid MARKET order")
+        _submit_order(db, account, symbol, market, side, "MARKET", quantity)

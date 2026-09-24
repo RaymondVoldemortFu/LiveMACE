@@ -10,6 +10,12 @@ from services import trading_commands
 
 
 class _DummyDB:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
+
     def rollback(self):
         return None
 
@@ -47,9 +53,13 @@ def test_baseline_loop_not_blocked_by_ai_loop_lock(monkeypatch):
 
 def test_ai_loop_does_not_execute_baseline_accounts(monkeypatch):
     monkeypatch.setattr(trading_commands, "SessionLocal", lambda: _DummyDB())
+    from database import connection
+    from benchmark.persistence import decision_selection
+
+    monkeypatch.setattr(connection, "SessionLocal", lambda: _DummyDB())
     monkeypatch.setattr(
-        trading_commands,
-        "_load_trading_accounts",
+        decision_selection,
+        "list_active_ai_accounts",
         lambda _db: [_DummyAccount(1, "buy_hold", "buy_hold")],
     )
     monkeypatch.setattr(

@@ -16,7 +16,8 @@ logger = logging.getLogger(__name__)
 def create_account_snapshot(
     db: Session, 
     account_id: int, 
-    timestamp: Optional[datetime] = None
+    timestamp: Optional[datetime] = None,
+    *, prices=None
 ) -> Optional[AccountSnapshot]:
     """
     Create a snapshot of the current account state
@@ -41,11 +42,16 @@ def create_account_snapshot(
             timestamp = datetime.now(timezone.utc).replace(tzinfo=None)
         
         # Calculate positions value
-        positions_value = calc_positions_market_value(db, account_id)
+        if prices is None:
+            positions_value = calc_positions_market_value(db, account_id)
+        else:
+            from services.asset_calculator import calculate_position_market_value
+            positions = db.query(Position).filter(Position.account_id == account_id, Position.quantity != 0).all()
+            positions_value = sum((calculate_position_market_value(p, prices[p.symbol]) for p in positions), Decimal('0'))
         
         # Calculate total equity
         cash = float(account.current_cash)
-        total_equity = cash + positions_value
+        total_equity = Decimal(str(cash)) + Decimal(str(positions_value))
         
         # Create snapshot
         snapshot = AccountSnapshot(

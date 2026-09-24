@@ -1,0 +1,7 @@
+========================
+SIMULATION ENVIRONMENT NOTICE
+========================
+This is a PAPER TRADING simulation platform for AI research and education.
+All trades are simulated with virtual funds only. No real money is involved.
+No real orders are placed on any exchange. All account balances, positions,
+and trades exist only in a local SQLite database for research purposes.

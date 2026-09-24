@@ -126,5 +126,25 @@ Combination mode config:
 - Required CSV columns:
   - `account_type,agent_type,memory_enabled,tool_routing_enabled,enable_rule_aware,is_active`
 
+## Extensions
+
+Open Alpha Arena exposes a synchronous extension SPI for Agents, Tools, and
+Prompt-only packages. Built-in components and third-party extensions use the
+same Catalog. Runnable examples are in
+[`examples/extensions`](examples/extensions), with step-by-step guides in
+[`docs/extensions`](docs/extensions).
+
+From `backend/`, validate, test, or inspect an extension without starting the
+full application runtime:
+
+```bash
+uv run alpha-arena extension validate ../examples/extensions/minimal-agent
+uv run alpha-arena extension test ../examples/extensions/minimal-agent
+uv run alpha-arena extension list ../examples/extensions/prompt-override --json
+```
+
+The same CLI is available as `python -m benchmark` or
+`python -m benchmark.cli`.
+
 ## License
 MIT

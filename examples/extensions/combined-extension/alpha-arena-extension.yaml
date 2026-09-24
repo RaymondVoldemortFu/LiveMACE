@@ -1,0 +1,21 @@
+api_version: 1
+id: com.example.combined
+version: 1.0.0
+name: Combined Extension
+description: One extension that contributes an Agent, a Tool, and a Prompt profile.
+python:
+  requires: ">=3.10"
+  entrypoint: extension:HoldAgentFactory
+components:
+  agents:
+    - id: com.example.combined.agent
+      factory: extension:HoldAgentFactory
+      config_schema: schema.json
+  tools:
+    - provider: extension:StatusToolProvider
+  prompts:
+    - directory: prompts
+      index: prompts/index.yaml
+capabilities:
+  requested:
+    - market.read

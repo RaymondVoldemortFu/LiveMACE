@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
+import { useAssetCurve } from '@/hooks/useAssetCurve'
 import { Line } from 'react-chartjs-2'
 import {
   Chart as ChartJS,
@@ -54,10 +55,7 @@ type Timeframe = '5m' | '1h' | '1d'
 
 export default function AssetCurve({ data: initialData, wsRef }: AssetCurveProps) {
   const [timeframe, setTimeframe] = useState<Timeframe>('5m')
-  const [data, setData] = useState<AssetCurveData[]>(initialData || [])
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [isInitialized, setIsInitialized] = useState(false)
+  const { data, loading, error } = useAssetCurve<AssetCurveData>(wsRef, timeframe, initialData)
 
   const locale = typeof navigator !== 'undefined' ? navigator.language : undefined
   const number2Formatter = new Intl.NumberFormat(locale, {
@@ -75,67 +73,6 @@ export default function AssetCurve({ data: initialData, wsRef }: AssetCurveProps
     currency: 'USD',
     maximumFractionDigits: 0,
   })
-
-  // Listen for WebSocket asset curve updates
-  useEffect(() => {
-    if (!wsRef?.current) return
-
-    const handleMessage = (event: MessageEvent) => {
-      try {
-        const msg = JSON.parse(event.data)
-        if (msg.type === 'asset_curve_data' && msg.timeframe === timeframe) {
-          setData(msg.data || [])
-          setLoading(false)
-          setError(null)
-          setIsInitialized(true)
-        } else if (msg.type === 'asset_curve_error' && msg.timeframe === timeframe) {
-          setData([])
-          setLoading(false)
-          setError(msg.message || 'Failed to load asset curve')
-          setIsInitialized(true)
-        } else if (msg.type === 'asset_curve_update' && msg.timeframe === timeframe) {
-          // Real-time update for current timeframe
-          setData(msg.data || [])
-          setIsInitialized(true)
-        }
-      } catch (err) {
-        console.error('Failed to parse WebSocket message:', err)
-      }
-    }
-
-    wsRef.current.addEventListener('message', handleMessage)
-    
-    return () => {
-      wsRef.current?.removeEventListener('message', handleMessage)
-    }
-  }, [wsRef, timeframe])
-
-  // Request data when timeframe changes
-  useEffect(() => {
-    if (wsRef?.current && wsRef.current.readyState === WebSocket.OPEN) {
-      // Clear previous timeframe data to avoid showing stale curves
-      // (e.g. 1h snapshot) under a different timeframe tab.
-      setData([])
-      setLoading(true)
-      setError(null)
-      wsRef.current.send(JSON.stringify({
-        type: 'get_asset_curve',
-        timeframe: timeframe
-      }))
-    } else if (initialData && timeframe === '1h' && !isInitialized) {
-      // Only use initial data on first mount, not on subsequent prop changes
-      setData(initialData)
-      setIsInitialized(true)
-    }
-  }, [timeframe, wsRef])
-
-  // Initialize with initial data only once on first mount
-  useEffect(() => {
-    if (initialData && !isInitialized && timeframe === '1h') {
-      setData(initialData)
-      setIsInitialized(true)
-    }
-  }, []) // Empty dependency array - only run on mount
 
   const handleTimeframeChange = (value: string) => {
     setTimeframe(value as Timeframe)

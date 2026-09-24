@@ -1,41 +1,61 @@
+from decimal import Decimal
 from typing import Dict, List, Any
 import logging
 from threading import Lock
 from datetime import datetime, timezone
+from benchmark.contracts import Market
+from benchmark.infrastructure.adapters.market import _FunctionMarketDataAdapter
+from benchmark.infrastructure.cache import (
+    LegacyPriceCacheAdapter,
+    LegacySqlKlineCacheAdapter,
+    LegacyToolCacheAdapter,
+)
+from benchmark.infrastructure.market import (
+    DisplayMarketDataService,
+    RoutedMarketDataPort,
+    TradingMarketDataService,
+)
+from benchmark.infrastructure.market.symbols import (
+    normalize_market,
+    resolve_symbol_market,
+)
+from benchmark.providers import Freshness, KlineQuery, PriceResult
 from .hyperliquid_market_data import (
     get_last_price_from_hyperliquid,
     get_kline_data_from_hyperliquid,
     get_market_status_from_hyperliquid,
     get_all_symbols_from_hyperliquid,
-    hyperliquid_client,
 )
 from .alpaca_market_data import (
-    get_last_price_from_alpaca,
+    get_price_result_from_alpaca,
     get_last_close_price_from_alpaca,
     get_kline_data_from_alpaca,
     get_market_status_from_alpaca,
     get_all_supported_symbols,
-    SUPPORTED_STOCKS,
 )
 from database.connection import SessionLocal
 from database.models import MarketKline
-from services.time_source import now_timestamp
+from services.time_source import now_timestamp, now_utc
 from repositories.kline_repo import KlineRepository
 from config.tool_cache_config import ToolCacheConfig
 from services.tool_cache import tool_cache
+from services.price_cache import price_cache
 
 logger = logging.getLogger(__name__)
-US_STOCK_SYMBOLS = {str(symbol).upper() for symbol in SUPPORTED_STOCKS}
 
 KLINE_CACHE_PERIOD = "1m"
 KLINE_CACHE_MAX_STALE_SECONDS = 120
 US_MARKET_STATUS_TTL_SECONDS = 60
+MARKET_COMPONENT_ID = "core.market.facade"
+MARKET_COMPONENT_VERSION = "1.0.0"
 
 _us_market_status_cache: Dict[str, Any] = {
     "status": None,
     "ts": 0,
 }
 _us_market_status_lock = Lock()
+# Bounded stripes coalesce concurrent cache misses across WS and scheduler callers.
+_price_refresh_locks = tuple(Lock() for _ in range(64))
 
 
 def _period_to_seconds(period: str) -> int | None:
@@ -55,51 +75,33 @@ def _period_to_seconds(period: str) -> int | None:
 
 
 def _normalize_market(market: str | None) -> str:
-    if not market:
-        return "CRYPTO"
-    market_upper = str(market).upper()
-    if market_upper in ("US", "STOCK", "STOCKS"):
-        return "US"
-    if market_upper in ("CRYPTO", "HYPERLIQUID"):
-        return "CRYPTO"
-    return market_upper
-
-
-def _looks_like_crypto_symbol(symbol: str) -> bool:
-    return "/" in symbol or ":" in symbol
-
-
-def _normalize_symbol(symbol: str) -> str:
-    symbol_norm = str(symbol or "").strip().upper()
-    if "." in symbol_norm:
-        raise ValueError(
-            f"Invalid symbol format '{symbol_norm}': do not append market suffix in symbol, "
-            "pass market via the 'market' parameter instead."
-        )
-    return symbol_norm
-
-
-def _validate_symbol_market(symbol: str, market: str) -> None:
-    if market == "US":
-        if _looks_like_crypto_symbol(symbol):
-            raise ValueError(f"Invalid US symbol '{symbol}': crypto pair format is not allowed for US market")
-        if symbol not in US_STOCK_SYMBOLS:
-            raise ValueError(f"Unsupported US stock symbol: {symbol}")
-    elif market == "CRYPTO":
-        if symbol in US_STOCK_SYMBOLS:
-            raise ValueError(
-                f"Invalid market for symbol '{symbol}': symbol belongs to US stock list, use market='US'"
-            )
+    return normalize_market(market).value
 
 
 def _resolve_market(symbol: str, market: str | None) -> tuple[str, str]:
-    symbol_norm = _normalize_symbol(symbol)
-    market_norm = _normalize_market(market)
-    _validate_symbol_market(symbol_norm, market_norm)
-    return symbol_norm, market_norm
+    resolved = resolve_symbol_market(symbol, market)
+    return resolved.symbol, resolved.market.value
 
 
-def _get_cached_latest_price(symbol: str, market: str) -> float | None:
+def _create_market_data_port() -> RoutedMarketDataPort:
+    crypto = _FunctionMarketDataAdapter(
+        provider_id="core.market.hyperliquid",
+        price_loader=get_last_price_from_hyperliquid,
+        kline_loader=get_kline_data_from_hyperliquid,
+        status_loader=get_market_status_from_hyperliquid,
+        supported_market=Market.CRYPTO,
+    )
+    us = _FunctionMarketDataAdapter(
+        provider_id="core.market.alpaca",
+        price_loader=get_price_result_from_alpaca,
+        kline_loader=get_kline_data_from_alpaca,
+        status_loader=get_market_status_from_alpaca,
+        supported_market=Market.US,
+    )
+    return RoutedMarketDataPort({Market.CRYPTO: crypto, Market.US: us})
+
+
+def _get_cached_latest_price_result(symbol: str, market: str) -> PriceResult | None:
     if not symbol:
         return None
 
@@ -119,7 +121,17 @@ def _get_cached_latest_price(symbol: str, market: str) -> float | None:
             return None
         if (now_timestamp() - row.timestamp) > KLINE_CACHE_MAX_STALE_SECONDS:
             return None
-        return float(row.close_price) if row.close_price is not None else None
+        if row.close_price is None:
+            return None
+        return PriceResult(
+            value=Decimal(str(row.close_price)),
+            as_of=datetime.fromtimestamp(row.timestamp, tz=timezone.utc),
+            source="core.market.sql-kline-cache",
+            freshness=Freshness.STALE,
+        )
+    except Exception as cache_err:
+        logger.warning("Latest price SQL cache unavailable for %s.%s, treating as miss: %s", symbol, market, cache_err)
+        return None
     finally:
         db.close()
 
@@ -172,6 +184,9 @@ def _get_cached_klines(symbol: str, market: str, period: str, count: int) -> Lis
             }
             for r in rows_sorted
         ]
+    except Exception as cache_err:
+        logger.warning("K-line SQL cache unavailable for %s.%s period=%s, treating as miss: %s", symbol, market, period, cache_err)
+        return []
     finally:
         db.close()
 
@@ -267,74 +282,111 @@ def _build_kline_cache_args(
     count: int,
     start_time: Any,
     end_time: Any,
+    provider_id: str,
+    provider_version: str,
 ) -> Dict[str, Any]:
     return {
+        "component": MARKET_COMPONENT_ID,
+        "component_version": MARKET_COMPONENT_VERSION,
+        "provider": provider_id,
+        "provider_version": provider_version,
         "symbol": symbol,
         "market": market,
-        "period": period,
-        "count": count,
+        "period": str(period).strip().lower(),
+        "count": int(count),
         "start_time": _normalize_time_for_kline_cache(start_time, period),
         "end_time": _normalize_time_for_kline_cache(end_time, period),
     }
 
 
-def get_last_price(symbol: str, market: str = "CRYPTO") -> float:
-    symbol_norm, market_norm = _resolve_market(symbol, market)
-    key = f"{symbol_norm}.{market_norm}"
-    
-    # Check cache first
-    from .price_cache import get_cached_price, cache_price
-    cached_price = get_cached_price(symbol_norm, market_norm)
-    if cached_price is not None:
-        logger.debug(f"Using cached price for {key}: {cached_price}")
-        return cached_price
-
-    cached_db_price = _get_cached_latest_price(symbol_norm, market_norm)
-    if cached_db_price is not None:
-        cache_price(symbol_norm, market_norm, cached_db_price)
-        return cached_db_price
-    
-    logger.info(f"Getting real-time price for {key} from API...")
-
+def _display_price_fallback(symbol: str, market: Market) -> PriceResult | None:
+    sql_result = _get_cached_latest_price_result(symbol, market.value)
+    if sql_result is not None:
+        return sql_result
+    if market is not Market.US:
+        return None
     try:
-        if market_norm == "US":
-            source = "Alpaca"
-            # Settlement requirement for US stocks:
-            # when market is closed, use latest daily close as valuation price.
-            status = _get_cached_us_market_status()
-            is_trading = bool(status.get("is_trading", False))
-            if not is_trading:
-                close_price = get_last_close_price_from_alpaca(symbol_norm)
-                if close_price and close_price > 0:
-                    logger.debug(
-                        "US market closed for %s, using latest close price: %s",
-                        key,
-                        close_price,
-                    )
-                    cache_price(symbol_norm, market_norm, close_price)
-                    return close_price
-                logger.error(
-                    "US market closed for %s but latest close price is unavailable; falling back to latest trade price",
-                    key,
-                )
-            price = get_last_price_from_alpaca(symbol_norm)
-        else:
-            source = "Hyperliquid"
-            price = get_last_price_from_hyperliquid(symbol_norm)
-        if price and price > 0:
-            logger.info(f"Got real-time price for {key} from {source}: {price}")
-            # Cache the price
-            cache_price(symbol_norm, market_norm, price)
-            return price
-        raise Exception(f"{source} returned invalid price: {price}")
-    except Exception as hl_err:
-        logger.error(f"Failed to get price from {source}: {hl_err}")
-        raise Exception(f"Unable to get real-time price for {key}: {hl_err}")
+        status = _get_cached_us_market_status()
+        if bool(status.get("is_trading", False)):
+            return None
+        close_price = get_last_close_price_from_alpaca(symbol)
+        if close_price is None or close_price <= 0:
+            return None
+        return PriceResult(
+            value=Decimal(str(close_price)),
+            as_of=now_utc(),
+            source="core.market.alpaca.close",
+            freshness=Freshness.STALE,
+        )
+    except Exception as exc:
+        logger.warning("Display price fallback failed for %s.%s: %s", symbol, market.value, exc)
+        return None
+
+
+def get_price_result(
+    symbol: str,
+    market: str = "CRYPTO",
+    *,
+    for_trading: bool = False,
+    allow_stale: bool = True,
+) -> PriceResult:
+    resolved = resolve_symbol_market(symbol, market)
+    with _price_refresh_locks[hash((resolved.symbol, resolved.market.value)) % len(_price_refresh_locks)]:
+        port = _create_market_data_port()
+        cache = LegacyPriceCacheAdapter(price_cache)
+        if for_trading:
+            return TradingMarketDataService(port, price_cache=cache).require_price(
+                resolved.symbol,
+                resolved.market,
+            )
+        return DisplayMarketDataService(
+            port,
+            price_cache=cache,
+            fallback=_display_price_fallback,
+        ).get_price(resolved.symbol, resolved.market, allow_stale=allow_stale)
+
+
+def get_last_price(symbol: str, market: str = "CRYPTO") -> float:
+    result = get_price_result(symbol, market, allow_stale=True)
+    if result.value is None or result.value <= 0 or result.freshness is Freshness.UNAVAILABLE:
+        detail = result.error or (
+            f"source={result.source}, freshness={result.freshness.value}, "
+            f"value={result.value}"
+        )
+        raise RuntimeError(f"Unable to get market price for {symbol}.{market}: {detail}")
+    return float(result.value)
+
+
+def get_trading_price(symbol: str, market: str = "CRYPTO") -> float:
+    result = get_price_result(symbol, market, for_trading=True, allow_stale=False)
+    if result.value is None or result.value <= 0 or result.freshness is not Freshness.FRESH:
+        detail = result.error or (
+            f"source={result.source}, freshness={result.freshness.value}, "
+            f"value={result.value}"
+        )
+        raise RuntimeError(
+            f"Unable to get fresh trading price for {symbol}.{market}: {detail}"
+        )
+    return float(result.value)
 
 
 def get_kline_data(symbol: str, market: str = "CRYPTO", period: str = "1d", count: int = 100, start_time: Any = None, end_time: Any = None) -> List[Dict[str, Any]]:
-    symbol_norm, market_norm = _resolve_market(symbol, market)
+    resolved = resolve_symbol_market(symbol, market)
+    symbol_norm = resolved.symbol
+    market_norm = resolved.market.value
     key = f"{symbol_norm}.{market_norm}"
+    port = _create_market_data_port()
+    provider_id, provider_version = port.provider_descriptor(resolved.market)
+    query = KlineQuery(
+        symbol=symbol_norm,
+        market=resolved.market,
+        period=str(period).strip().lower(),
+        count=int(count),
+        start_time=start_time,
+        end_time=end_time,
+    )
+    redis_cache = LegacyToolCacheAdapter(tool_cache)
+    sql_cache = LegacySqlKlineCacheAdapter(_get_cached_klines, _save_klines)
     round_id = tool_cache.get_current_round_id()
     cache_args = _build_kline_cache_args(
         symbol=symbol_norm,
@@ -343,52 +395,44 @@ def get_kline_data(symbol: str, market: str = "CRYPTO", period: str = "1d", coun
         count=count,
         start_time=start_time,
         end_time=end_time,
+        provider_id=provider_id,
+        provider_version=provider_version,
     )
 
     try:
-        cached_tool_data = tool_cache.get_json("get_kline_data", cache_args, round_id=round_id)
+        cached_tool_data = redis_cache.get("get_kline_data", cache_args, round_id=round_id)
         if isinstance(cached_tool_data, list):
             logger.debug(f"Using Redis tool cache for K-line data: {key} period={period} count={count}")
             return cached_tool_data
 
-        if start_time is None and end_time is None:
-            cached = _get_cached_klines(symbol_norm, market_norm, period, count)
-            if cached:
-                tool_cache.set_json(
-                    "get_kline_data",
-                    cache_args,
-                    cached,
-                    ttl_seconds=ToolCacheConfig.kline_ttl_seconds,
-                    round_id=round_id,
-                )
-                return cached
-
-        def _load_from_provider() -> tuple[str, List[Dict[str, Any]]]:
-            if market_norm == "US":
-                selected_source = "Alpaca"
-                selected_data = get_kline_data_from_alpaca(symbol_norm, period, count, start_time, end_time)
-            else:
-                selected_source = "Hyperliquid"
-                selected_data = get_kline_data_from_hyperliquid(symbol_norm, period, count, start_time, end_time)
-            return selected_source, selected_data
+        cached = list(sql_cache.get(query))
+        if cached:
+            redis_cache.set(
+                "get_kline_data",
+                cache_args,
+                cached,
+                ttl_seconds=ToolCacheConfig.kline_ttl_seconds,
+                round_id=round_id,
+            )
+            return cached
 
         # Use distributed lock to reduce duplicate upstream calls in concurrent multi-agent rounds.
-        with tool_cache.acquire_lock("get_kline_data", cache_args, round_id=round_id) as lock_acquired:
+        with redis_cache.acquire_lock("get_kline_data", cache_args, round_id=round_id) as lock_acquired:
             if lock_acquired:
-                second_read = tool_cache.get_json(
+                second_read = redis_cache.get(
                     "get_kline_data",
                     cache_args,
                     round_id=round_id,
-                    suppress_miss_log=True,
                 )
                 if isinstance(second_read, list):
                     return second_read
 
-            source, data = _load_from_provider()
-            if data is not None:
-                logger.info(f"Got K-line data for {key} from {source}, total {len(data)} items")
+            result = port.get_klines(query)
+            data = [dict(row) for row in result.rows]
+            if data:
+                logger.info(f"Got K-line data for {key} from {result.source}, total {len(data)} items")
                 try:
-                    _save_klines(symbol_norm, market_norm, period, data)
+                    sql_cache.set(query, data)
                 except Exception as save_err:
                     # K-line tool should prioritize returning successfully fetched market data.
                     # Persistence failure is observable via warning but must not fail the tool call.
@@ -398,7 +442,7 @@ def get_kline_data(symbol: str, market: str = "CRYPTO", period: str = "1d", coun
                         period,
                         save_err,
                     )
-                tool_cache.set_json(
+                redis_cache.set(
                     "get_kline_data",
                     cache_args,
                     data,
@@ -406,28 +450,32 @@ def get_kline_data(symbol: str, market: str = "CRYPTO", period: str = "1d", coun
                     round_id=round_id,
                 )
                 return data
-            raise Exception(f"{source} returned empty K-line data")
+            raise RuntimeError(result.error or f"{result.source} returned empty K-line data")
     except Exception as hl_err:
         logger.error(f"Failed to get K-line data for {key}: {hl_err}")
-        raise Exception(f"Unable to get K-line data for {key}: {hl_err}")
+        raise RuntimeError(f"Unable to get K-line data for {key}: {hl_err}") from hl_err
 
 
 def get_market_status(symbol: str, market: str = "CRYPTO") -> Dict[str, Any]:
-    symbol_norm, market_norm = _resolve_market(symbol, market)
-    key = f"{symbol_norm}.{market_norm}"
-
+    resolved = resolve_symbol_market(symbol, market)
+    key = f"{resolved.symbol}.{resolved.market.value}"
     try:
-        if market_norm == "US":
-            source = "Alpaca"
-            status = get_market_status_from_alpaca(symbol_norm)
-        else:
-            source = "Hyperliquid"
-            status = get_market_status_from_hyperliquid(symbol_norm)
-        logger.info(f"Retrieved market status for {key} from {source}: {status.get('market_status')}")
-        return status
+        result = _create_market_data_port().get_market_status(resolved.symbol, resolved.market)
+        payload = dict(result.metadata)
+        payload["is_trading"] = result.is_trading
+        if result.reason is not None:
+            payload["reason"] = result.reason
+        payload.setdefault("market_status", "OPEN" if result.is_trading else "CLOSED")
+        payload["source"] = result.source
+        payload["as_of"] = result.as_of.isoformat() if result.as_of is not None else None
+        if result.as_of is not None:
+            payload.setdefault("timestamp", int(result.as_of.timestamp()))
+            payload.setdefault("current_time", result.as_of.isoformat())
+        logger.info(f"Retrieved market status for {key} from {result.source}: {payload.get('market_status')}")
+        return payload
     except Exception as hl_err:
         logger.error(f"Failed to get market status: {hl_err}")
-        raise Exception(f"Unable to get market status for {key}: {hl_err}")
+        raise RuntimeError(f"Unable to get market status for {key}: {hl_err}") from hl_err
 
 
 def get_all_symbols() -> List[str]:
@@ -442,7 +490,7 @@ def get_all_symbols() -> List[str]:
 
 
 def get_all_symbols_by_market(market: str = "CRYPTO") -> List[str]:
-    market_norm = _normalize_market(market)
-    if market_norm == "US":
+    market_norm = normalize_market(market)
+    if market_norm is Market.US:
         return get_all_supported_symbols()
     return get_all_symbols()

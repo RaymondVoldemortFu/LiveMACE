@@ -1,0 +1,138 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://benchmark.local/schema/manifest-v1.json",
+  "title": "Benchmark Extension Manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["api_version", "id", "version", "name", "components"],
+  "properties": {
+    "api_version": {"const": 1},
+    "id": {"$ref": "#/$defs/identifier"},
+    "version": {"$ref": "#/$defs/semver"},
+    "name": {"type": "string", "minLength": 1, "maxLength": 200},
+    "description": {"type": "string", "maxLength": 2000, "default": ""},
+    "python": {"$ref": "#/$defs/python"},
+    "components": {"$ref": "#/$defs/components"},
+    "capabilities": {"$ref": "#/$defs/capabilities"}
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "components": {
+            "anyOf": [
+              {"required": ["agents"], "properties": {"agents": {"minItems": 1}}},
+              {"required": ["tools"], "properties": {"tools": {"minItems": 1}}}
+            ]
+          }
+        }
+      },
+      "then": {"required": ["python"]}
+    }
+  ],
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:[._-][a-z0-9]+)+$",
+      "maxLength": 200
+    },
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$",
+      "maxLength": 100
+    },
+    "path": {"type": "string", "minLength": 1, "maxLength": 500},
+    "entrypoint": {
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*:[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*$",
+      "maxLength": 500
+    },
+    "python": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requires", "entrypoint"],
+      "properties": {
+        "requires": {"type": "string", "minLength": 1, "maxLength": 200},
+        "entrypoint": {"$ref": "#/$defs/entrypoint"}
+      }
+    },
+    "agent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "factory", "config_schema"],
+      "properties": {
+        "id": {"$ref": "#/$defs/identifier"},
+        "factory": {"$ref": "#/$defs/entrypoint"},
+        "config_schema": {"$ref": "#/$defs/path"}
+      }
+    },
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider"],
+      "properties": {
+        "provider": {"$ref": "#/$defs/entrypoint"}
+      }
+    },
+    "prompt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["directory", "index"],
+      "properties": {
+        "directory": {"$ref": "#/$defs/path"},
+        "index": {"$ref": "#/$defs/path"}
+      }
+    },
+    "components": {
+      "type": "object",
+      "additionalProperties": false,
+      "anyOf": [
+        {"required": ["agents"], "properties": {"agents": {"minItems": 1}}},
+        {"required": ["tools"], "properties": {"tools": {"minItems": 1}}},
+        {"required": ["prompts"], "properties": {"prompts": {"minItems": 1}}}
+      ],
+      "properties": {
+        "agents": {
+          "type": "array",
+          "maxItems": 128,
+          "default": [],
+          "items": {"$ref": "#/$defs/agent"}
+        },
+        "tools": {
+          "type": "array",
+          "maxItems": 128,
+          "default": [],
+          "items": {"$ref": "#/$defs/tool"}
+        },
+        "prompts": {
+          "type": "array",
+          "maxItems": 64,
+          "default": [],
+          "items": {"$ref": "#/$defs/prompt"}
+        }
+      }
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "requested": {
+          "type": "array",
+          "uniqueItems": true,
+          "default": [],
+          "items": {
+            "enum": [
+              "account.read",
+              "market.read",
+              "memory.read",
+              "memory.write",
+              "network.read",
+              "sandbox.write",
+              "trading.write"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "max_steps": {"type": "integer", "minimum": 1, "default": 30},
+    "user_id": {"type": ["string", "integer", "null"], "default": null},
+    "agent_name": {"type": ["string", "null"], "default": null}
+  }
+}

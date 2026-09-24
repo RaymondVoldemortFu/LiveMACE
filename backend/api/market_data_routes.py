@@ -1,3 +1,4 @@
+from schemas.domain_reads import MarketHealth
 """
 Market data API routes
 Provides RESTful API interfaces for crypto market data
@@ -220,7 +221,7 @@ async def get_crypto_market_status(symbol: str, market: str = "US"):
         raise HTTPException(status_code=500, detail=f"Failed to get market status: {str(e)}")
 
 
-@router.get("/health")
+@router.get("/health", response_model=MarketHealth, response_model_exclude_unset=True)
 async def market_data_health():
     """
     Market data service health check

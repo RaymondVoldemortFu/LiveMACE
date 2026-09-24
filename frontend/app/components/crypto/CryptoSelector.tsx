@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react'
-import { getCryptoSymbols, getPopularCryptos } from '../../lib/api'
+import { useEffect, useState } from 'react'
+import { getCryptoSymbols, getPopularCryptos } from '@/lib/api/crypto'
 
 interface CryptoSelectorProps {
   onSymbolSelect: (symbol: string, name: string) => void

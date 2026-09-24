@@ -5,34 +5,17 @@ from sqlalchemy.orm import Session
 from database.models import (
     Order, Position, Trade, Account,
     CRYPTO_TAKER_FEE_RATE, CRYPTO_INTEREST_RATE_HOURLY, CRYPTO_MAX_LEVERAGE,
-    CRYPTO_MIN_ORDER_QUANTITY, CRYPTO_LOT_SIZE, CRYPTO_MAINTENANCE_MARGIN_RATIO
+    CRYPTO_MIN_ORDER_QUANTITY,
 )
-from .market_data import get_last_price
+from .market_data import get_trading_price as get_last_price
 from services.time_source import now_utc
 
 
-def _calc_crypto_fee(notional: Decimal, leverage: int = 1) -> Decimal:
-    """Calculate taker fee for CRYPTO market"""
-    return notional * Decimal(str(CRYPTO_TAKER_FEE_RATE)) * 2  # Entry + exit
+from benchmark.application.trading.planner import crypto_fee as _calc_crypto_fee, position_interest
 
 
-def _calculate_position_interest(position: Position) -> Decimal:
-    """Calculate accumulated interest since last calculation"""
-    if not position.last_interest_time or position.leverage <= 1:
-        return Decimal(0)
-    
-    now = now_utc()
-    # Handle both timezone-aware and naive datetimes
-    last_time = position.last_interest_time
-    if last_time.tzinfo is None:
-        last_time = last_time.replace(tzinfo=datetime.timezone.utc)
-    hours_elapsed = (now - last_time).total_seconds() / 3600
-    
-    # Interest only applies to borrowed amount (leveraged portion)
-    borrowed_notional = Decimal(str(position.quantity)) * Decimal(str(position.avg_cost)) * (Decimal(position.leverage) - 1) / Decimal(position.leverage)
-    interest = borrowed_notional * Decimal(str(CRYPTO_INTEREST_RATE_HOURLY)) * Decimal(str(hours_elapsed))
-    
-    return interest
+def _calculate_position_interest(position) -> Decimal:
+    return position_interest(position, now_utc())
 
 
 def place_and_execute_crypto(
@@ -44,7 +27,11 @@ def place_and_execute_crypto(
     order_type: str,
     price: float | None,
     quantity: float,
-    leverage: int = 1
+    leverage: int = 1,
+    *,
+    manage_transaction: bool = True,
+    existing_order: Order | None = None,
+    execution_price: Decimal | None = None,
 ) -> Order:
     """
     Place and execute a CRYPTO order with leverage support.
@@ -72,219 +59,47 @@ def place_and_execute_crypto(
         raise ValueError(f"Quantity must be >= {CRYPTO_MIN_ORDER_QUANTITY}")
     
     # Get execution price
-    exec_price = Decimal(str(price if (order_type == "LIMIT" and price) else get_last_price(symbol, "CRYPTO")))
+    exec_price = (execution_price if execution_price is not None else
+                  Decimal(str(price if (order_type == "LIMIT" and price) else get_last_price(symbol, "CRYPTO"))))
     notional = exec_price * Decimal(str(quantity))
     
     # Calculate fees
     taker_fee = _calc_crypto_fee(notional, leverage)
     
-    # Create order
-    order = Order(
-        version="v1",
-        account_id=account.id,
-        order_no=uuid.uuid4().hex[:16],
-        symbol=symbol,
-        name=name,
-        market="CRYPTO",
-        side=side.upper(),
-        order_type=order_type,
-        price=float(exec_price),
-        quantity=quantity,
-        leverage=leverage,
-        filled_quantity=0,
-        status="PENDING",
-        order_time=now_utc(),
-    )
-    db.add(order)
-    db.flush()
-    
-    # Get existing position
-    pos = (
-        db.query(Position)
-        .filter(
-            Position.account_id == account.id,
-            Position.symbol == symbol,
-            Position.market == "CRYPTO"
-        )
-        .first()
-    )
-    
-    interest_charged = Decimal(0)
-    
-    # Handle different order sides
-    if side.upper() in ("LONG", "SHORT"):
-        # Opening or adding to an existing position
-        side_upper = side.upper()
-        has_active_position = bool(pos and pos.side and Decimal(str(pos.quantity or 0)) > 0)
-
-        if has_active_position:
-            if pos.side != side_upper:
-                raise ValueError(
-                    f"Cannot open {side_upper} position while holding {pos.side} position. Close existing position first."
-                )
-
-            existing_leverage = int(pos.leverage or 1)
-            if existing_leverage != leverage:
-                raise ValueError(
-                    f"Cannot add to position with different leverage. Existing: {existing_leverage}x, requested: {leverage}x"
-                )
-
-            # For leveraged positions, settle accumulated interest before adding.
-            if existing_leverage > 1:
-                interest_charged = _calculate_position_interest(pos)
-        
-        # Calculate margin required
-        initial_margin = notional / Decimal(leverage)
-        total_cost = initial_margin + taker_fee
-        
-        # Check if enough cash
-        available_cash = Decimal(str(account.current_cash))
-        required_cash = total_cost + interest_charged
-        if available_cash < required_cash:
-            raise ValueError(f"Insufficient cash. Need {required_cash}, have {available_cash}")
-        
-        if interest_charged > 0:
-            pos.accumulated_interest = float(Decimal(str(pos.accumulated_interest)) + interest_charged)
-
-        # Deduct margin, fee and (if any) interest from cash
-        account.current_cash = float(available_cash - required_cash)
-        
-        # Only track margin for leveraged positions (leverage > 1)
-        if leverage > 1:
-            account.margin_used = float(Decimal(str(account.margin_used)) + initial_margin)
-        
-        if has_active_position:
-            # Adding to existing same-side/same-leverage position - weighted avg cost + quantity increment.
-            old_notional = Decimal(str(pos.quantity)) * Decimal(str(pos.avg_cost))
-            new_qty = Decimal(str(pos.quantity)) + Decimal(str(quantity))
-            new_cost = (old_notional + notional) / new_qty
-            pos.quantity = float(new_qty)
-            pos.available_quantity = float(Decimal(str(pos.available_quantity or 0)) + Decimal(str(quantity)))
-            pos.avg_cost = float(new_cost)
-            pos.leverage = leverage
-            pos.side = side_upper
-        else:
-            # Create new position or convert spot to leveraged
-            if not pos:
-                pos = Position(
-                    version="v1",
-                    account_id=account.id,
-                    symbol=symbol,
-                    name=name,
-                    market="CRYPTO",
-                    quantity=0,
-                    available_quantity=0,
-                    avg_cost=0,
-                    leverage=1,
-                )
-                db.add(pos)
-                db.flush()
-            
-            # Set leveraged position
-            pos.quantity = quantity
-            pos.available_quantity = quantity
-            pos.avg_cost = float(exec_price)
-            pos.leverage = leverage
-            pos.side = side_upper
-
-        # Update interest timestamp
-        pos.last_interest_time = now_utc()
-    
-    elif side.upper() in ("BUY", "SELL"):
-        # Closing a position (partial or full)
-        if not pos or pos.quantity == 0:
-            raise ValueError("No position to close")
-        
-        # Calculate interest before closing
-        interest_charged = _calculate_position_interest(pos)
-        if interest_charged > 0:
-            pos.accumulated_interest = float(Decimal(str(pos.accumulated_interest)) + interest_charged)
-            if Decimal(str(account.current_cash)) < interest_charged:
-                raise ValueError(f"Insufficient cash for interest payment: {interest_charged}")
-            account.current_cash = float(Decimal(str(account.current_cash)) - interest_charged)
-        
-        if pos.leverage > 1:
-            # Closing leveraged position
-            # BUY closes SHORT, SELL closes LONG
-            if (side.upper() == "SELL" and pos.side != "LONG") or (side.upper() == "BUY" and pos.side != "SHORT"):
-                raise ValueError(f"Cannot {side} to close a {pos.side} position")
-            
-            if Decimal(str(quantity)) > Decimal(str(pos.quantity)):
-                raise ValueError(f"Cannot close more than position size. Position: {pos.quantity}, Trying to close: {quantity}")
-            
-            # Calculate PnL
-            entry_notional = Decimal(str(pos.avg_cost)) * Decimal(str(quantity))
-            exit_notional = notional
-            
-            if pos.side == "LONG":
-                pnl = exit_notional - entry_notional
-            else:  # SHORT
-                pnl = entry_notional - exit_notional
-            
-            # Release margin proportionally (only if leverage > 1)
-            margin_released = entry_notional / Decimal(pos.leverage)
-            
-            # Net cash change = PnL + margin released - closing fee
-            net_cash_change = pnl + margin_released - taker_fee
-            account.current_cash = float(Decimal(str(account.current_cash)) + net_cash_change)
-            
-            # Only update margin_used for leveraged positions
-            if pos.leverage > 1:
-                account.margin_used = float(Decimal(str(account.margin_used)) - margin_released)
-            
-            # Update position
-            pos.quantity = float(Decimal(str(pos.quantity)) - Decimal(str(quantity)))
-            pos.available_quantity = float(Decimal(str(pos.available_quantity)) - Decimal(str(quantity)))
-            
-            if pos.quantity == 0:
-                pos.side = None
-                pos.leverage = 1
-                pos.last_interest_time = None
-            else:
-                pos.last_interest_time = now_utc()
-        else:
-            # Closing spot position (simple sell)
-            if side.upper() != "SELL":
-                raise ValueError("Can only SELL spot positions")
-            
-            if Decimal(str(quantity)) > Decimal(str(pos.available_quantity)):
-                raise ValueError(f"Insufficient position. Have: {pos.available_quantity}, Trying to sell: {quantity}")
-            
-            # Simple spot sell
-            cash_gain = notional - taker_fee
-            account.current_cash = float(Decimal(str(account.current_cash)) + cash_gain)
-            
-            pos.quantity = float(Decimal(str(pos.quantity)) - Decimal(str(quantity)))
-            pos.available_quantity = float(Decimal(str(pos.available_quantity)) - Decimal(str(quantity)))
-    
+    if existing_order is not None:
+        order = existing_order
     else:
-        raise ValueError(f"Invalid side: {side}. Must be LONG/SHORT (open) or BUY/SELL (close)")
-    
-    # Create trade record
-    trade = Trade(
-        order_id=order.id,
-        account_id=account.id,
-        symbol=symbol,
-        name=name,
-        market="CRYPTO",
-        side=side.upper(),
-        price=float(exec_price),
-        quantity=quantity,
-        commission=float(taker_fee),
-        taker_fee=float(taker_fee),
-        interest_charged=float(interest_charged),
-        trade_time=now_utc(),
-    )
-    db.add(trade)
-    
-    # Mark order as filled
-    order.filled_quantity = quantity
-    order.status = "FILLED"
-    
-    db.commit()
-    db.refresh(order)
-    db.refresh(account)
-    if pos:
-        db.refresh(pos)
+        from benchmark.persistence.ledger import SqlAlchemyLedgerRepository
+        order = SqlAlchemyLedgerRepository(db).create_order(dict(
+            version="v1",
+            account_id=account.id,
+            order_no=uuid.uuid4().hex[:16],
+            symbol=symbol,
+            name=name,
+            market="CRYPTO",
+            side=side.upper(),
+            order_type=order_type,
+            price=float(exec_price),
+            quantity=quantity,
+            leverage=leverage,
+            filled_quantity=0,
+            status="PENDING",
+            order_time=now_utc(),
+        ))
+
+    from benchmark.application.trading.planner import plan_crypto
+    from benchmark.persistence.ledger import SqlAlchemyLedgerRepository
+
+    ledger = SqlAlchemyLedgerRepository(db)
+    plan = plan_crypto(*ledger.inputs(account, order), side=side, quantity=quantity,
+                       leverage=leverage, exec_price=exec_price, now=now_utc())
+    ledger.apply(plan, account, order)
+
+    if manage_transaction:
+        db.commit()
+        db.refresh(order)
+        db.refresh(account)
+    else:
+        db.flush()
     
     return order

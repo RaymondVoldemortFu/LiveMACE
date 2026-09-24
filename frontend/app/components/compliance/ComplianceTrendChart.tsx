@@ -1,8 +1,8 @@
 /**
  * Compliance Trend Chart - Line chart showing compliance metrics over time
  */
-import React, { useEffect, useRef } from 'react'
-import { type ComplianceTrend } from '@/lib/compliance-api'
+import { useEffect, useRef } from 'react'
+import type { ComplianceTrend } from '@/lib/api/generated-types'
 
 interface ComplianceTrendChartProps {
   data: ComplianceTrend

@@ -6,8 +6,8 @@
 
 ## 文件边界
 
-- 新增：`backend/alpha_arena/extensions/{discovery,loader,catalog,runtime_config}.py`。
-- 新增：`backend/alpha_arena/builtin/extension/alpha-arena-extension.yaml`。
+- 新增：`backend/benchmark/extensions/{discovery,loader,catalog,runtime_config}.py`。
+- 新增：`backend/benchmark/builtin/extension/alpha-arena-extension.yaml`。
 - 修改 bootstrap 的装载调用由 M18 集成；本任务提供 facade。
 
 ## 配置

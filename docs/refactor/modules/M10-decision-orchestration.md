@@ -7,7 +7,7 @@
 ## 文件边界
 
 - 主改：`backend/services/trading_commands.py`、`backend/services/ai_decision_service.py`、`backend/config/agent_config.py`、`backend/services/auto_trader.py`。
-- 新增：`backend/alpha_arena/application/decisions/{service,selection,context_builder}.py`。
+- 新增：`backend/benchmark/application/decisions/{service,selection,context_builder}.py`。
 - 禁止改交易计算、Prompt 文案和 provider 行为。
 
 ## 删除清单
@@ -37,6 +37,7 @@ class RunDecisionRound:
 - [ ] 保留当前 `ThreadPoolExecutor` + `as_completed()` 的账户级并发模型，`AGENT_MAX_CONCURRENCY` 继续决定 worker 数量。
 - [ ] 一个 account id 对应一个 worker；worker 内同步执行 `AgentRuntime.run()`，系统不创建 asyncio task。
 - [ ] 每个 worker 使用独立 UoW/session，禁止跨 worker 共享；session 的具体关闭点必须保证 Agent 所需同步工具可正常工作，并在 `finally` 释放。交易 Gateway 使用自己的明确写事务。
+- [ ] worker 的读/决策 UoW 必须短生命周期并在 worker 内关闭；TradeCommandGateway 每次命令另建独立写 UoW，禁止复用 worker UoW、Session 或跨线程 entity handle。
 - [ ] 单个 Agent 内 LLM、工具和交易调用保持同步顺序；系统不调度 Agent 内部并发。
 - [ ] 保留 `_ai_trade_run_lock` 的非重叠语义，或封装为等价 `DecisionRoundLock`。
 - [ ] decision round id 贯穿 context、tool cache、trace 和结果。

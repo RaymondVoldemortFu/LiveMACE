@@ -1,4 +1,33 @@
+"""Legacy Tool API retained as an M05-to-M06 transition adapter.
+
+New extensions must import :mod:`benchmark.tools`.  The classes in this module
+remain unchanged for existing built-in Agents until M06 migrates their tools.
+"""
+
+from collections.abc import Mapping, Sequence
 from typing import Dict, Optional, Iterable, List
+
+from benchmark.contracts import JsonValue, to_jsonable
+from benchmark.tools import ToolContext as PublicToolContext
+from benchmark.tools import ToolResult as PublicToolResult
+from benchmark.tools import ToolRuntimeError as PublicToolRuntimeError
+from benchmark.tools import ToolSpec as PublicToolSpec
+
+
+_PUBLIC_TO_LEGACY_TOOL_NAMES = {
+    "core.execute_trade": "execute_trade",
+    "core.market_snapshot": "get_market_snapshot",
+    "core.kline_history": "get_kline_history",
+    "core.account_state": "get_account_state",
+    "core.decision_history": "get_history_decisions",
+    "core.memory_add": "memory_add",
+    "core.memory_search": "memory_search",
+    "core.search": "consult_search_agent",
+    "core.execute_shell_command": "execute_shell_command",
+    "core.read_file": "read_file",
+    "core.write_file": "write_file",
+    "core.run_python_script": "run_python_script",
+}
 
 # services/agent/tools.py
 class Tool:
@@ -30,6 +59,54 @@ class ToolRegistry:
             if suffix in self.tools:
                 return self.tools[suffix]
         raise KeyError(name)
+
+    def call(
+        self,
+        name: str,
+        arguments: Mapping[str, JsonValue],
+    ) -> PublicToolResult:
+        """Bridge the public ToolInvoker SPI to an old callable Tool.
+
+        This method exists only while M03/M05 coexist with unmigrated built-in
+        Agents and Tools. M06 replaces this registry with the public runtime.
+        """
+
+        if not isinstance(arguments, Mapping):
+            raise TypeError("arguments must be a mapping")
+        legacy_name = _PUBLIC_TO_LEGACY_TOOL_NAMES.get(name, name)
+        if legacy_name.startswith("core."):
+            legacy_name = legacy_name.removeprefix("core.")
+        elif legacy_name.startswith("public."):
+            legacy_name = legacy_name.removeprefix("public.")
+        try:
+            tool = self.get(legacy_name)
+        except KeyError:
+            return PublicToolResult(
+                ok=False,
+                error_code="TOOL_NOT_FOUND",
+                error_message=f"Tool not registered: {name}",
+            )
+        try:
+            result = tool(**dict(arguments))
+        except (KeyboardInterrupt, SystemExit, GeneratorExit):
+            raise
+        except Exception as exc:
+            raise PublicToolRuntimeError(
+                "Legacy Tool execution failed",
+                code="TOOL_INVOKE_FAILED",
+                details={"tool_name": name},
+            ) from exc
+        try:
+            if isinstance(result, PublicToolResult):
+                to_jsonable(result)
+                return result
+            return PublicToolResult(ok=True, value=to_jsonable(result))
+        except (TypeError, ValueError) as exc:
+            raise PublicToolRuntimeError(
+                "Legacy Tool returned a non-JSON result",
+                code="TOOL_OUTPUT_INVALID",
+                details={"tool_name": name},
+            ) from exc
 
     def set_active_tools(self, names: Optional[Iterable[str]]):
         if names is None:
@@ -84,3 +161,47 @@ class ToolRegistry:
             }
             for t in self._iter_tools(use_active=False)
         ]
+
+
+class LegacyToolAdapter:
+    """Wrap one old callable Tool behind the public synchronous Tool SPI."""
+
+    def __init__(self, legacy_tool: Tool, spec: PublicToolSpec) -> None:
+        if not isinstance(legacy_tool, Tool):
+            raise TypeError("legacy_tool must be Tool")
+        if not isinstance(spec, PublicToolSpec):
+            raise TypeError("spec must be benchmark.tools.ToolSpec")
+        self._legacy_tool = legacy_tool
+        self._spec = spec
+
+    @property
+    def spec(self) -> PublicToolSpec:
+        return self._spec
+
+    def invoke(
+        self,
+        context: PublicToolContext,
+        arguments: Mapping[str, JsonValue],
+    ) -> PublicToolResult:
+        result = self._legacy_tool(**dict(arguments))
+        if isinstance(result, PublicToolResult):
+            return result
+        return PublicToolResult(ok=True, value=result)
+
+
+class LegacyToolProviderAdapter:
+    """Explicit M05 adapter; M06 replaces it with built-in providers."""
+
+    def __init__(self, tools: Sequence[LegacyToolAdapter]) -> None:
+        self._tools = tuple(tools)
+
+    def list_tools(self) -> tuple[LegacyToolAdapter, ...]:
+        return self._tools
+
+
+__all__ = [
+    "Tool",
+    "ToolRegistry",
+    "LegacyToolAdapter",
+    "LegacyToolProviderAdapter",
+]

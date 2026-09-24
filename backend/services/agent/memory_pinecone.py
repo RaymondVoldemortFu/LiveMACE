@@ -6,7 +6,7 @@ import logging
 import json
 import uuid
 from typing import List, Dict, Any, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from config.agent_config import AgentConfig
@@ -140,7 +140,7 @@ class PineconeMemory(MemoryInterface):
                     "market": market,
                     "content": content[:1000],  # Pinecone metadata limit
                     "trace_id": trace_id or "",
-                    "created_at": datetime.now().isoformat()
+                    "created_at": datetime.now(timezone.utc).isoformat()
                 }
             }])
 
@@ -158,6 +158,7 @@ class PineconeMemory(MemoryInterface):
             db.commit()
 
             logger.info(f"Memory saved to Pinecone and SQLite for account {account_id}: {content[:100]}...")
+            return memory_id
 
         except Exception as e:
             logger.error(f"Error adding memory to Pinecone: {e}")
@@ -213,7 +214,7 @@ class PineconeMemory(MemoryInterface):
                     ).update(
                         {
                             AgentMemory.retrieval_count: AgentMemory.retrieval_count + 1,
-                            AgentMemory.last_retrieved_at: datetime.now()
+                            AgentMemory.last_retrieved_at: datetime.now(timezone.utc).replace(tzinfo=None)
                         },
                         synchronize_session=False
                     )
@@ -242,7 +243,7 @@ class PineconeMemory(MemoryInterface):
                     "id": mem.memory_id,
                     "content": mem.content,
                     "metadata": mem.metadata_json or {},
-                    "created_at": mem.created_at.isoformat() if mem.created_at else None
+                    "created_at": mem.created_at.replace(tzinfo=timezone.utc).isoformat() if mem.created_at else None
                 })
 
             return results

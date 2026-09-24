@@ -6,7 +6,7 @@
 
 ## 文件边界
 
-- 新增：`backend/alpha_arena/agents/{__init__,protocol,registry,runtime,errors}.py`。
+- 新增：`backend/benchmark/agents/{__init__,protocol,registry,runtime,errors}.py`。
 - 修改：`backend/services/agent/base.py`、`factory.py` 仅增加过渡 adapter/deprecation import。
 - 禁止修改：`react.py`、`multi_agent*.py`、`rule_aware/*`、Prompt 和工具实现。
 
@@ -28,19 +28,21 @@ Registry 写入只允许 bootstrap 阶段；startup 完成后 `freeze()`，运�
 
 ## TODO
 
-- [ ] 实现 Agent Protocol、Factory、Descriptor、Selection 和 Registry。
-- [ ] config 使用 manifest 引用的 JSON Schema 校验；默认值只由 schema 注入一次。
-- [ ] Runtime 创建 Agent，记录开始/结束事件，验证返回 `trace_id`、round id 与 context 一致。
-- [ ] Runtime 在当前账户 worker 中直接同步调用 Agent；Runtime 自身不创建线程、asyncio task 或 event loop。
-- [ ] Runtime 统一 deadline/cancellation 状态检查；不得捕获并伪装进程级异常。
-- [ ] 检查 `Agent.run()` 返回值不是 coroutine/awaitable；违规时抛 `AgentRuntimeError`，不自动兼容。
-- [ ] 现有同步 Agent 直接使用 adapter 转换 context/result 和 trace callback，不再额外放入第二层 worker thread。
-- [ ] 将 `factory.create_agent()` 暂时改为 registry facade，并标记 internal deprecated；M04 后删除硬编码分支。
-- [ ] 增加并发读取和 freeze 后禁止注册测试。
+- [x] 实现 Agent Protocol、Factory、Descriptor、Selection 和 Registry。
+- [x] config 使用 manifest 引用的 JSON Schema 校验；默认值只由 schema 注入一次。
+- [x] Runtime 创建 Agent，记录开始/结束事件，验证返回 `trace_id`、round id 与 context 一致。
+- [x] Runtime 在当前账户 worker 中直接同步调用 Agent；Runtime 自身不创建线程、asyncio task 或 event loop。
+- [x] Runtime 统一 deadline/cancellation 状态检查；不得捕获并伪装进程级异常。
+- [x] 检查 `Agent.run()` 返回值不是 coroutine/awaitable；违规时抛 `AgentRuntimeError`，不自动兼容。
+- [x] 现有同步 Agent 直接使用 adapter 转换 context/result 和 trace callback，不再额外放入第二层 worker thread。
+- [x] 完成 registry 迁移；WAVE 4 已删除生产 factory 兼容入口，旧实现仅留测试对照。
+- [x] 增加并发读取和 freeze 后禁止注册测试。
+
+实现说明与验证结果见 [M03-implementation-report.md](./M03-implementation-report.md)。
 
 ## 验收
 
-- 一个 tests 内定义的第三方 Agent 可仅依赖 `alpha_arena.agents` 注册并运行。
+- 一个 tests 内定义的第三方 Agent 可仅依赖 `benchmark.agents` 注册并运行。
 - 未知 Agent、版本冲突、坏 config、错误返回 context id 均得到规定错误。
 - 同步 Agent 在调用线程内执行；返回 awaitable 的扩展 Agent 被拒绝。
 - Registry 和 runtime 不 import 任一内置 Agent 实现。

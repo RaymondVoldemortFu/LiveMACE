@@ -7,14 +7,24 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy.pool import NullPool
 
+from database.safety import validate_database_target
+
 # Load local .env for direct python/uv runs (does not override exported env vars).
 dotenv.load_dotenv(dotenv.find_dotenv(usecwd=True), override=False)
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./data.db").strip()
+validate_database_target(DATABASE_URL)
 
 
-def _ensure_mysql_database_exists(database_url: str) -> None:
-    url = make_url(database_url)
+def ensure_database_exists(database_url: str = None) -> None:
+    """MySQL only: create the target database if missing (idempotent).
+
+    Called from the schema bootstrap stage (benchmark.bootstrap.schema),
+    NOT at import time: importing this module must never write to any
+    database (M18/M19).
+    """
+    url = make_url(database_url if database_url is not None else DATABASE_URL)
+    validate_database_target(database_url if database_url is not None else DATABASE_URL)
     if not str(url.drivername).startswith("mysql"):
         return
 
@@ -53,8 +63,6 @@ def _ensure_mysql_database_exists(database_url: str) -> None:
     finally:
         admin_engine.dispose()
 
-
-_ensure_mysql_database_exists(DATABASE_URL)
 
 if DATABASE_URL.startswith("sqlite"):
     # SQLite is kept for local development; NullPool avoids QueuePool timeout under bursts.

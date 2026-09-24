@@ -4,6 +4,8 @@
 
 团队评审时可先阅读 [重构方案说明](refactor-explanation-for-team.md)，开发排期和任务认领参考 [模块分组与并行开发计划](module-groups.md)，再按需查看公共接口规范和各模块任务。
 
+当前实现与收尾验收证据见 [整体重构完成度核查](../overall-completion-audit.md)。模块任务保留设计要求，最终通过数量与真实运行记录以该核查为准。
+
 ## 固定约束
 
 - 只调整代码结构、接口、配置入口和依赖方向，不改变交易、行情、评测、前端展示等现有功能。
@@ -87,8 +89,8 @@ flowchart TD
 | ID | 交付模块 | 主要现有文件 | 前置任务 |
 | --- | --- | --- | --- |
 | [M00](M00-characterization-tests.md) | 结构重构行为基线测试 | `backend/test`, `backend/tests` | 无 |
-| [M01](M01-core-contracts.md) | 公共上下文、结果、错误和版本类型 | 新增 `backend/alpha_arena/contracts` | M00 |
-| [M02](M02-extension-manifest.md) | 扩展包 manifest 与配置校验 | 新增 `backend/alpha_arena/extensions` | M01 |
+| [M01](M01-core-contracts.md) | 公共上下文、结果、错误和版本类型 | 新增 `backend/benchmark/contracts` | M00 |
+| [M02](M02-extension-manifest.md) | 扩展包 manifest 与配置校验 | 新增 `backend/benchmark/extensions` | M01 |
 | [M03](M03-agent-registry.md) | Agent SPI、工厂与 registry | `services/agent/base.py`, `factory.py` | M01 |
 | [M04](M04-builtin-agent-migration.md) | 四种内置 Agent adapter | `react.py`, `multi_agent*.py`, `rule_aware` | M03、M05、M07 |
 | [M05](M05-tool-runtime.md) | Tool SPI、registry、执行器与权限 | `tools.py`, `tool_selector.py` | M01 |

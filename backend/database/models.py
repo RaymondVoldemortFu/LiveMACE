@@ -2,9 +2,14 @@ from sqlalchemy import Column, Integer, String, DECIMAL, TIMESTAMP, ForeignKey, 
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 import datetime
-from sqlalchemy.dialects.mysql import LONGTEXT
+from sqlalchemy.dialects.mysql import (
+    BIGINT as MYSQL_BIGINT,
+    LONGTEXT,
+    TIMESTAMP as MYSQL_TIMESTAMP,
+)
 
 from .connection import Base
+from .sql_defaults import PreciseCurrentTimestamp
 
 
 class User(Base):
@@ -71,6 +76,64 @@ class Account(Base):
     positions = relationship("Position", back_populates="account")
     orders = relationship("Order", back_populates="account")
     memories = relationship("AgentMemory", back_populates="account")
+    runtime_config = relationship(
+        "AccountRuntimeConfig",
+        back_populates="account",
+        uselist=False,
+    )
+
+
+class AccountRuntimeConfig(Base):
+    """Explicit Agent/Toolset/Prompt runtime configuration for an account (M12).
+
+    Replaces the implicit ``accounts.agent_type`` + boolean flags combination
+    with an explicit, versioned extension configuration. One row per account.
+    The legacy columns on ``accounts`` stay read-only during migration; every
+    runtime read switches to this table before they are removed.
+
+    JSON columns hold controlled shapes only (component ids, config dicts,
+    version maps). API keys / model / base_url stay on ``accounts`` and never
+    enter this table.
+    """
+
+    __tablename__ = "account_runtime_configs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    account_id = Column(
+        Integer, ForeignKey("accounts.id"), unique=True, nullable=False, index=True
+    )
+
+    # Agent component selection + pinned version and validated config copy.
+    agent_id = Column(String(128), nullable=False)
+    agent_version = Column(String(32), nullable=True)
+    agent_config_json = Column(JSON, nullable=False, default=dict)
+
+    # Toolset selection and per-account disabled tools.
+    toolset_ids_json = Column(JSON, nullable=False, default=list)
+    disabled_tools_json = Column(JSON, nullable=False, default=list)
+
+    # Prompt profile selection + pinned version.
+    prompt_profile_id = Column(String(128), nullable=True)
+    prompt_profile_version = Column(String(32), nullable=True)
+
+    # Pinned component versions for reproducible traces (§11).
+    component_versions_json = Column(JSON, nullable=False, default=dict)
+
+    # Validation outcome; "valid" | "configuration_invalid".
+    validation_status = Column(String(32), nullable=False, default="valid")
+    validation_errors_json = Column(JSON, nullable=False, default=list)
+
+    created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
+    updated_at = Column(
+        TIMESTAMP().with_variant(MYSQL_TIMESTAMP(fsp=6), "mysql"),
+        nullable=False,
+        server_default=PreciseCurrentTimestamp(),
+        onupdate=PreciseCurrentTimestamp(),
+    )
+
+    account = relationship("Account", back_populates="runtime_config")
+
+    __table_args__ = (UniqueConstraint("account_id", name="uix_account_runtime_config_account"),)
 
 
 class UserAuthSession(Base):
@@ -330,15 +393,15 @@ class AgentMemory(Base):
 
 
 # CRYPTO market trading configuration constants
-CRYPTO_MIN_COMMISSION = 0.1  # $0.1 minimum commission
-CRYPTO_COMMISSION_RATE = 0.001  # 0.1% commission rate
-CRYPTO_MIN_ORDER_QUANTITY = 0.0001  # Minimum 0.0001 BTC (supports fractional crypto)
+from benchmark.application.trading.fees import CRYPTO_MIN_COMMISSION
+from benchmark.application.trading.fees import CRYPTO_COMMISSION_RATE
+from benchmark.application.trading.fees import CRYPTO_MIN_ORDER_QUANTITY
 CRYPTO_LOT_SIZE = 0.0001  # Lot size for crypto
 
 # Leverage trading constants (Hyperliquid-style)
-CRYPTO_TAKER_FEE_RATE = 0.00035  # 0.035% taker fee
-CRYPTO_INTEREST_RATE_HOURLY = 0.0000125  # 0.00125%/hour (0.03%/day)
-CRYPTO_MAX_LEVERAGE = 50  # Maximum leverage allowed
+from benchmark.application.trading.fees import CRYPTO_TAKER_FEE_RATE
+from benchmark.application.trading.fees import CRYPTO_INTEREST_RATE_HOURLY
+from benchmark.application.trading.fees import CRYPTO_MAX_LEVERAGE
 CRYPTO_MAINTENANCE_MARGIN_RATIO = 0.5  # 50% of initial margin
 
 
@@ -459,3 +522,67 @@ class RuleEvaluationResult(Base):
 
     # Relationships
     account = relationship("Account")
+
+
+class TradeCommandReceipt(Base):
+    """Durable idempotency receipt for one account trade command."""
+
+    __tablename__ = "trade_command_receipts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False, index=True)
+    idempotency_key = Column(String(255), nullable=False)
+    status = Column(String(20), nullable=False, default="PENDING")
+    command_json = Column(Text, nullable=False)
+    result_json = Column(Text, nullable=True)
+    created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
+    completed_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "account_id",
+            "idempotency_key",
+            name="uix_trade_command_receipt_key",
+        ),
+    )
+
+
+class ScheduledJobOccurrence(Base):
+    """Durable admission ledger for one-shot scheduler occurrences."""
+
+    __tablename__ = "scheduled_job_occurrences"
+
+    id = Column(Integer, primary_key=True, index=True)
+    job_id = Column(String(255), nullable=False)
+    # Canonical UTC epoch microseconds has identical equality semantics on
+    # SQLite and MySQL (unlike DATETIME timezone/precision handling).
+    run_at_epoch_us = Column(
+        Integer().with_variant(MYSQL_BIGINT(), "mysql"),
+        nullable=False,
+    )
+    consumed_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.datetime.now(datetime.timezone.utc),
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "job_id",
+            "run_at_epoch_us",
+            name="uix_scheduled_job_occurrence_key",
+        ),
+    )
+
+
+class RuntimeEvent(Base):
+    """Versioned runtime observations; each write uses its own short transaction."""
+    __tablename__ = "runtime_events"
+    id = Column(String(36), primary_key=True)
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False, index=True)
+    decision_round_id = Column(String(128), nullable=False, index=True)
+    trace_id = Column(String(36), nullable=False, index=True)
+    event_type = Column(String(64), nullable=False)
+    sequence = Column(Integer, nullable=False, default=0)
+    payload = Column(Text().with_variant(LONGTEXT(), "mysql"), nullable=False)
+    created_at = Column(TIMESTAMP, server_default=func.current_timestamp())

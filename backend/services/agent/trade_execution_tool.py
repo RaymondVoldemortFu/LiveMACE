@@ -1,15 +1,19 @@
 import logging
+import math
 import re
 from decimal import Decimal
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from sqlalchemy.orm import Session
 
 from database.models import Account, Position, AIDecisionLog
 from services.asset_calculator import calc_positions_value
-from services.market_data import get_last_price, get_market_status
+from services.market_data import get_market_status, get_trading_price as get_last_price
 from services.order_executor_leverage import place_and_execute_crypto
 from services.order_matching import create_order, check_and_execute_order
+
+if TYPE_CHECKING:
+    from benchmark.application.trading import TradeCommandGateway
 
 
 logger = logging.getLogger(__name__)
@@ -21,7 +25,7 @@ SUPPORTED_US_SYMBOLS = {
 
 
 def _parse_float_loose(value: Any) -> Optional[float]:
-    """从数字或杂糅 XML/文本中提取第一个合法 float；无法解析返回 None。"""
+    """Extract the first valid float from numeric or loose text input."""
     if value is None:
         return None
     if isinstance(value, bool):
@@ -32,11 +36,13 @@ def _parse_float_loose(value: Any) -> Optional[float]:
         m = re.search(r"-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?", value.strip())
         if m:
             try:
-                return float(m.group(0))
+                parsed = float(m.group(0))
+                return parsed if math.isfinite(parsed) else None
             except ValueError:
                 return None
     try:
-        return float(value)
+        parsed = float(value)
+        return parsed if math.isfinite(parsed) else None
     except (TypeError, ValueError):
         return None
 
@@ -63,6 +69,7 @@ def _parse_int_loose(value: Any, *, default: int = 1) -> int:
         return default
 
 
+
 def execute_trade_tool(
     db: Session,
     account_id: int,
@@ -76,6 +83,135 @@ def execute_trade_tool(
     close_ratio: Optional[float] = None,
     leverage: int = 1,
     reason: str = "",
+    idempotency_key: Optional[str] = None,
+    decision_round_id: Optional[str] = None,
+    tool_call_id: Optional[str] = None,
+    gateway: "TradeCommandGateway | None" = None,
+) -> Dict[str, Any]:
+    """Execute one trading action through the TradeCommandGateway."""
+    from decimal import Decimal
+
+    from benchmark.application.trading import get_default_trade_gateway
+    from benchmark.contracts import Market, TradeCommand, to_jsonable
+
+    normalized_size_mode = (size_mode or "portion").strip().lower()
+    normalized_operation = (operation or "").strip().lower()
+    sizing_value = None
+    if normalized_size_mode == "usd" and usd_amount is not None:
+        sizing_value = Decimal(str(usd_amount))
+    elif normalized_operation == "close" and close_ratio is not None:
+        normalized_size_mode = "close_ratio"
+        sizing_value = Decimal(str(close_ratio))
+    elif target_portion_of_balance is not None:
+        sizing_value = Decimal(str(target_portion_of_balance))
+
+    try:
+        market_text = (market or "CRYPTO").strip().upper()
+        if market_text in {"STOCK", "STOCKS"}:
+            market_text = "US"
+        if market_text == "HYPERLIQUID":
+            market_text = "CRYPTO"
+        market_norm = Market(market_text)
+        normalized_operation = (operation or "").strip().lower()
+        normalized_symbol = (symbol or "").strip().upper()
+        normalized_direction = (direction or "long").strip().lower()
+        normalized_leverage = _parse_int_loose(leverage, default=1)
+        if normalized_operation in {"hold", "close_all", "all_in"}:
+            normalized_size_mode = None
+            sizing_value = None
+        if idempotency_key:
+            normalized_idempotency_key = idempotency_key
+        elif decision_round_id and tool_call_id:
+            normalized_idempotency_key = f"{decision_round_id}:{tool_call_id}"
+        else:
+            return {
+                "executed": False,
+                "error": (
+                    "A stable idempotency_key, or both decision_round_id and "
+                    "tool_call_id, is required"
+                ),
+                "reject_code": "IDEMPOTENCY_KEY_REQUIRED",
+            }
+        command = TradeCommand(
+            account_id=account_id,
+            operation=normalized_operation,
+            market=market_norm,
+            symbol=normalized_symbol,
+            direction=normalized_direction,
+            sizing_mode=normalized_size_mode,
+            sizing_value=sizing_value,
+            leverage=normalized_leverage,
+            reason=reason or "",
+            idempotency_key=normalized_idempotency_key,
+        )
+        active_gateway = gateway or get_default_trade_gateway()
+        gateway_result = active_gateway.execute(command)
+        expire_all = getattr(db, "expire_all", None)
+        if callable(expire_all):
+            try:
+                expire_all()
+            except Exception as exc:
+                from benchmark.contracts.errors import TradeGatewayError
+
+                raise TradeGatewayError(
+                    "Trade committed but caller session refresh failed",
+                    code="TRADE_CALLER_SESSION_REFRESH_FAILED",
+                    details={"error_type": type(exc).__name__},
+                ) from exc
+        # DTO raw_result is a deep-frozen JsonValue snapshot (lists → tuples).
+        # Materialize back to mutable JSON-native containers for the legacy
+        # agent-tool return shape (e.g. closed_orders: []).
+        materialized = to_jsonable(gateway_result.raw_result)
+        if not isinstance(materialized, dict):
+            raise TypeError("TradeCommandResult.raw_result must be a JSON object")
+        result = materialized
+        if gateway_result.accepted:
+            result.setdefault("executed", gateway_result.executed)
+            result.setdefault("operation", gateway_result.normalized_command.operation)
+            if gateway_result.normalized_command.symbol:
+                result.setdefault("symbol", gateway_result.normalized_command.symbol)
+            if not gateway_result.raw_result:
+                result.setdefault("market", gateway_result.normalized_command.market.value)
+                if gateway_result.normalized_command.direction:
+                    result.setdefault("direction", gateway_result.normalized_command.direction)
+            if gateway_result.order_id is not None:
+                result.setdefault("order_id", gateway_result.order_id)
+            if gateway_result.trade_id is not None:
+                result.setdefault("trade_id", gateway_result.trade_id)
+            return result
+        result.setdefault("executed", False)
+        result.setdefault("error", gateway_result.reject_message)
+        result.setdefault("reject_code", gateway_result.reject_code)
+        result.setdefault("operation", gateway_result.normalized_command.operation)
+        if gateway_result.normalized_command.symbol:
+            result.setdefault("symbol", gateway_result.normalized_command.symbol)
+        if not gateway_result.raw_result:
+            result.setdefault("market", gateway_result.normalized_command.market.value)
+        return result
+    except (TypeError, ValueError) as exc:
+        return {
+            "executed": False,
+            "error": str(exc),
+            "reject_code": "TRADE_COMMAND_INVALID",
+        }
+
+
+def execute_trade_in_transaction(
+    db: Session,
+    account_id: int,
+    operation: str,
+    symbol: Optional[str] = None,
+    market: str = "CRYPTO",
+    direction: str = "long",
+    size_mode: str = "portion",
+    target_portion_of_balance: Optional[float] = None,
+    usd_amount: Optional[float] = None,
+    close_ratio: Optional[float] = None,
+    leverage: int = 1,
+    reason: str = "",
+    *,
+    manage_transaction: bool = True,
+    raise_on_error: bool = False,
 ) -> Dict[str, Any]:
     """
     Execute one trading action immediately.
@@ -136,8 +272,13 @@ def execute_trade_tool(
                 executed=False,
                 order_id=None,
                 leverage=1,
+                manage_transaction=manage_transaction,
+                raise_on_error=raise_on_error,
             )
-            db.commit()
+            if manage_transaction:
+                db.commit()
+            else:
+                db.flush()
             return {
                 "executed": True,
                 "operation": "hold",
@@ -152,7 +293,15 @@ def execute_trade_tool(
             size_mode = "all_in"
 
         if operation == "close_all":
-            return _handle_close_all(db=db, account=account, symbol=symbol, market=market, reason=reason)
+            return _handle_close_all(
+                db=db,
+                account=account,
+                symbol=symbol,
+                market=market,
+                reason=reason,
+                manage_transaction=manage_transaction,
+                raise_on_error=raise_on_error,
+            )
 
         if operation not in {"open", "close"}:
             return {"executed": False, "error": f"Unsupported operation: {operation}"}
@@ -189,7 +338,7 @@ def execute_trade_tool(
             leverage = 1
 
         price = float(get_last_price(symbol, market))
-        if price <= 0:
+        if not math.isfinite(price) or price <= 0:
             return {"executed": False, "error": f"Invalid price for {symbol}"}
 
         if operation == "open":
@@ -260,6 +409,8 @@ def execute_trade_tool(
                 direction=direction,
                 quantity=quantity,
                 leverage=leverage,
+                manage_transaction=manage_transaction,
+                raise_on_error=raise_on_error,
             )
             _save_trade_log(
                 db=db,
@@ -271,6 +422,8 @@ def execute_trade_tool(
                 executed=True,
                 order_id=order.id,
                 leverage=leverage,
+                manage_transaction=manage_transaction,
+                raise_on_error=raise_on_error,
             )
             return {
                 "executed": True,
@@ -296,10 +449,18 @@ def execute_trade_tool(
 
         position_side = (position.side or "LONG").lower()
         if position_side not in {"long", "short"}:
+            if raise_on_error:
+                raise ValueError(
+                    f"Position {symbol} has invalid side metadata: {position.side!r}"
+                )
             position_side = "long"
 
         # If caller omitted direction/typed wrong, default to existing side to maximize close success.
         if direction != position_side:
+            if raise_on_error:
+                raise ValueError(
+                    f"Close direction {direction} does not match position side {position_side}"
+                )
             direction = position_side
 
         quantity, notional = _calc_close_size(
@@ -322,6 +483,8 @@ def execute_trade_tool(
             direction=direction,
             quantity=quantity,
             position=position,
+            manage_transaction=manage_transaction,
+            raise_on_error=raise_on_error,
         )
         _save_trade_log(
             db=db,
@@ -333,6 +496,8 @@ def execute_trade_tool(
             executed=True,
             order_id=order.id,
             leverage=int(getattr(position, "leverage", 1) or 1),
+            manage_transaction=manage_transaction,
+            raise_on_error=raise_on_error,
         )
         return {
             "executed": True,
@@ -347,78 +512,21 @@ def execute_trade_tool(
             "size_mode": size_mode,
         }
     except Exception as e:
+        if raise_on_error:
+            raise
         logger.error(f"execute_trade_tool failed: {e}", exc_info=True)
         return {"executed": False, "error": str(e)}
 
 
-def _calc_open_size(
-    account: Account,
-    price: float,
-    market: str,
-    size_mode: str,
-    target_portion_of_balance: Optional[float],
-    usd_amount: Optional[float],
-) -> tuple[float, float]:
-    available_cash = float(account.current_cash)
-    if available_cash <= 0:
-        return 0.0, 0.0
-
-    if size_mode == "all_in":
-        notional = available_cash
-    elif size_mode == "usd":
-        amt = float(usd_amount or 0.0)
-        notional = max(0.0, min(amt, available_cash))
-    else:
-        portion = float(target_portion_of_balance if target_portion_of_balance is not None else 0.0)
-        portion = max(0.0, min(portion, 1.0))
-        notional = available_cash * portion
-
-    if notional <= 0:
-        return 0.0, 0.0
-
-    if market == "US":
-        qty = int(Decimal(str(notional)) / Decimal(str(price)))
-    else:
-        qty = float(Decimal(str(notional)) / Decimal(str(price)))
-        qty = round(qty, 6)
-    return float(qty), float(notional)
+def _calc_open_size(account, *args, **kwargs):
+    from benchmark.application.trading.planner import plan_open_size
+    return plan_open_size({"current_cash": account.current_cash}, *args, **kwargs)
 
 
-def _calc_close_size(
-    position: Position,
-    market: str,
-    price: float,
-    size_mode: str,
-    target_portion_of_balance: Optional[float],
-    usd_amount: Optional[float],
-    close_ratio: Optional[float],
-) -> tuple[float, float]:
-    if float(position.leverage or 1) > 1:
-        position_qty = float(position.quantity)
-    else:
-        position_qty = float(position.available_quantity)
-    if position_qty <= 0:
-        return 0.0, 0.0
-
-    if size_mode in {"close_all", "all_in"}:
-        qty = position_qty
-    elif size_mode == "usd":
-        amt = max(0.0, float(usd_amount or 0.0))
-        qty = amt / price if price > 0 else 0.0
-    elif close_ratio is not None:
-        ratio = max(0.0, min(float(close_ratio), 1.0))
-        qty = position_qty * ratio
-    else:
-        ratio = max(0.0, min(float(target_portion_of_balance or 0.0), 1.0))
-        qty = position_qty * ratio
-
-    qty = min(qty, position_qty)
-    if market == "US":
-        qty = int(qty)
-    else:
-        qty = round(float(qty), 6)
-
-    return float(qty), float(qty * price)
+def _calc_close_size(position, *args, **kwargs):
+    from benchmark.application.trading.planner import plan_close_size
+    values = {key: getattr(position, key) for key in ("quantity", "available_quantity", "leverage")}
+    return plan_close_size(values, *args, **kwargs)
 
 
 def _execute_open(
@@ -429,6 +537,9 @@ def _execute_open(
     direction: str,
     quantity: float,
     leverage: int,
+    *,
+    manage_transaction: bool = True,
+    raise_on_error: bool = False,
 ):
     side = ("BUY" if direction == "long" else "SELL") if market == "US" else ("LONG" if direction == "long" else "SHORT")
     if market == "US":
@@ -444,9 +555,17 @@ def _execute_open(
             leverage=1,
             market="US",
         )
-        db.commit()
-        db.refresh(order)
-        if not check_and_execute_order(db, order):
+        if manage_transaction:
+            db.commit()
+            db.refresh(order)
+        else:
+            db.flush()
+        if not check_and_execute_order(
+            db,
+            order,
+            manage_transaction=manage_transaction,
+            raise_on_error=raise_on_error,
+        ):
             raise ValueError("US stock order was not executed")
         return order
 
@@ -460,6 +579,7 @@ def _execute_open(
         price=None,
         quantity=quantity,
         leverage=leverage,
+        manage_transaction=manage_transaction,
     )
 
 
@@ -471,6 +591,9 @@ def _execute_close(
     direction: str,
     quantity: float,
     position: Optional[Position] = None,
+    *,
+    manage_transaction: bool = True,
+    raise_on_error: bool = False,
 ):
     side = "SELL" if direction == "long" else "BUY"
     if market == "US":
@@ -486,9 +609,17 @@ def _execute_close(
             leverage=1,
             market="US",
         )
-        db.commit()
-        db.refresh(order)
-        if not check_and_execute_order(db, order):
+        if manage_transaction:
+            db.commit()
+            db.refresh(order)
+        else:
+            db.flush()
+        if not check_and_execute_order(
+            db,
+            order,
+            manage_transaction=manage_transaction,
+            raise_on_error=raise_on_error,
+        ):
             raise ValueError("US stock close order was not executed")
         return order
 
@@ -506,10 +637,20 @@ def _execute_close(
         price=None,
         quantity=quantity,
         leverage=1,
+        manage_transaction=manage_transaction,
     )
 
 
-def _handle_close_all(db: Session, account: Account, symbol: str, market: str, reason: str) -> Dict[str, Any]:
+def _handle_close_all(
+    db: Session,
+    account: Account,
+    symbol: str,
+    market: str,
+    reason: str,
+    *,
+    manage_transaction: bool = True,
+    raise_on_error: bool = False,
+) -> Dict[str, Any]:
     query = db.query(Position).filter(Position.account_id == account.id)
     if symbol:
         query = query.filter(Position.symbol == symbol)
@@ -541,6 +682,8 @@ def _handle_close_all(db: Session, account: Account, symbol: str, market: str, r
             direction=side,
             quantity=qty,
             position=pos,
+            manage_transaction=manage_transaction,
+            raise_on_error=raise_on_error,
         )
         closed_orders.append({"symbol": pos.symbol, "market": pos.market, "order_id": order.id, "quantity": qty})
         _save_trade_log(
@@ -553,6 +696,8 @@ def _handle_close_all(db: Session, account: Account, symbol: str, market: str, r
             executed=True,
             order_id=order.id,
             leverage=int(pos.leverage or 1),
+            manage_transaction=manage_transaction,
+            raise_on_error=raise_on_error,
         )
 
     return {"executed": True, "operation": "close_all", "closed_orders": closed_orders, "count": len(closed_orders)}
@@ -582,6 +727,9 @@ def _save_trade_log(
     executed: bool,
     order_id: Optional[int],
     leverage: int,
+    *,
+    manage_transaction: bool = True,
+    raise_on_error: bool = False,
 ) -> None:
     try:
         total_assets = _calc_total_assets(db, account.id)
@@ -599,7 +747,13 @@ def _save_trade_log(
             trace_id=None,
         )
         db.add(row)
-        db.commit()
+        if manage_transaction:
+            db.commit()
+        else:
+            db.flush()
     except Exception as e:
-        db.rollback()
+        if manage_transaction:
+            db.rollback()
+        if raise_on_error:
+            raise
         logger.warning(f"Failed to save execute_trade decision log: {e}")

@@ -7,7 +7,7 @@
 ## 文件边界
 
 - 修改：`backend/services/evaluation/*`、`backend/services/agent/rule_aware` 中 auditor/validator、`api/evaluation_routes.py`、`api/compliance_routes.py`、`api/rule_routes.py`。
-- 新增：`backend/alpha_arena/application/evaluation/`、`compliance/`。
+- 新增：`backend/benchmark/application/evaluation/`、`compliance/`。
 - 不改 metric prompt 文案、评分公式、规则 JSON 内容。
 
 ## 接口
@@ -25,15 +25,15 @@ class ComplianceService:
 
 DTO 必含 account、trace、round、component versions；旧数据缺字段时为 null，不猜测。
 
-## TODO
+## 完成清单
 
-- [ ] 将 checkpoint 计算与 scheduler registration 分开，保留 `(account, interval, period_end)` 幂等。
-- [ ] data loader 改用 repositories/views，不直接依赖 Agent registry 或 route。
-- [ ] LLM judge 通过 `LLMClientPort`，provider test 标 integration；本地 evaluator deterministic。
-- [ ] Tool schema 通过 Extension Catalog 按 trace 中 tool version 解析，无法解析时返回 explicit unavailable。
-- [ ] rule engine 装载规则与 Agent Prompt 解耦；规则 JSON 内容不变。
-- [ ] compliance/evaluation routes 只调用 service，输出 Pydantic DTO。
-- [ ] 用 M00 数据对比迁移前后 checkpoint、risk、tool-use、compliance 数值。
+- [x] 将 checkpoint 计算与 scheduler registration 分开，保留 `(account, interval, period_end)` 幂等。
+- [x] data loader 改用 repositories/views，不直接依赖 Agent registry 或 route。
+- [x] LLM judge 通过 `LLMClientPort`，provider test 标 integration；本地 evaluator deterministic。
+- [x] Tool schema 通过 Extension Catalog 按 trace 中 tool version 解析，无法解析时返回 explicit unavailable。
+- [x] rule engine 装载规则与 Agent Prompt 解耦；规则 JSON 内容不变。
+- [x] compliance/evaluation routes 只调用 service，输出 Pydantic DTO。
+- [x] 运行 M00 行为基线及 checkpoint、tool-use、compliance 回归；补充固定 SQLite 快照的非零 risk 数值断言。
 
 ## 验收
 
@@ -46,3 +46,7 @@ DTO 必含 account、trace、round、component versions；旧数据缺字段时�
 
 前置 M16、M19、M21。Checkpoint、tool-use judge、rule compliance 三支可并行。
 
+
+## WAVE 4 验收记录
+
+见 [WAVE 4 收尾与验收报告](../wave4-implementation-report.md)。风险、规则评分公式和规则 JSON 保持原样。M00 没有独立 risk 数值 fixture，本轮补充固定快照验证回撤、单期涨跌、连续亏损、尾部风险及时间边界。历史 schema 不可用时显式返回 unavailable；历史事件明确记录 `TOOL_NOT_FOUND` 的调用仍计入幻觉。

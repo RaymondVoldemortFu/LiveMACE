@@ -5,6 +5,7 @@ import ccxt
 import logging
 import os
 import time
+from threading import RLock
 from typing import Dict, List, Any, Optional
 from datetime import datetime, timezone
 from services.time_source import delta_t_minutes, now_timestamp_ms
@@ -13,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 class HyperliquidClient:
     def __init__(self):
+        self._request_lock = RLock()
         self.exchange = None
         self._initialize_exchange()
     
@@ -22,6 +24,9 @@ class HyperliquidClient:
             config = {
                 'sandbox': False,  # Set to True for testnet
                 'enableRateLimit': True,
+                'timeout': 15000,
+                # This application uses native crypto spot/perpetuals; US stocks use IEX.
+                'options': {'fetchMarkets': {'types': ['swap', 'spot']}},
             }
             
             # Add proxy configuration if environment variables are set
@@ -43,6 +48,11 @@ class HyperliquidClient:
             logger.error(f"Failed to initialize Hyperliquid exchange: {e}")
             raise
 
+    def _request(self, method, *args, **kwargs):
+        # CCXT's synchronous session and rate limiter are shared by all callers.
+        with self._request_lock:
+            return getattr(self.exchange, method)(*args, **kwargs)
+
     def get_last_price(self, symbol: str, max_retries: int = 3, retry_delay: float = 1.0) -> Optional[float]:
         """
         Get the last price for a symbol with retry logic
@@ -62,7 +72,8 @@ class HyperliquidClient:
                 # Ensure symbol is in CCXT format (e.g., 'BTC/USD')
                 formatted_symbol = self._format_symbol(symbol)
                 
-                ticker = self.exchange.fetch_ticker(formatted_symbol)
+                market_type = "swap" if ":" in formatted_symbol else "spot"
+                ticker = self._request("fetch_ticker", formatted_symbol, {"type": market_type})
                 price = ticker['last']
                 
                 if price and float(price) > 0:
@@ -126,7 +137,7 @@ class HyperliquidClient:
             else:
                 since = None
             
-            ohlcv = self.exchange.fetch_ohlcv(formatted_symbol, timeframe, since=since, limit=count)
+            ohlcv = self._request("fetch_ohlcv", formatted_symbol, timeframe, since=since, limit=count)
             
             # Convert to our format
             klines = []
@@ -176,7 +187,7 @@ class HyperliquidClient:
             formatted_symbol = self._format_symbol(symbol)
             
             # Hyperliquid is 24/7, but we can check if the market exists
-            markets = self.exchange.load_markets()
+            markets = self._request("load_markets")
             market_exists = formatted_symbol in markets
             
             status = {
@@ -212,7 +223,7 @@ class HyperliquidClient:
             if not self.exchange:
                 self._initialize_exchange()
             
-            markets = self.exchange.load_markets()
+            markets = self._request("load_markets")
             symbols = list(markets.keys())
             
             # Filter for USDC pairs (both spot and perpetual)

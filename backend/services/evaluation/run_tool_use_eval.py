@@ -6,16 +6,14 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
-from database.connection import get_db
+from database.connection import SessionLocal, get_db
+from benchmark.application.evaluation.service import EvaluateTraceRequest, EvaluationService
+from benchmark.extensions.host import get_extension_runtime
+from benchmark.persistence import SqlAlchemyUnitOfWork
 from services.evaluation.data_loader import EvaluationDataLoader
 from services.evaluation.tool_use_evaluator import ToolUseMetricsEvaluator, descriptive_stats
 from services.evaluation.llm_tool_judge import LLMToolJudgeEvaluator, compute_routing_quality_from_steps
 from services.agent.llm_client import LLMClient
-from services.agent.env_wrapper import register_default_tools
-from services.agent.public_apis_registry import register_public_api_tools
-from services.agent.history_tool import HistoryTool
-from services.agent.tools import ToolRegistry
-
 _THREAD_LOCAL = threading.local()
 
 
@@ -56,91 +54,6 @@ def _filter_eval_accounts_with_model(eval_accounts: List[Any]) -> List[Any]:
     return valid_accounts
 
 
-def _build_registry(db, account_id: int) -> ToolRegistry:
-    registry = ToolRegistry()
-    register_default_tools(registry, db, account_id)
-    register_public_api_tools(registry)
-    # Disabled fallback swallow for deterministic failure/debugging.
-    # try:
-    #     register_public_api_tools(registry)
-    # except Exception:
-    #     pass
-    registry.register(HistoryTool(db, account_id))
-    return registry
-
-
-def _load_public_tools_schema() -> Dict[str, Dict[str, Any]]:
-    schema_path = os.path.join(
-        os.path.dirname(__file__),
-        "..",
-        "agent",
-        "public-apis",
-        "tools_schema.json",
-    )
-    schema_path = os.path.normpath(schema_path)
-    if not os.path.isfile(schema_path):
-        return {}
-    try:
-        with open(schema_path, "r", encoding="utf-8") as f:
-            tools = json.load(f)
-    except Exception:
-        return {}
-    out: Dict[str, Dict[str, Any]] = {}
-    for entry in tools or []:
-        if not isinstance(entry, dict):
-            continue
-        func = entry.get("function") or {}
-        name = func.get("name")
-        if name:
-            out[name] = func.get("parameters", {}) or {}
-    return out
-
-
-def _build_full_tool_schemas(db, account_id: int) -> Dict[str, Dict[str, Any]]:
-    registry = _build_registry(db, account_id)
-    schemas = {
-        t["function"]["name"]: t["function"].get("parameters", {})
-        for t in registry.openai_tools_all
-    }
-    public_schemas = _load_public_tools_schema()
-    schemas.update(public_schemas)
-    return schemas
-
-
-class DynamicToolSchemaResolver:
-    def __init__(self, db, account_id: int):
-        self.db = db
-        self.account_id = account_id
-        self.registry: ToolRegistry = _build_registry(db, account_id)
-        self.cache: Dict[str, Any] = {}
-
-    def resolve(self, tool_name: str) -> Any:
-        if not tool_name:
-            return None
-        if tool_name in self.cache:
-            return self.cache[tool_name]
-
-        schema = self._try_get_schema(tool_name)
-        # Disabled dynamic rebuild fallback for performance/debug determinism.
-        # if schema is None:
-        #     # Dynamic load fallback: rebuild registry once and retry.
-        #     try:
-        #         self.registry = _build_registry(self.db, self.account_id)
-        #     except Exception:
-        #         pass
-        #     schema = self._try_get_schema(tool_name)
-
-        self.cache[tool_name] = schema
-        return schema
-
-    def _try_get_schema(self, tool_name: str) -> Any:
-        try:
-            tool = self.registry.get(tool_name)
-            return tool.parameters or {}
-        except Exception:
-            return None
-
-
 def _group_traces(traces: List[Any]) -> Dict[str, List[Any]]:
     grouped = defaultdict(list)
     for t in traces:
@@ -175,45 +88,6 @@ def _trace_to_steps(trace_rows: List[Any]) -> List[Dict[str, Any]]:
             }
         )
     return steps
-
-
-def _parse_tool_name_from_call(call: Any) -> str:
-    if not isinstance(call, dict):
-        return ""
-    function_block = call.get("function") if isinstance(call.get("function"), dict) else call
-    name = function_block.get("name")
-    return name if isinstance(name, str) else ""
-
-
-def _extract_trace_tool_names(steps: List[Dict[str, Any]]) -> List[str]:
-    names: List[str] = []
-    seen = set()
-    for step in steps:
-        tool_calls = step.get("tool_calls") or []
-        if not isinstance(tool_calls, list):
-            continue
-        for call in tool_calls:
-            name = _parse_tool_name_from_call(call)
-            if not name or name in seen:
-                continue
-            names.append(name)
-            seen.add(name)
-    return names
-
-
-def _resolve_trace_dynamic_schemas(
-    steps: List[Dict[str, Any]],
-    base_tool_schemas: Dict[str, Dict[str, Any]],
-    resolver: DynamicToolSchemaResolver,
-) -> Dict[str, Dict[str, Any]]:
-    dynamic_schemas: Dict[str, Dict[str, Any]] = {}
-    for name in _extract_trace_tool_names(steps):
-        if name in base_tool_schemas:
-            continue
-        schema = resolver.resolve(name)
-        if isinstance(schema, dict):
-            dynamic_schemas[name] = schema
-    return dynamic_schemas
 
 
 def _resolve_max_workers(total_tasks: int) -> int:
@@ -332,6 +206,8 @@ def _evaluate_trace_job(
     judge_base_url: str,
     judge_prompt: str,
     objective_only: bool,
+    unavailable_tools: List[Dict[str, Any]] | None = None,
+    known_missing_tools: List[str] | None = None,
 ) -> Dict[str, Any]:
     trace_dict = {"trace_id": trace_id, "steps": steps}
 
@@ -351,6 +227,8 @@ def _evaluate_trace_job(
             "traces": [trace_dict],
             "tool_schemas": base_tool_schemas,
             "tool_schema_resolver": _local_schema_resolver,
+            "unavailable_tools": [item["requested_name"] for item in unavailable_tools or []],
+            "known_missing_tools": known_missing_tools or [],
         },
         {},
     )
@@ -367,6 +245,30 @@ def _evaluate_trace_job(
         "objective_metrics": objective_metrics,
         "judge_metrics": judge_metrics,
     }
+
+
+def trace_schema_inputs(evaluated):
+    tool_schemas: Dict[str, Dict[str, Any]] = {}
+    unavailable_tools = []
+    known_missing_tools = []
+    for tool in evaluated.tools:
+        payload = tool.model_dump(by_alias=True)
+        if tool.status == "available" and isinstance(payload.get("schema"), dict):
+            tool_schemas[tool.requested_name] = payload["schema"]
+        elif tool.status == "not_found":
+            known_missing_tools.append(tool.requested_name)
+        else:
+            unavailable_tools.append(payload)
+    return tool_schemas, unavailable_tools, known_missing_tools
+
+
+def summarize_scores(values):
+    """Keep unavailable observations out of scores, including all-unavailable groups."""
+    available = [value for value in values if value is not None]
+    if len(available) == len(values):
+        return descriptive_stats(available)
+    stats = descriptive_stats(available) if available else dict(mean=None, median=None, variance=None)
+    return {**stats, "evaluated_count": len(available), "unavailable_count": len(values) - len(available)}
 
 
 def run():
@@ -407,12 +309,14 @@ def run():
     token_agg = defaultdict(lambda: defaultdict(list))
     account_jobs: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
     account_progress: Dict[int, Dict[str, Any]] = {}
+    def open_evaluation_unit():
+        return SqlAlchemyUnitOfWork(SessionLocal)
+
+    evaluation = EvaluationService(open_evaluation_unit, get_extension_runtime())
 
     for account in eval_accounts:
         traces = loader.get_traces(account.id)
         grouped = _group_traces(traces)
-        tool_schemas = _build_full_tool_schemas(db, account.id)
-        dynamic_schema_resolver = DynamicToolSchemaResolver(db, account.id)
 
         total_traces = len(grouped)
         account_progress[account.id] = {
@@ -432,18 +336,21 @@ def run():
                 "agent_type": account.agent_type,
                 "model": account.model,
             }
-            trace_dynamic_schemas = _resolve_trace_dynamic_schemas(
-                steps=steps,
-                base_tool_schemas=tool_schemas,
-                resolver=dynamic_schema_resolver,
+            evaluated = evaluation.evaluate_trace(
+                EvaluateTraceRequest(account_id=account.id, trace_id=trace_id)
             )
+            tool_schemas, unavailable_tools, known_missing_tools = trace_schema_inputs(evaluated)
             account_jobs[account.id].append(
                 {
                     "trace_id": trace_id,
                     "steps": steps,
                     "account_info": account_info,
                     "base_tool_schemas": tool_schemas,
-                    "trace_dynamic_schemas": trace_dynamic_schemas,
+                    "trace_dynamic_schemas": {},
+                    "unavailable_tools": unavailable_tools,
+                    "known_missing_tools": known_missing_tools,
+                    "component_versions": evaluated.component_versions,
+                    "decision_round_id": evaluated.decision_round_id,
                     "agent_type": account.agent_type,
                     "model": account.model,
                     "account_id": account.id,
@@ -470,6 +377,8 @@ def run():
                 judge_base_url,
                 judge_prompt,
                 objective_only,
+                job["unavailable_tools"],
+                job["known_missing_tools"],
             ): job
             for job in all_jobs
         }
@@ -522,6 +431,9 @@ def run():
                 token_agg[key]["completion_tokens"].append(token_usage.get("completion_tokens", 0))
                 token_agg[key]["total_tokens"].append(token_usage.get("total_tokens", 0))
 
+            item["unavailable_tools"] = job.get("unavailable_tools", [])
+            item["component_versions"] = job.get("component_versions", {})
+            item["decision_round_id"] = job.get("decision_round_id")
             results.append(item)
             global_processed += 1
             acc_prog = account_progress[job["account_id"]]
@@ -542,7 +454,7 @@ def run():
             "model": model,
         }
         for metric_name, values in metrics.items():
-            summary_entry[metric_name] = descriptive_stats(values)
+            summary_entry[metric_name] = summarize_scores(values)
         if not objective_only:
             token_stats = token_agg.get((agent_type, model), {})
             summary_entry["token_usage"] = {

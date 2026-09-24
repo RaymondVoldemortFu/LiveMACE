@@ -1,9 +1,8 @@
 /**
  * Rule Summary Card - Display overview of trading rules
  */
-import React from 'react'
 import { Shield, AlertTriangle, Info } from 'lucide-react'
-import { type RuleSummary } from '@/lib/compliance-api'
+import type { RuleSummary } from '@/lib/api/generated-types'
 
 interface RuleSummaryCardProps {
   summary: RuleSummary

@@ -28,7 +28,6 @@ if str(BACKEND_DIR) not in sys.path:
 from services.agent.llm_client import LLMClient
 from services.agent.tool_selector import META_TOOL_NAME, REQUIRED_TOOL_NAMES, select_tools_with_llm
 from services.agent.tools import ToolRegistry
-from services.agent.env_wrapper import register_default_tools
 from services.agent.public_apis_registry import register_public_api_tools
 from services.agent.history_tool import HistoryTool
 from services.evaluation.llm_tool_judge import compute_routing_quality_from_steps
@@ -194,20 +193,17 @@ def _load_selector_records(db_path: Path) -> Dict[str, List[SelectorRecord]]:
     return records_by_model
 
 
-def _build_registry(db_session, account_id: int) -> ToolRegistry:
-    registry = ToolRegistry()
-    register_default_tools(registry, db_session, account_id)
-    register_public_api_tools(registry)
-    registry.register(HistoryTool(db_session, account_id))
-    return registry
+def _prepare_tool_schemas():
+    from benchmark.extensions.host import get_extension_runtime
+    from benchmark.builtin.tools._support import PUBLIC_TO_LEGACY_TOOL_NAMES
+    from benchmark.contracts import to_jsonable
 
-
-def _prepare_tool_schemas(registry: ToolRegistry) -> List[Dict[str, Any]]:
-    tool_schemas = [
-        t for t in registry.openai_tools_all if t.get("function", {}).get("name") != META_TOOL_NAME
-    ]
-    tool_schemas.sort(key=lambda x: x.get("function", {}).get("name") or "")
-    return tool_schemas
+    tools = [{"type": "function", "function": {
+        "name": PUBLIC_TO_LEGACY_TOOL_NAMES.get(spec.name, spec.name),
+        "description": spec.description,
+        "parameters": to_jsonable(spec.input_schema),
+    }} for spec in get_extension_runtime().tools.list()]
+    return sorted(tools, key=lambda item: item["function"]["name"])
 
 
 def _score_selected_tools(selected_tools: List[str]) -> float:
@@ -356,8 +352,7 @@ def main() -> None:
 
     try:
         for account_id in {r.account_id for r in sampled_records}:
-            registry = _build_registry(session, account_id)
-            by_account_registry[account_id] = (registry, _prepare_tool_schemas(registry))
+            by_account_registry[account_id] = (registry, _prepare_tool_schemas())
 
         model_base_url_map: Dict[str, str] = {}
         for model in {r.model for r in sampled_records}:

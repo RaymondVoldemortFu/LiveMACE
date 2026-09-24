@@ -7,7 +7,7 @@
 ## 文件边界
 
 - 修改：`backend/services/agent/react.py`、`multi_agent.py`、`multi_agent_advanced.py`、`rule_aware/*`、`factory.py`、`core.py`。
-- 新增：`backend/alpha_arena/builtin/agents/` 及各 Agent config schema。
+- 新增：`backend/benchmark/builtin/agents/` 及各 Agent config schema。
 - 不修改工具实现、Prompt 文案、交易执行函数。
 
 ## 注册组件

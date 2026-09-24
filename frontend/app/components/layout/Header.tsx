@@ -2,20 +2,7 @@ import { useEffect, useState } from 'react'
 import { Moon, Sun } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 
-interface User {
-  id: number
-  username: string
-}
-
-interface Account {
-  id: number
-  user_id: number
-  name: string
-  account_type: string
-  initial_capital: number
-  current_cash: number
-  frozen_cash: number
-}
+import type { PortfolioUser as User, PortfolioAccount as Account } from '@/lib/api/generated-types'
 
 interface HeaderProps {
   title?: string
@@ -25,7 +12,7 @@ interface HeaderProps {
   onUserChange?: (username: string) => void
 }
 
-export default function Header({ title = 'Crypto Paper Trading', currentUser, currentAccount, showAccountSelector = false, onUserChange }: HeaderProps) {
+export default function Header({ title = 'Crypto Paper Trading' }: HeaderProps) {
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     if (typeof document === 'undefined') return 'dark'
     return document.documentElement.classList.contains('dark') ? 'dark' : 'light'

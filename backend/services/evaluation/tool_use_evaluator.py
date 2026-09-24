@@ -111,6 +111,9 @@ class ToolUseMetricsEvaluator(BaseEvaluator):
             "tool_schema_resolver"
         )
 
+        unavailable_tools = set(agent_data.get("unavailable_tools", ()))
+        known_missing = set(agent_data.get("known_missing_tools", ()))
+        unavailable_calls = 0
         total_tool_calls = 0
         hallucinated_calls = 0
         invalid_params_calls = 0
@@ -141,7 +144,7 @@ class ToolUseMetricsEvaluator(BaseEvaluator):
                     args = _safe_json_loads(args_raw)
 
                     schema = None
-                    if name:
+                    if name and name not in unavailable_tools and name not in known_missing:
                         schema = tool_schemas.get(name)
                         if schema is None and name in BUILTIN_DYNAMIC_TOOL_SCHEMAS:
                             schema = BUILTIN_DYNAMIC_TOOL_SCHEMAS[name]
@@ -155,7 +158,9 @@ class ToolUseMetricsEvaluator(BaseEvaluator):
                                     dynamic_schema_hits += 1
                             schema = resolved_schema_cache.get(name)
 
-                    if not name or schema is None:
+                    if name in unavailable_tools:
+                        unavailable_calls += 1
+                    elif not name or schema is None:
                         hallucinated_calls += 1
                     else:
                         if not _validate_params(args, schema or {}):
@@ -192,15 +197,17 @@ class ToolUseMetricsEvaluator(BaseEvaluator):
                 "unique_tool_calls": unique_tool_calls,
                 "total_steps": total_steps,
                 "tool_calls_per_step": tool_calls_per_step,
-                "hallucinated_calls": hallucinated_calls,
-                "invalid_param_calls": invalid_params_calls,
+                "schema_status": "unavailable" if unavailable_calls else "available",
+                "unavailable_calls": unavailable_calls,
+                "hallucinated_calls": None if unavailable_calls else hallucinated_calls,
+                "invalid_param_calls": None if unavailable_calls else invalid_params_calls,
                 "error_or_empty_calls": error_calls,
                 "invalid_output_calls": invalid_output_calls,
                 "no_op_calls": noop_calls,
                 "dynamic_schema_hits": dynamic_schema_hits,
                 "dynamic_schema_misses": dynamic_schema_misses,
-                "hallucination_rate": hallucination_rate,
-                "invalid_or_noop_rate": invalid_rate,
+                "hallucination_rate": None if unavailable_calls else hallucination_rate,
+                "invalid_or_noop_rate": None if unavailable_calls else invalid_rate,
             },
             "details": {
                 "notes": [

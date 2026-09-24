@@ -12,7 +12,7 @@ from .tool_selector import (
     META_TOOL_NAME,
 )
 from config.agent_config import AgentConfig
-from services.agent.prompts.system_prompts import get_trade_agent_prompt
+from benchmark.builtin.prompts import REACT_PROFILE_BY_FLAGS, get_prompt_resolver, render_react_prompt
 from .base import BaseAgent
 from services.time_source import now_in_tz
 
@@ -48,13 +48,39 @@ class ReActAgent(BaseAgent):
         max_steps: int = AgentConfig.MAX_STEPS,
         user_id: str = None,
         agent_name: Optional[str] = None,
+        tool_routing_enabled: Optional[bool] = None,
+        memory_enabled: Optional[bool] = None,
+        step_reminder_threshold: Optional[int] = None,
+        include_simulation_notice: Optional[bool] = None,
+        prompt_resolver=None,
     ):
         super().__init__(llm, tools, agent_name=agent_name)
         self.max_steps = max_steps
         self.user_id = user_id
-        self.tool_routing_enabled = bool(getattr(AgentConfig, "AGENT_ENABLE_TOOL_ROUTING", True))
-        # Memory tools are now registered in env_wrapper.register_default_tools()
-        # self.memory = get_memory_service()
+        self.tool_routing_enabled = (
+            bool(getattr(AgentConfig, "AGENT_ENABLE_TOOL_ROUTING", True))
+            if tool_routing_enabled is None
+            else bool(tool_routing_enabled)
+        )
+        self.memory_enabled = (
+            any(
+                tool.name in ["memory_add", "memory_search"]
+                for tool in self.tools.tools.values()
+            )
+            if memory_enabled is None
+            else bool(memory_enabled)
+        )
+        self.step_reminder_threshold = (
+            AgentConfig.STEP_REMINDER_THRESHOLD
+            if step_reminder_threshold is None
+            else int(step_reminder_threshold)
+        )
+        self.include_simulation_notice = (
+            bool(getattr(AgentConfig, "AGENT_INCLUDE_SIMULATION_NOTICE", False))
+            if include_simulation_notice is None
+            else bool(include_simulation_notice)
+        )
+        self.prompt_resolver = prompt_resolver
         ensure_tool_selector_tool(self.llm, self.tools)
 
     def set_tool_routing_enabled(self, enabled: bool):
@@ -97,6 +123,27 @@ class ReActAgent(BaseAgent):
         return decision
 
     @staticmethod
+    def _has_filled_trade(executed_trades: List[Dict[str, Any]]) -> bool:
+        """True when execute_trade actually opened or closed a position."""
+
+        for item in executed_trades:
+            if not isinstance(item, dict) or item.get("executed") is not True:
+                continue
+            operation = str(item.get("operation") or "").strip()
+            if operation == "hold":
+                continue
+            if operation == "close_all":
+                closed = item.get("closed_orders") or []
+                if isinstance(closed, (list, tuple)) and any(
+                    isinstance(order, dict) for order in closed
+                ):
+                    return True
+                continue
+            if operation in {"open", "close", "all_in"}:
+                return True
+        return False
+
+    @staticmethod
     def _is_trade_done_message(text: str) -> bool:
         if not text:
             return False
@@ -113,15 +160,22 @@ class ReActAgent(BaseAgent):
             return True
         return False
 
-    def run(self, portfolio: Dict[str, Any], prices: Dict[str, float], on_step: Optional[Callable[[Dict], None]] = None, trace_id: Optional[str] = None) -> Dict[str, Any]:
+    def run(
+        self,
+        portfolio: Dict[str, Any],
+        prices: Dict[str, float],
+        on_step: Optional[Callable[[Dict], None]] = None,
+        trace_id: Optional[str] = None,
+        decision_round_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
         输入:
-            portfolio: 和原 call_ai_for_decision 中一致的结构
+            portfolio: 和 Agent 决策上下文一致的结构
             prices: symbol -> price 的字典
             on_step: Optional callback function called after each step with the message dict
             trace_id: Trace ID for current session
         输出:
-            与原先 call_ai_for_decision 返回值同结构的决策 dict
+            Agent 决策 dict
         """
         # Log start of decision process
         logger.info("Starting agent decision process (ReAct Architecture)")
@@ -129,11 +183,11 @@ class ReActAgent(BaseAgent):
         agent_logger.info(f"Portfolio: {json.dumps(portfolio, ensure_ascii=False)}")
         agent_logger.info(f"Prices: {json.dumps(prices, ensure_ascii=False)}")
 
-        # Check if memory tools are available
-        has_memory = any(tool.name in ['memory_add', 'memory_search'] for tool in self.tools.tools.values())
-        system_prompt = get_trade_agent_prompt(
-            memory_enabled=has_memory,
+        system_prompt = render_react_prompt(
+            memory_enabled=self.memory_enabled,
             tool_routing_enabled=self.tool_routing_enabled,
+            include_simulation_notice=self.include_simulation_notice,
+            resolver=self.prompt_resolver,
         )
 
         # Get current UTC+8 time
@@ -180,12 +234,19 @@ class ReActAgent(BaseAgent):
             remaining_steps = self.max_steps - step
             request_messages = list(messages)
 
-            if remaining_steps < AgentConfig.STEP_REMINDER_THRESHOLD:
+            if remaining_steps < self.step_reminder_threshold:
                 logger.info(f"Adding step reminder (Remaining: {remaining_steps})")
-                reminder_text = (
-                    f"Reminder: You have {remaining_steps} steps remaining. "
-                    f"You must output {termination_token} before running out of steps."
-                )
+                profile_id = REACT_PROFILE_BY_FLAGS[
+                    (self.memory_enabled, self.tool_routing_enabled)
+                ]
+                reminder_text = get_prompt_resolver(self.prompt_resolver).render_slot(
+                    profile_id,
+                    "step_reminder",
+                    {
+                        "remaining_steps": remaining_steps,
+                        "termination_token": termination_token,
+                    },
+                ).content
                 request_messages.append({
                     "role": "user",
                     "content": reminder_text,
@@ -262,15 +323,18 @@ class ReActAgent(BaseAgent):
                         }
                     else:
                         cache_key = f"{name}:{json.dumps(args, sort_keys=True)}"
-                        # Tool selector updates active tool set dynamically.
-                        # Its result must always reflect latest context, so skip cache.
-                        should_cache_tool_result = name != META_TOOL_NAME
+                        # Only immutable round observations may use this legacy
+                        # cache. Account/history/file reads can change after a
+                        # write; writes require the gateway's call-id semantics.
+                        should_cache_tool_result = name in {
+                            "get_market_snapshot", "get_kline_history", "consult_search_agent"
+                        }
                         tool_call_counts[cache_key] = tool_call_counts.get(cache_key, 0) + 1
                         dup_count = tool_call_counts[cache_key]
                         dup_limit = getattr(AgentConfig, "TOOL_CALL_DUP_MAX", 5)
                         dup_warn = getattr(AgentConfig, "TOOL_CALL_DUP_WARN", 10)
 
-                        if dup_count > dup_limit:
+                        if should_cache_tool_result and dup_count > dup_limit:
                             result = {
                                 "error": (
                                     f"Refused to execute tool '{name}' with identical parameters "
@@ -298,8 +362,13 @@ class ReActAgent(BaseAgent):
                                         )
                                     }
                                 else:
-                                    result = tool(**args)
-                                    if should_cache_tool_result:
+                                    result = self._invoke_llm_tool(
+                                        name,
+                                        args,
+                                        tool_call_id=tc_id,
+                                        decision_round_id=decision_round_id,
+                                    )
+                                    if should_cache_tool_result and not (isinstance(result, dict) and result.get("error")):
                                         tool_call_cache[cache_key] = result
                                     # Meta tool handling, optional for special tools
                                     if name == META_TOOL_NAME and isinstance(result, dict):
@@ -367,6 +436,7 @@ class ReActAgent(BaseAgent):
             text_content = content or ""
             if self._is_trade_done_message(text_content):
                 # Only write fallback decision if no execute_trade was called
+                has_successful_trade = self._has_filled_trade(executed_trades)
                 if not executed_trades:
                     decision = {
                         "operation": "hold",
@@ -377,6 +447,7 @@ class ReActAgent(BaseAgent):
                         "reason": f"Tool-mode terminated by token {termination_token}",
                         "protocol": "tool",
                         "executed_trades": executed_trades,
+                        "termination_reason": "hold",
                     }
                 else:
                     # execute_trade was called, don't write duplicate decision
@@ -390,6 +461,9 @@ class ReActAgent(BaseAgent):
                         "protocol": "tool",
                         "executed_trades": executed_trades,
                         "skip_logging": True,  # signal to skip AIDecisionLog
+                        "termination_reason": (
+                            "trade_done" if has_successful_trade else "hold"
+                        ),
                     }
                 logger.info(
                     f"Agent terminated tool-mode loop with token. executed_trade_calls={len(executed_trades)}"
@@ -430,5 +504,6 @@ class ReActAgent(BaseAgent):
             }
             decision["protocol"] = "tool"
             decision["executed_trades"] = executed_trades
+            decision["termination_reason"] = "max_steps"
 
         return decision

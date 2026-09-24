@@ -12,11 +12,15 @@ from sqlalchemy.orm import Session
 from database.connection import SessionLocal
 from database.models import MarketKline, Position
 from repositories.kline_repo import KlineRepository
-from services.alpaca_market_data import get_all_supported_symbols
-from services.hyperliquid_market_data import get_kline_data_from_hyperliquid
-from services.alpaca_market_data import get_kline_data_from_alpaca
 from services.time_source import now_timestamp
-from services.trading_commands import AI_TRADING_SYMBOLS
+from benchmark.contracts import Market
+from benchmark.infrastructure.adapters.market import (
+    AlpacaMarketDataAdapter,
+    HyperliquidMarketDataAdapter,
+)
+from benchmark.infrastructure.market import RoutedMarketDataPort
+from benchmark.infrastructure.market.symbols import CRYPTO_SYMBOLS, US_SYMBOLS, normalize_market
+from benchmark.providers import KlineQuery
 
 logger = logging.getLogger(__name__)
 
@@ -25,10 +29,17 @@ KLINE_REFRESH_PERIOD = "1m"
 KLINE_REFRESH_COUNT = 3
 KLINE_MAX_STALE_SECONDS = 120
 
+_market_data_port = RoutedMarketDataPort(
+    {
+        Market.CRYPTO: HyperliquidMarketDataAdapter(),
+        Market.US: AlpacaMarketDataAdapter(),
+    }
+)
+
 
 def _collect_symbols(db: Session) -> Dict[str, List[str]]:
-    crypto_symbols = set(AI_TRADING_SYMBOLS)
-    us_symbols = set(get_all_supported_symbols())
+    crypto_symbols = set(CRYPTO_SYMBOLS)
+    us_symbols = set(US_SYMBOLS)
 
     positions = db.query(Position).filter(Position.quantity > 0).all()
     for pos in positions:
@@ -64,9 +75,16 @@ def _is_fresh(latest_ts: int | None) -> bool:
 
 
 def _fetch_kline(symbol: str, market: str, period: str, count: int) -> List[dict]:
-    if market == "US":
-        return get_kline_data_from_alpaca(symbol, period=period, count=count)
-    return get_kline_data_from_hyperliquid(symbol, period=period, count=count)
+    resolved_market = normalize_market(market)
+    result = _market_data_port.get_klines(
+        KlineQuery(
+            symbol=symbol,
+            market=resolved_market,
+            period=period,
+            count=count,
+        )
+    )
+    return [dict(row) for row in result.rows]
 
 
 def refresh_market_klines() -> None:

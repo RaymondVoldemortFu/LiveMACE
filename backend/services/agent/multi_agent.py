@@ -1,33 +1,87 @@
 import json
 import logging
+import math
 import uuid
 import inspect
 from typing import Dict, Any, List, Optional, Callable
 from datetime import datetime, timezone, timedelta
 
+from benchmark.builtin.prompts import get_prompt_resolver, require_profile_contract
+
 from .base import BaseAgent
 from .llm_client import LLMClient
 from .tools import ToolRegistry
-from config.agent_config import AgentConfig
-from .prompts.multi_agent_prompts import (
-    MANAGER_PROMPT,
-    TRADING_AGENT_PROMPT,
-    NEWS_AGENT_PROMPT,
-    CODER_AGENT_PROMPT
-)
 
 logger = logging.getLogger(__name__)
+
+MULTI_AGENT_FINAL_TOOL_CALL_ID = "multi-agent-final"
+MULTI_AGENT_TRADE_OPERATIONS = frozenset({"open", "close", "all_in", "close_all"})
+
+
+def _absent(value: Any) -> bool:
+    return value in (None, "")
+
+
+def _finite_number(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number):
+        return None
+    return number
+
+
+def manager_close_ratio(decision: Dict[str, Any]) -> tuple[Any, str | None]:
+    """Map Manager close sizing to execute_trade close_ratio.
+
+    Missing close_ratio with missing or 0 remaining target is a full close.
+    An explicit non-positive, non-finite, or >1 close_ratio is rejected.
+    """
+    raw_close = decision.get("close_ratio")
+    if not _absent(raw_close):
+        parsed = _finite_number(raw_close)
+        if parsed is None or parsed <= 0 or parsed > 1:
+            return None, "close_ratio must be in (0, 1]"
+        return raw_close, None
+
+    raw_portion = decision.get("target_portion_of_balance")
+    if _absent(raw_portion):
+        return 1, None
+    parsed = _finite_number(raw_portion)
+    if parsed is None or parsed < 0 or parsed > 1:
+        return None, "target_portion_of_balance must be in [0, 1]"
+    if parsed == 0:
+        return 1, None
+    return raw_portion, None
+
 
 class MultiAgent(BaseAgent):
     """
     A Multi-Agent architecture where a Manager agent coordinates
     specialized sub-agents (Trading, News, Coder).
     """
-    def __init__(self, llm: LLMClient, tools: ToolRegistry, max_steps: int = 15, user_id: str = None, agent_name: Optional[str] = None):
+
+    PROMPT_PROFILE_ID = "core.multi-agent.default"
+
+    def __init__(
+        self,
+        llm: LLMClient,
+        tools: ToolRegistry,
+        max_steps: int = 15,
+        user_id: str = None,
+        agent_name: Optional[str] = None,
+        prompt_resolver=None,
+    ):
         super().__init__(llm, tools, agent_name=agent_name)
         self.max_steps = max_steps
         self.user_id = user_id
-        # Memory tools are now registered in env_wrapper.register_default_tools()
+        self.prompt_resolver = get_prompt_resolver(prompt_resolver)
+        require_profile_contract(
+            self.prompt_resolver,
+            self.PROMPT_PROFILE_ID,
+            "multi_agent",
+        )
 
         # Shared conversation history (context)
         self.context = []
@@ -51,20 +105,35 @@ class MultiAgent(BaseAgent):
                 missing.append(name)
         return missing
 
-    def _run_sub_agent(self, agent_name: str, instruction: str, portfolio: Dict, prices: Dict, on_step: Optional[Callable] = None) -> str:
+    def _run_sub_agent(
+        self,
+        agent_name: str,
+        instruction: str,
+        portfolio: Dict,
+        prices: Dict,
+        on_step: Optional[Callable] = None,
+        decision_round_id: Optional[str] = None,
+    ) -> str:
         """Run a single turn for a sub-agent"""
         
         # Select prompt and tools based on agent name
         if agent_name == "TradingAgent":
-            system_prompt = TRADING_AGENT_PROMPT
+            slot = "trading"
+            prompt_variables = {
+                "instruction": instruction,
+                "portfolio": json.dumps(portfolio, ensure_ascii=False),
+                "prices": json.dumps(prices, ensure_ascii=False),
+            }
             # Give Trading Agent access to market/account tools
             allowed_tools = ["get_market_snapshot", "get_kline_history", "get_account_state"]
         elif agent_name == "NewsAgent":
-            system_prompt = NEWS_AGENT_PROMPT
+            slot = "news"
+            prompt_variables = {"instruction": instruction}
             # Give News Agent access to search tools
             allowed_tools = ["consult_search_agent"]
         elif agent_name == "CoderAgent":
-            system_prompt = CODER_AGENT_PROMPT
+            slot = "coder"
+            prompt_variables = {"instruction": instruction}
             # Give Coder Agent access to coding/file tools
             allowed_tools = ["run_python_script", "read_file", "write_file", "execute_shell_command"]
         else:
@@ -74,12 +143,11 @@ class MultiAgent(BaseAgent):
         available_tools_names = [t["function"]["name"] for t in self.tools.openai_tools]
         valid_tools = [t for t in allowed_tools if t in available_tools_names]
 
-        # Format prompt
-        formatted_prompt = system_prompt.format(
-            instruction=instruction,
-            portfolio=json.dumps(portfolio, ensure_ascii=False),
-            prices=json.dumps(prices, ensure_ascii=False)
-        )
+        formatted_prompt = self.prompt_resolver.render_slot(
+            self.PROMPT_PROFILE_ID,
+            slot,
+            prompt_variables,
+        ).content
 
         messages = [
             {"role": "system", "content": formatted_prompt},
@@ -184,7 +252,12 @@ class MultiAgent(BaseAgent):
                                     )
                                 }
                             else:
-                                result = tool_func(**args)
+                                result = self._invoke_llm_tool(
+                                    name,
+                                    args,
+                                    tool_call_id=tc_id,
+                                    decision_round_id=decision_round_id,
+                                )
                     except Exception as tool_err:
                         logger.error(f"Sub-agent tool execution failed for {name}: {tool_err}")
                         result = {"error": f"Tool execution failed: {str(tool_err)}"}
@@ -217,7 +290,168 @@ class MultiAgent(BaseAgent):
         
         return current_response
 
-    def run(self, portfolio: Dict[str, Any], prices: Dict[str, float], on_step: Optional[Callable[[Dict], None]] = None, trace_id: Optional[str] = None) -> Dict[str, Any]:
+    def _has_execute_trade(self) -> bool:
+        try:
+            self.tools.get("execute_trade")
+        except KeyError:
+            return False
+        return True
+
+    def _final_trade_arguments(
+        self, decision: Dict[str, Any]
+    ) -> tuple[Dict[str, Any], Dict[str, Any] | None]:
+        operation = str(decision.get("operation") or "").strip().lower()
+        arguments: Dict[str, Any] = {"operation": operation}
+        symbol = decision.get("symbol")
+        if symbol not in (None, ""):
+            arguments["symbol"] = str(symbol).strip().upper()
+        direction = decision.get("direction")
+        if direction not in (None, ""):
+            arguments["direction"] = str(direction).strip().lower()
+        market = decision.get("market")
+        if market not in (None, ""):
+            arguments["market"] = str(market).strip().upper()
+        elif arguments.get("symbol"):
+            arguments["market"] = "CRYPTO"
+        leverage = decision.get("leverage")
+        if leverage not in (None, ""):
+            arguments["leverage"] = leverage
+        portion = decision.get("target_portion_of_balance")
+        usd_amount = decision.get("usd_amount")
+        if usd_amount not in (None, ""):
+            arguments["usd_amount"] = usd_amount
+        size_mode = decision.get("size_mode")
+        if size_mode not in (None, ""):
+            arguments["size_mode"] = size_mode
+        reject: Dict[str, Any] | None = None
+        if operation == "close":
+            size_mode_norm = str(size_mode or "").strip().lower()
+            if size_mode_norm == "usd":
+                parsed_usd = None if _absent(usd_amount) else _finite_number(usd_amount)
+                if parsed_usd is None or parsed_usd <= 0:
+                    reject = {
+                        "executed": False,
+                        "error": (
+                            "usd_amount must be a positive finite number "
+                            "when size_mode is usd"
+                        ),
+                        "reject_code": "SIZING_VALUE_INVALID",
+                        "operation": operation,
+                        "symbol": arguments.get("symbol") or "",
+                        "market": arguments.get("market") or "CRYPTO",
+                    }
+            else:
+                ratio, error = manager_close_ratio(decision)
+                if error is not None:
+                    reject = {
+                        "executed": False,
+                        "error": error,
+                        "reject_code": "SIZING_VALUE_INVALID",
+                        "operation": operation,
+                        "symbol": arguments.get("symbol") or "",
+                        "market": arguments.get("market") or "CRYPTO",
+                    }
+                else:
+                    arguments["close_ratio"] = ratio
+        elif portion not in (None, ""):
+            arguments["target_portion_of_balance"] = portion
+        reason = decision.get("reason")
+        if reason not in (None, ""):
+            arguments["reason"] = reason
+        return arguments, reject
+
+    def _execute_final_decision(
+        self,
+        final_decision: Dict[str, Any],
+        *,
+        on_step: Optional[Callable] = None,
+        decision_round_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        if not isinstance(final_decision, dict):
+            return final_decision
+        operation = str(final_decision.get("operation") or "").strip().lower()
+        if operation not in MULTI_AGENT_TRADE_OPERATIONS:
+            return final_decision
+
+        arguments, reject = self._final_trade_arguments(final_decision)
+        tool_call_id = MULTI_AGENT_FINAL_TOOL_CALL_ID
+        if reject is not None:
+            result = reject
+        elif self._has_execute_trade():
+            result = self._invoke_llm_tool(
+                "execute_trade",
+                arguments,
+                tool_call_id=tool_call_id,
+                decision_round_id=decision_round_id,
+            )
+        else:
+            result = {
+                "executed": False,
+                "error": "execute_trade is not available for the Multi-Agent final decision",
+                "reject_code": "TOOL_UNAVAILABLE",
+                "operation": arguments["operation"],
+                "symbol": arguments.get("symbol") or "",
+                "market": arguments.get("market") or "CRYPTO",
+            }
+
+        if isinstance(result, dict):
+            payload = dict(result)
+            payload.setdefault("operation", arguments["operation"])
+            if arguments.get("symbol"):
+                payload.setdefault("symbol", arguments["symbol"])
+            payload.setdefault("market", arguments.get("market") or "CRYPTO")
+        else:
+            payload = {
+                "raw_result": str(result),
+                "operation": arguments["operation"],
+                "symbol": arguments.get("symbol") or "",
+                "market": arguments.get("market") or "CRYPTO",
+            }
+
+        if on_step:
+            on_step(
+                {
+                    "role": "assistant",
+                    "content": (
+                        "[Manager] Executing final decision via execute_trade: "
+                        f"{arguments['operation']} {arguments.get('symbol') or ''}"
+                    ).strip(),
+                    "tool_calls": [
+                        {
+                            "id": tool_call_id,
+                            "type": "function",
+                            "function": {
+                                "name": "execute_trade",
+                                "arguments": json.dumps(arguments, ensure_ascii=False),
+                            },
+                        }
+                    ],
+                    "metadata": {"agent": "Manager"},
+                }
+            )
+            on_step(
+                {
+                    "role": "tool",
+                    "tool_call_id": tool_call_id,
+                    "name": "execute_trade",
+                    "content": json.dumps(payload, ensure_ascii=False),
+                    "metadata": {"agent": "Manager"},
+                }
+            )
+
+        executed = dict(final_decision)
+        executed["protocol"] = "tool"
+        executed["executed_trades"] = [payload]
+        return executed
+
+    def run(
+        self,
+        portfolio: Dict[str, Any],
+        prices: Dict[str, float],
+        on_step: Optional[Callable[[Dict], None]] = None,
+        trace_id: Optional[str] = None,
+        decision_round_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
         
         logger.info("Starting Multi-Agent decision process")
 
@@ -231,11 +465,15 @@ class MultiAgent(BaseAgent):
             # We summarize the conversation history (context) into the prompt
             context_str = "\n".join(self.context)
             
-            formatted_manager_prompt = MANAGER_PROMPT.format(
-                context=context_str if context_str else "No prior actions.",
-                portfolio=json.dumps(portfolio, ensure_ascii=False),
-                prices=json.dumps(prices, ensure_ascii=False)
-            )
+            formatted_manager_prompt = self.prompt_resolver.render_slot(
+                self.PROMPT_PROFILE_ID,
+                "manager",
+                {
+                    "context": context_str if context_str else "No prior actions.",
+                    "portfolio": json.dumps(portfolio, ensure_ascii=False),
+                    "prices": json.dumps(prices, ensure_ascii=False),
+                },
+            ).content
             
             # Call Manager (LLM)
             # Manager has NO tools, only decides next action
@@ -273,7 +511,14 @@ class MultiAgent(BaseAgent):
                     self.context.append(f"Step {step+1}: Manager decided to call {agent_name}. Reason: {reason}")
                     
                     # Execute Sub-agent
-                    result = self._run_sub_agent(agent_name, instruction, portfolio, prices, on_step)
+                    result = self._run_sub_agent(
+                        agent_name,
+                        instruction,
+                        portfolio,
+                        prices,
+                        on_step,
+                        decision_round_id,
+                    )
                     
                     self.context.append(f"Result from {agent_name}: {result}")
                     
@@ -300,8 +545,11 @@ class MultiAgent(BaseAgent):
                 "direction": "long",
                 "target_portion_of_balance": 0.0,
                 "leverage": 1,
-                "reason": "MultiAgent Manager did not reach a conclusion within max steps."
+                "reason": "MultiAgent Manager did not reach a conclusion within max steps.",
             }
 
-        return final_decision
-
+        return self._execute_final_decision(
+            final_decision,
+            on_step=on_step,
+            decision_round_id=decision_round_id,
+        )

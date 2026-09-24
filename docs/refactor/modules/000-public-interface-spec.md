@@ -1,6 +1,6 @@
 # 公共扩展接口规范 v1
 
-本文冻结模块任务共同实现的公开接口。接口位置以最终包 `alpha_arena` 表示；落地时 Python 源码目录为 `backend/alpha_arena/`。公开接口版本为 `1`，内部模块不得要求扩展导入 `backend/services/*`、SQLAlchemy model 或 FastAPI 对象。
+本文冻结模块任务共同实现的公开接口。接口位置以最终包 `benchmark` 表示；落地时 Python 源码目录为 `backend/benchmark/`。公开接口版本为 `1`，内部模块不得要求扩展导入 `backend/services/*`、SQLAlchemy model 或 FastAPI 对象。
 
 ## 1. 稳定性等级
 
@@ -13,13 +13,13 @@
 公开命名空间仅包括：
 
 ```python
-alpha_arena.contracts
-alpha_arena.agents
-alpha_arena.tools
-alpha_arena.prompts
-alpha_arena.providers
-alpha_arena.extensions
-alpha_arena.testing
+benchmark.contracts
+benchmark.agents
+benchmark.tools
+benchmark.prompts
+benchmark.providers
+benchmark.extensions
+benchmark.testing
 ```
 
 ## 2. 通用类型
@@ -80,7 +80,7 @@ class DecisionContext:
     started_at: datetime
 ```
 
-DTO 必须不可变；扩展拿到的是只读快照，不能拿 ORM entity 或 session。
+DTO 必须不可变；扩展拿到的是只读快照，不能拿 ORM entity 或 session。实现补充：各 DTO 在 `__post_init__` 做构造期类型/取值校验，mapping 字段冻结为只读视图；`benchmark.contracts` 另导出确定性序列化辅助 `to_jsonable(value) -> JsonValue`（Decimal 转字符串、datetime 转 UTC ISO8601、拒绝 NaN/Infinity），属 Public API。
 
 ## 3. Agent SPI
 
@@ -136,6 +136,8 @@ class AgentBuildContext:
 - `AgentRunResult.executed_trades` 是执行引用，不是待执行命令；上层不得再次执行。
 - Agent 不得 import 或调用 `order_matching`、`order_executor_leverage`、repository。
 
+实现补充：`Agent`/`AgentFactory` Protocol 标注 `@runtime_checkable`；`benchmark.agents` 另导出注册与运行时公开类型 `AgentDescriptor`、`AgentSelection`、`RegisteredAgent`、`AgentRuntimeEvent`、`NullEventSink`、`AgentRegistry`、`AgentRuntime`（事件类型见第 6 节 EventSink 说明）。
+
 ## 4. Tool SPI
 
 ```python
@@ -164,6 +166,7 @@ class ToolContext:
     trace_id: str
     call_id: str
     capabilities: frozenset[str]
+    deadline_at: datetime | None = None  # cooperative deadline; Invoker always supplies it
 
 @dataclass(frozen=True)
 class ToolResult:
@@ -184,11 +187,24 @@ class ToolProvider(Protocol):
 
 class ToolInvoker(Protocol):
     def call(self, name: str, arguments: Mapping[str, JsonValue]) -> ToolResult: ...
+
+class ToolSpecSource(Protocol):
+    def list_specs(self) -> Sequence[ToolSpec]: ...
 ```
 
-执行顺序固定为：名称解析 -> capability 检查 -> JSON Schema 输入校验 -> deadline/timeout 检查 -> 同步 tool invoke -> 输出 schema 校验 -> redaction -> trace/event。`ToolInvoker.call()` 在工具完成前阻塞，Agent 得到 `ToolResult` 后才进入下一步。Tool 的业务拒绝返回 `ToolResult(ok=False)`；只有框架故障抛 `ToolRuntimeError`。异步 `invoke()` 或 awaitable 返回值不属于 v1 接口。
+执行顺序固定为：名称解析与 capability/enabled 检查（未启用工具返回 `TOOL_NOT_ACTIVE`）-> 参数 JSON 可序列化检查 -> JSON Schema 输入校验 -> deadline 预检 -> cache 查找（`cacheable=True` 且命中时直接返回缓存结果）-> 同步 tool invoke -> invoke 后按单调时钟复检 timeout/deadline -> 输出 JSON 可序列化与 schema 校验（仅 `ok=True` 结果）-> cache 写入 -> trace/event。
+
+补充语义：
+
+- 同步模型下无法在 invoke 中途强制中断，timeout 语义为“invoke 前 deadline 预检 + invoke 后墙钟复检”；带写副作用的超时结果仅在 metadata 标记，不替换结果。
+- 事件贯穿全管线发出（denied/failed/started/cache_hit/completed），`tool.started` 在 invoke 之前发出，并非只在末尾单步。
+- redaction 只作用于写入 trace/event 的 arguments 与 result 副本；返回给 Agent 的 `ToolResult` 保持原样，不脱敏。
+
+`ToolInvoker.call()` 在工具完成前阻塞，Agent 得到 `ToolResult` 后才进入下一步。Tool 的业务拒绝返回 `ToolResult(ok=False)`；只有框架故障抛 `ToolRuntimeError`。异步 `invoke()` 或 awaitable 返回值不属于 v1 接口。
 
 保留 namespace `core.*`：`core.execute_trade`、`core.market_snapshot`、`core.kline_history`、`core.account_state`、`core.decision_history`、`core.memory_add`、`core.memory_search`、`core.sandbox_*`、`core.search`。第三方必须使用自己的 namespace。
+
+实现补充：`Tool`/`ToolProvider`/`ToolInvoker` Protocol 标注 `@runtime_checkable`；`ToolSpecSource` 是 Agent 可选消费的只读 schema 边界，不改变只实现 `ToolInvoker.call()` 的最小契约；`benchmark.tools` 另导出 `ToolCache`、`ToolEventSink`、`RegisteredTool`、`ToolRuntimeEvent` 等运行时公开类型。
 
 ## 5. Prompt SPI
 
@@ -217,33 +233,88 @@ class PromptResolver(Protocol):
 
 Prompt 文件使用 UTF-8，模板引擎 v1 只支持命名变量，不执行任意 Python。缺失变量、未知变量、模板语法错误必须在扩展装载或账户配置校验时暴露，不得等到交易轮次中才失败。
 
-Prompt override 以完整 `prompt_id` 替换；不支持按字符串位置 patch。相同 id 的优先级依次为：账户显式 profile > 外部启用扩展 > 内置扩展。相同优先级冲突导致 catalog invalid，不静默覆盖。
+Prompt override 以完整 `prompt_id` 替换；不支持按字符串位置 patch。相同 id 的优先级依次为：账户显式 profile > 外部启用扩展 > 内置扩展（对应 `PromptSourcePriority` 的 `ACCOUNT > EXTERNAL > BUILTIN`）。
+
+冲突判定粒度为 `(prompt_id, version, priority)`：同一三元组重复注册导致 catalog invalid（`PROMPT_VERSION_PRIORITY_CONFLICT`），不静默覆盖。同一 `prompt_id` 在同一优先级下允许多个 version 共存（来自**不同** PromptProvider / 不同扩展）；解析时先取最高优先级，再取该优先级内最高 SemVer 版本。
+
+单个 `PromptProvider` 以及单个 Prompt directory 对同一 `prompt_id` 仅允许暴露一个 version（`PROMPT_PROVIDER_ID_CONFLICT`）；同 ID 的多版本必须由不同 provider 分别注册。`PromptProvider.render` 仅接收 `prompt_id`：版本选择由 registry 在调用前完成，并路由到持有该 version 的 provider 实例。
+
+配套公开 DTO：`PromptSelection`、`PromptProfileDescriptor`（`benchmark.contracts`）。`PromptRegistry.render` 支持 keyword-only 可选参数 `version: str | None = None` 用于钉住特定版本。
 
 ## 6. Provider Ports
+
+除 `LLMClientPort` 外，Provider port 均携带自描述元数据属性：`id: str`、`version: str`、`capabilities: tuple[str, ...]`、`config_schema: Mapping[str, JsonValue]`。
 
 ```python
 class LLMClientPort(Protocol):
     def complete(self, request: "LLMRequest") -> "LLMResponse": ...
 
 class MemoryStorePort(Protocol):
-    def search(self, account_id: int, query: str, limit: int) -> Sequence["MemoryRecord"]: ...
-    def add(self, account_id: int, content: str, metadata: Mapping[str, JsonValue]) -> str: ...
-    def delete_all(self, account_id: int) -> int: ...
+    id: str
+    version: str
+    capabilities: tuple[str, ...]
+    config_schema: Mapping[str, JsonValue]
+
+    def search(
+        self,
+        account_id: int | str,
+        query: str,
+        limit: int,
+        *,
+        market: Market,
+    ) -> Sequence["MemoryRecord"]: ...
+
+    def add(
+        self,
+        account_id: int | str,
+        content: str,
+        metadata: Mapping[str, JsonValue],
+        *,
+        market: Market,
+    ) -> str: ...
+
+    def delete_all(self, account_id: int | str) -> int: ...
     def healthcheck(self) -> "HealthStatus": ...
 
 class MarketDataPort(Protocol):
+    id: str
+    version: str
+    capabilities: tuple[str, ...]
+    config_schema: Mapping[str, JsonValue]
+
     def get_price(self, symbol: str, market: Market) -> "PriceResult": ...
     def get_klines(self, query: "KlineQuery") -> "KlineResult": ...
     def get_market_status(self, symbol: str, market: Market) -> "MarketStatusResult": ...
+    def healthcheck(self) -> "HealthStatus": ...
 
 class SandboxPort(Protocol):
-    def lease(self, account_id: int) -> "SandboxLease": ...
+    id: str
+    version: str
+    capabilities: tuple[str, ...]
+    config_schema: Mapping[str, JsonValue]
 
-class EventSink(Protocol):
-    def emit(self, event: "RuntimeEvent") -> None: ...
+    def lease(self, account_id: int) -> "SandboxLease": ...
+    def release(self, lease: "SandboxLease") -> None: ...
+    def healthcheck(self) -> "HealthStatus": ...
 ```
 
-Provider port 与 Agent/Tool 一样采用同步接口。Provider 错误统一包含 `code`、`message`、`retryable`、`provider_id`；provider adapter 内完成第三方异常归一化。第三方扩展可在自身实现内部使用异步 I/O，但必须同步返回 port 规定的结果，系统不负责驱动其 event loop。
+`LLMRequest.model` 为 `str | None`；`None` 表示使用 `LLMClientPort` 已绑定的模型。只有显式提供非空模型时，Provider adapter 才校验请求模型与绑定模型是否一致。Agent 不得依赖 Port 未公开声明的模型属性，也不得构造占位模型名。
+
+事件下沉接口按运行时分为两套，事件负载类型不同，不设统一 `RuntimeEvent`：
+
+```python
+# benchmark.agents
+class EventSink(Protocol):
+    def emit(self, event: "AgentRuntimeEvent") -> None: ...
+
+# benchmark.tools
+class ToolEventSink(Protocol):
+    def emit(self, event: "ToolRuntimeEvent") -> None: ...
+```
+
+`AgentRuntimeEvent.type` 允许：`agent.started`、`agent.completed`、`agent.failed`、`agent.cancelled`、`agent.step`。`agent.step` 对应内置 Agent 的逐步回调；`metadata` 必须包含 1-based `step_number` 和 `role`，并保留 `content`、`tool_calls`、`name`、`tool_call_id` 等消息字段。持久化到 `AgentTrace` 由 M16 完成。
+
+Provider port 与 Agent/Tool 一样采用同步接口。Provider 错误统一包含 `code`、`message`、`retryable`、`provider_id`；四字段由 `benchmark.contracts.ProviderError` 直接承载（`retryable`/`provider_id` 为 keyword-only、有默认值），provider adapter 内完成第三方异常归一化。第三方扩展可在自身实现内部使用异步 I/O，但必须同步返回 port 规定的结果，系统不负责驱动其 event loop。
 
 ## 7. Trade Command Gateway
 
@@ -270,10 +341,13 @@ class TradeCommandResult:
     order_id: int | None
     trade_id: int | None
     normalized_command: TradeCommand
+    raw_result: Mapping[str, JsonValue] = field(default_factory=dict)  # 底层执行器原始结果快照；构造期 to_jsonable + 递归冻结
 
 class TradeCommandGateway(Protocol):
     def execute(self, command: TradeCommand) -> TradeCommandResult: ...
 ```
+
+`TradeCommand` / `TradeCommandResult` DTO 位于 `benchmark.contracts`。`TradeCommandGateway` Protocol 及其实现位于 `benchmark.application.trading`（系统侧接口，不属于第 1 节的扩展公开命名空间）：扩展只能通过 `core.execute_trade` 工具间接触发交易，不得直接 import gateway。实现类上除 `execute` 之外的方法（如 `create_order`、`cancel_order`、`process_pending`）为 Internal，不对扩展承诺。
 
 HTTP、WS 和 `core.execute_trade` 都必须调用同一个 gateway。`idempotency_key` 在 Agent 工具中固定为 `{decision_round_id}:{tool_call_id}`。Gateway 是唯一允许协调订单、成交、持仓和现金写入的应用接口。
 
@@ -331,7 +405,7 @@ capabilities:
     - sandbox.write
 ```
 
-Manifest 路径必须相对扩展根目录，禁止 `..` 逃逸。装载阶段只 import 声明的 entrypoint；不扫描并执行任意 Python 文件。
+Manifest 路径必须相对扩展根目录：禁止绝对路径与 `..` 分段，且路径在 `resolve()` 后（含 symlink 解析）不得逃逸扩展根目录。结构约束：manifest 必须至少声明一类 component；声明了 `agents` 或 `tools` 时必须提供 `python` 段。装载阶段只 import 声明的 entrypoint；不扫描并执行任意 Python 文件。
 
 ## 9. 账户扩展配置
 
@@ -354,9 +428,10 @@ Manifest 路径必须相对扩展根目录，禁止 `..` 逃逸。装载阶段�
 
 ## 10. 错误规范
 
-公共异常只用于框架级错误：
+公共异常只用于框架级错误。所有公共异常继承自 `benchmark.contracts.BenchmarkError`（携带 `message`/`code`/`details`，提供 `to_dict()`）：
 
 ```text
+BenchmarkError                # 基类
 ExtensionManifestError
 ExtensionLoadError
 ComponentNotFoundError
@@ -365,9 +440,11 @@ ComponentConfigError
 AgentRuntimeError
 ToolRuntimeError
 PromptRenderError
-ProviderError
+ProviderError                 # 额外携带 retryable / provider_id
 TradeGatewayError
 ```
+
+各公开子包另导出注册期异常：`PromptLoadError`、`PromptRegistryFrozenError`（`benchmark.prompts`）、`AgentRegistryFrozenError`（`benchmark.agents`）、`ToolRegistryFrozenError`（`benchmark.tools`）。它们均派生自上表基类，扩展可按基类捕获。
 
 API 错误格式保持：
 
@@ -391,3 +468,21 @@ API 错误格式保持：
 - v1 内接口新增参数必须为 keyword-only 且有默认值。
 - 系统启动日志列出装载的 extension/component id、version 和来源，不记录密钥。
 - 账户保存 component version，用于 trace 可复现；系统不得在运行中静默切换版本。
+
+## 附录 A：条款落地波次对照（非规范性）
+
+本规范描述 v1 目标态。以下条款在当前开发进度（Wave 1 接口骨架）下尚未落地，属计划内空窗，接口评审时不视为违例；落地波次以 `module-groups.md` 为准：
+
+| 条款 | 归属模块 | 计划波次 |
+| --- | --- | --- |
+| §3/§7.1 `DecisionRoundService` 经 ThreadPoolExecutor 编排 `AgentRuntime.run()`（当前委托 legacy 调度） | M10 | Wave 3 |
+| §4 `core.*` 内置工具在 `benchmark/builtin/tools` 落地（当前为 legacy 无前缀实现 + 名称别名映射） | M06 | Wave 2 |
+| §5 账户显式 profile 优先级（`PromptSourcePriority.ACCOUNT`）接线 | M12 | Wave 2/3 |
+| §7 HTTP/WS 下单统一经 `TradeCommandGateway`（当前直调 `order_matching`） | M21 | Wave 3 |
+| §7 Agent 工具强制 `{decision_round_id}:{tool_call_id}` idempotency key（当前 legacy 工具层允许显式覆盖） | M06 | Wave 2 |
+| §7.1 决策 worker 使用独立 UoW（当前为独立 `SessionLocal` + finally 关闭） | M10 | Wave 3 |
+| §8 装载阶段只 import 声明 entrypoint（loader/discovery/catalog 未实现） | M13 | Wave 2/3 |
+| §9 账户扩展配置整节（DTO、保存校验、`configuration_invalid`） | M12 | Wave 2/3 |
+| §10 API 错误信封（`error` 包装 + `request_id`） | M14/M21 | Wave 3 |
+| §11 跨扩展 component id 全局唯一仲裁、启动装载日志 | M13 | Wave 2/3 |
+| §11 账户钉 `component_versions`、禁止运行中静默切换版本 | M12 | Wave 2/3 |

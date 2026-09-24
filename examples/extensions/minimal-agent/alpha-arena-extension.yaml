@@ -1,0 +1,15 @@
+api_version: 1
+id: com.example.minimal-agent
+version: 1.0.0
+name: Minimal Hold Agent
+description: Smallest Agent that returns HOLD from a synchronous run().
+python:
+  requires: ">=3.10"
+  entrypoint: agent:HoldAgentFactory
+components:
+  agents:
+    - id: com.example.minimal-agent
+      factory: agent:HoldAgentFactory
+      config_schema: schema.json
+capabilities:
+  requested: []

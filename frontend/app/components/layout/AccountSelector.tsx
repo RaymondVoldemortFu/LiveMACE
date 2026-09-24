@@ -8,21 +8,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { getAccounts } from '@/lib/api'
+import { useAccounts } from '@/hooks/useAccounts'
 import { isBaselineAccountName } from '@/lib/baselineAccounts'
 
-interface Account {
-  id: number
-  user_id?: number
-  username?: string
-  name: string
-  account_type: string
-  initial_capital: number
-  current_cash: number
-  frozen_cash: number
-  model?: string
-  is_active?: boolean
-}
+type Account = Pick<import('@/lib/api/generated-types').PortfolioAccount,
+  'id' | 'user_id' | 'name' | 'account_type' | 'initial_capital' | 'current_cash' | 'frozen_cash'>
+  & Partial<Pick<import('@/lib/api/generated-types').TradingAccount, 'username' | 'model' | 'is_active'>>
 
 interface AccountWithAssets extends Account {
   total_assets: number
@@ -50,11 +41,10 @@ export default function AccountSelector({
 }: AccountSelectorProps) {
   const [accounts, setAccounts] = useState<AccountWithAssets[]>([])
   const [loading, setLoading] = useState(true)
+  const loaded = useAccounts(refreshTrigger ?? 0)
 
   useEffect(() => {
-    // If external accounts are provided, use them and skip internal fetching
     if (externalAccounts && externalAccounts.length >= 0) {
-      // Map external accounts to AccountWithAssets shape if needed
       const mapped = externalAccounts.map((a: any) => ({
         ...a,
         total_assets: (a as any).total_assets ?? ((a.current_cash || 0) + (a.frozen_cash || 0)),
@@ -64,30 +54,14 @@ export default function AccountSelector({
       setLoading(loadingExternal ?? false)
       return
     }
-    fetchAccounts()
-  }, [username, refreshTrigger, externalAccounts, loadingExternal])  // Add refreshTrigger to dependency array
-
-  const fetchAccounts = async () => {
-    try {
-      // Use default functions with hardcoded username for paper trading
-      const accountData = await getAccounts()
-      console.log('Fetched accounts:', accountData)
-      
-      // Get account-specific data for each account
-      // Fast path: avoid per-account overview calls to minimize latency on page switches
-      const accountsWithAssets: AccountWithAssets[] = accountData.map((account) => ({
-        ...account,
-        total_assets: account.current_cash + account.frozen_cash,
-        positions_value: 0,
-      }))
-      
-      setAccounts(accountsWithAssets)
-    } catch (error) {
-      console.error('Error fetching accounts:', error)
-    } finally {
-      setLoading(false)
-    }
-  }
+    if (loaded.error) console.error('Error fetching accounts:', loaded.error)
+    setAccounts(loaded.accounts.map((account) => ({
+      ...account,
+      total_assets: account.current_cash + account.frozen_cash,
+      positions_value: 0,
+    })))
+    setLoading(loaded.loading)
+  }, [username, refreshTrigger, externalAccounts, loadingExternal, loaded.accounts, loaded.loading, loaded.error])
 
   if (loading) {
     return (

@@ -1,9 +1,8 @@
 /**
  * Compliance Stats Cards - Display key compliance metrics
  */
-import React from 'react'
 import { Shield, CheckCircle, TrendingUp, Brain, AlertTriangle } from 'lucide-react'
-import { type ComplianceStats } from '@/lib/compliance-api'
+import type { ComplianceStats } from '@/lib/api/generated-types'
 
 interface ComplianceStatsCardsProps {
   stats: ComplianceStats

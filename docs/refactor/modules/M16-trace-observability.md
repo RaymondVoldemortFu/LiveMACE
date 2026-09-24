@@ -47,3 +47,7 @@ class RuntimeEvent:
 
 前置 M10、M13、M19。可与前端扩展 UI 和 bootstrap 并行；M22 使用其数据。
 
+
+## 2026-09-25 事件关联收尾
+
+PersistentEventSink 在日志和数据库写入前生成同一 event id，输出脱敏结构化记录；持久化失败 warning 保留该 id。回归测试覆盖日志/DB 身份一致和写入失败时的凭据脱敏。

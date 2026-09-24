@@ -4,7 +4,6 @@ import os
 dotenv.load_dotenv()
 
 class AgentConfig:
-    USE_AGENT = True
     AGENT_TYPE = "react"  # default agent architecture
     MAX_STEPS = 100
     STEP_REMINDER_THRESHOLD = 5
@@ -40,10 +39,8 @@ class AgentConfig:
     # Agent execution concurrency
     AGENT_MAX_CONCURRENCY = max(1, int(os.getenv("AGENT_MAX_CONCURRENCY", "25")))
 
-    # US stock data source behavior (Alpaca)
-    # True: force feed=IEX
-    # False: do not pass feed argument (Alpaca default routing)
-    ALPACA_USE_IEX_FEED = os.getenv("ALPACA_USE_IEX_FEED", "true").strip().lower() in {"1", "true", "yes", "on"}
+    # Compatibility alias: US market requests always explicitly select IEX.
+    ALPACA_USE_IEX_FEED = True
 
     # Memory Configuration
     # Note: Memory is now controlled per-account via account.memory_enabled field

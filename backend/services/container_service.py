@@ -14,6 +14,9 @@ logger = logging.getLogger(__name__)
 class ContainerService:
     _instance = None
     _instance_lock = threading.Lock()
+    #: Docker HTTP calls during shutdown are bounded so bootstrap cleanup
+    #: cannot hang forever waiting on the daemon.
+    DEFAULT_SHUTDOWN_TIMEOUT_SECONDS = 10.0
 
     def __new__(cls):
         with cls._instance_lock:
@@ -23,30 +26,37 @@ class ContainerService:
         return cls._instance
 
     def __init__(self):
-        if self._initialized:
-            return
-        self._initialized = True
-        self._lock = threading.RLock()
-        self._condition = threading.Condition(self._lock)
-        self._shutdown_registered = False
+        # Construction is shared by concurrent account workers. Publish readiness
+        # only after the client, lease maps and condition are all initialized.
+        with self._instance_lock:
+            if self._initialized:
+                return
+            self._lock = threading.RLock()
+            self._condition = threading.Condition(self._lock)
+            self._shutdown_registered = False
 
-        try:
-            self.client = docker.from_env()
-            self._build_image_if_needed()
-        except Exception as e:
-            logger.error(f"Failed to initialize Docker client: {e}")
-            self.client = None
+            try:
+                self.client = docker.from_env()
+                self._build_image_if_needed()
+            except Exception as e:
+                logger.error(f"Failed to initialize Docker client: {e}")
+                self.client = None
 
-        # account_id -> container_object (leased)
-        self.active_containers: Dict[int, docker.models.containers.Container] = {}
-        # idle pooled containers
-        self.idle_containers: List[docker.models.containers.Container] = []
-        # initialized pool marker
-        self._pool_initialized = False
+            # account_id -> container_object (leased)
+            self.active_containers: Dict[int, docker.models.containers.Container] = {}
+            # Every adapter lease has an identity. A container may be shared by
+            # overlapping leases from the same account, but it is returned to the
+            # idle pool only after the final lease is released.
+            self._active_lease_ids: Dict[int, set[str]] = {}
+            # idle pooled containers
+            self.idle_containers: List[docker.models.containers.Container] = []
+            # initialized pool marker
+            self._pool_initialized = False
 
-        if not self._shutdown_registered:
-            atexit.register(self.shutdown)
-            self._shutdown_registered = True
+            if not self._shutdown_registered:
+                atexit.register(self.shutdown)
+                self._shutdown_registered = True
+            self._initialized = True
 
     def _parse_image_reference(self, image_ref: str) -> Tuple[str, str]:
         """Split image reference into (repository, tag)."""
@@ -215,6 +225,7 @@ class ContainerService:
         return {
             "open-alpha-arena-bench.managed": "true",
             "open-alpha-arena-bench.component": "agent-sandbox",
+            "open-alpha-arena-bench.instance": os.getenv("SANDBOX_INSTANCE", "default"),
         }
 
     def _create_container(self):
@@ -246,7 +257,7 @@ class ContainerService:
         try:
             stale_managed = self.client.containers.list(
                 all=True,
-                filters={"label": "open-alpha-arena-bench.managed=true"},
+                filters={"label": [f"{key}={value}" for key, value in self._container_labels().items()]},
             )
             for c in stale_managed:
                 self._remove_container_quietly(c)
@@ -257,7 +268,8 @@ class ContainerService:
         try:
             exited = self.client.containers.list(
                 all=True,
-                filters={"ancestor": AgentConfig.DOCKER_IMAGE_NAME, "status": "exited"},
+                filters={"ancestor": AgentConfig.DOCKER_IMAGE_NAME, "status": "exited",
+                         "label": [f"{key}={value}" for key, value in self._container_labels().items()]},
             )
             for c in exited:
                 self._remove_container_quietly(c)
@@ -277,7 +289,9 @@ class ContainerService:
         self._pool_initialized = True
         logger.info(f"Container pool initialized with {len(self.idle_containers)} idle containers")
 
-    def lease_container(self, account_id: int) -> Optional[str]:
+    def lease_container(
+        self, account_id: int, lease_id: Optional[str] = None
+    ) -> Optional[str]:
         """
         Lease a container from the pool for a specific account.
         Returns container ID.
@@ -287,11 +301,15 @@ class ContainerService:
             return None
 
         with self._condition:
+            effective_lease_id = lease_id or "legacy-exclusive-lease"
             self._initialize_pool_if_needed()
             self._sync_pool_size()
 
             existing = self.active_containers.get(account_id)
             if existing and self._is_container_healthy(existing):
+                self._active_lease_ids.setdefault(account_id, set()).add(
+                    effective_lease_id
+                )
                 return existing.id
             if existing:
                 self._remove_container_quietly(existing)
@@ -309,6 +327,9 @@ class ContainerService:
                     candidate = self.idle_containers.pop()
                     if self._is_container_healthy(candidate):
                         self.active_containers[account_id] = candidate
+                        self._active_lease_ids.setdefault(account_id, set()).add(
+                            effective_lease_id
+                        )
                         logger.info(
                             f"Leased pooled container {candidate.id[:12]} to account {account_id}"
                         )
@@ -321,6 +342,9 @@ class ContainerService:
                     try:
                         new_container = self._create_container()
                         self.active_containers[account_id] = new_container
+                        self._active_lease_ids.setdefault(account_id, set()).add(
+                            effective_lease_id
+                        )
                         logger.info(
                             f"Leased new container {new_container.id[:12]} to account {account_id}"
                         )
@@ -334,12 +358,24 @@ class ContainerService:
                     return None
                 self._condition.wait(timeout=min(remaining, 1.0))
 
-    def release_container(self, account_id: int):
+    def release_container(self, account_id: int, lease_id: Optional[str] = None):
         """
         Return leased container to idle pool.
         Unhealthy containers are removed.
         """
         with self._condition:
+            effective_lease_id = lease_id or "legacy-exclusive-lease"
+            active_lease_ids = self._active_lease_ids.get(account_id)
+            if not active_lease_ids or effective_lease_id not in active_lease_ids:
+                if lease_id is not None:
+                    raise ValueError(
+                        f"Unknown sandbox lease {lease_id!r} for account {account_id}"
+                    )
+                return
+            active_lease_ids.remove(effective_lease_id)
+            if active_lease_ids:
+                return
+            self._active_lease_ids.pop(account_id, None)
             container = self.active_containers.pop(account_id, None)
             if not container:
                 return
@@ -358,6 +394,12 @@ class ContainerService:
             self._condition.notify_all()
 
     def _get_or_recover_container(self, account_id: int):
+        # The whole recovery runs inside one ownership critical section (the
+        # condition lock is re-entrant), so a concurrent release cannot
+        # interleave between state inspection and the recovery lease. The
+        # only place the lock can be dropped is lease_container's capacity
+        # wait, which is why the final decision below is taken from the
+        # *live* lease set instead of a snapshot taken before leasing.
         with self._condition:
             container = self.active_containers.get(account_id)
             if container and self._is_container_healthy(container):
@@ -367,13 +409,23 @@ class ContainerService:
             # exited/dead containers occupying Docker resources.
             if container:
                 self._remove_container_quietly(container)
+                self.active_containers.pop(account_id, None)
 
-            # Try to recover by leasing a fresh one transparently
-            self.active_containers.pop(account_id, None)
-        leased_id = self.lease_container(account_id)
-        if not leased_id:
-            return None
-        with self._condition:
+            # Recover by leasing a fresh container under an internal lease.
+            recovery_lease_id = f"internal-recovery-{time.monotonic_ns()}"
+            leased_id = self.lease_container(account_id, recovery_lease_id)
+            if not leased_id:
+                return None
+
+            lease_ids = self._active_lease_ids[account_id]
+            lease_ids.discard(recovery_lease_id)
+            if not lease_ids:
+                # No external lease survived (either the account never had
+                # one, or the last one was released while waiting for pool
+                # capacity). Hold the container under the legacy exclusive
+                # lease so the invariant "active container => non-empty
+                # lease set" holds and the legacy release path still owns it.
+                lease_ids.add("legacy-exclusive-lease")
             return self.active_containers.get(account_id)
 
     def execute_command(self, account_id: int, cmd: str) -> Tuple[int, str]:
@@ -474,44 +526,140 @@ class ContainerService:
         except Exception as e:
             return f"Error writing file: {e}"
 
+    def _set_client_timeout(self, timeout: float):
+        client = self.client
+        previous = (
+            getattr(client, "timeout", None),
+            getattr(getattr(client, "api", None), "timeout", None),
+        )
+        if hasattr(client, "timeout"):
+            client.timeout = timeout
+        api = getattr(client, "api", None)
+        if api is not None and hasattr(api, "timeout"):
+            api.timeout = timeout
+        return previous
+
+    def _restore_client_timeout(self, previous) -> None:
+        client_timeout, api_timeout = previous
+        client = self.client
+        if hasattr(client, "timeout"):
+            client.timeout = client_timeout
+        api = getattr(client, "api", None)
+        if api is not None and hasattr(api, "timeout"):
+            api.timeout = api_timeout
+
+    def _remove_container_for_shutdown(self, container) -> None:
+        """Remove a container; already-gone is the desired end state."""
+        try:
+            container.remove(force=True)
+        except docker.errors.NotFound:
+            return
+
     def shutdown(self):
-        """
-        Stops all active/idle containers and cleans stale managed containers.
-        """
+        """Stop owned containers; fail if any tracked resource remains."""
         logger.info("Shutting down ContainerService...")
         if not self.client:
             return
 
-        with self._condition:
-            for account_id, container in list(self.active_containers.items()):
+        deadline = time.monotonic() + self.DEFAULT_SHUTDOWN_TIMEOUT_SECONDS
+        previous_timeout = self._set_client_timeout(
+            self.DEFAULT_SHUTDOWN_TIMEOUT_SECONDS
+        )
+        failures: List[str] = []
+        try:
+            with self._condition:
+                def apply_remaining_timeout() -> None:
+                    left = deadline - time.monotonic()
+                    if left <= 0:
+                        raise TimeoutError("container shutdown deadline exceeded")
+                    self._set_client_timeout(left)
+
+                for account_id, container in list(self.active_containers.items()):
+                    container_id = getattr(container, "id", str(container))
+                    try:
+                        apply_remaining_timeout()
+                        self._remove_container_for_shutdown(container)
+                    except Exception as exc:
+                        failures.append(
+                            f"active {account_id}/{container_id}: "
+                            f"{type(exc).__name__}: {exc}"
+                        )
+                        logger.error(
+                            "Failed to remove active container for account %s: %s",
+                            account_id,
+                            exc,
+                        )
+                    else:
+                        self.active_containers.pop(account_id, None)
+                        self._active_lease_ids.pop(account_id, None)
+                        logger.info(
+                            "Removed active container %s for account %s",
+                            str(container_id)[:12],
+                            account_id,
+                        )
+
+                remaining_idle = []
+                for container in list(self.idle_containers):
+                    container_id = getattr(container, "id", str(container))
+                    try:
+                        apply_remaining_timeout()
+                        self._remove_container_for_shutdown(container)
+                    except Exception as exc:
+                        failures.append(
+                            f"idle {container_id}: {type(exc).__name__}: {exc}"
+                        )
+                        remaining_idle.append(container)
+                        logger.error(
+                            "Failed to remove idle container %s: %s",
+                            container_id,
+                            exc,
+                        )
+                    else:
+                        logger.info("Removed idle container %s", str(container_id)[:12])
+                self.idle_containers = remaining_idle
+
+                # Recovery can leave lease tokens without an active container.
+                # Those keys must not survive a cleanup pass: the next lease
+                # would inherit them and never return the container to the pool.
+                for account_id in list(self._active_lease_ids):
+                    if account_id not in self.active_containers:
+                        self._active_lease_ids.pop(account_id, None)
+
                 try:
-                    container.remove(force=True)
-                    logger.info(f"Removed active container {container.id[:12]} for account {account_id}")
-                except Exception as e:
-                    logger.error(f"Failed to remove active container for account {account_id}: {e}")
-            self.active_containers.clear()
+                    apply_remaining_timeout()
+                    tracked_ids = self._tracked_container_ids()
+                    leaked = self.client.containers.list(
+                        all=True,
+                        filters={"label": [f"{key}={value}" for key, value in self._container_labels().items()]},
+                    )
+                    for container in leaked:
+                        container_id = getattr(container, "id", None)
+                        if container_id in tracked_ids:
+                            continue
+                        try:
+                            apply_remaining_timeout()
+                            self._remove_container_for_shutdown(container)
+                        except Exception as exc:
+                            failures.append(
+                                f"leaked {container_id}: {type(exc).__name__}: {exc}"
+                            )
+                except Exception as exc:
+                    failures.append(
+                        f"list leaked containers: {type(exc).__name__}: {exc}"
+                    )
+                    logger.warning(
+                        "Failed to cleanup leaked managed containers: %s",
+                        exc,
+                    )
 
-            for container in list(self.idle_containers):
-                try:
-                    container.remove(force=True)
-                    logger.info(f"Removed idle container {container.id[:12]}")
-                except Exception as e:
-                    logger.error(f"Failed to remove idle container: {e}")
-            self.idle_containers.clear()
+                if failures:
+                    raise RuntimeError(
+                        "container shutdown incomplete: " + "; ".join(failures)
+                    )
 
-            # Best-effort cleanup for managed containers that might be untracked
-            try:
-                leaked = self.client.containers.list(
-                    all=True,
-                    filters={"label": "open-alpha-arena-bench.managed=true"},
-                )
-                for container in leaked:
-                    self._remove_container_quietly(container)
-            except Exception as e:
-                logger.warning(f"Failed to cleanup leaked managed containers: {e}")
-
-            self._pool_initialized = False
-            self._condition.notify_all()
+                self._pool_initialized = False
+                self._condition.notify_all()
+        finally:
+            self._restore_client_timeout(previous_timeout)
 
         logger.info("ContainerService shutdown complete.")
-

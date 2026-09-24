@@ -14,7 +14,7 @@ interface TradeButtonsProps {
   price: number
   quantity: number
   leverage?: number
-  side?: 'LONG' | 'SHORT' | 'BUY' | 'SELL'
+  side?: 'BUY' | 'SELL'
   user?: {
     current_cash: number
     frozen_cash: number
@@ -32,7 +32,7 @@ export default function TradeButtons({
   price,
   quantity,
   leverage = 1,
-  side = 'LONG',
+  side = 'BUY',
   user,
   positions = [],
   lastPrices = {},
@@ -52,19 +52,13 @@ export default function TradeButtons({
   }, [positions, symbol, market])
   
   const effectivePrice = orderType === 'MARKET' ? (lastPrices[`${symbol}.${market}`] ?? price) : price
-  const maxBuyable = leverage > 1 
-    ? Math.floor((availableCash * leverage) / Math.max(effectivePrice || 0, 0.0001)) || 0
-    : Math.floor(availableCash / Math.max(effectivePrice || 0, 0.0001)) || 0
+  const buyingPower = availableCash * Math.max(leverage, 1)
+  const maxBuyable = effectivePrice && effectivePrice > 0
+    ? buyingPower / effectivePrice : 0
   
   // Determine button text and color based on side
-  const buttonText = side === 'LONG' ? 'Open Long' 
-    : side === 'SHORT' ? 'Open Short'
-    : side === 'BUY' ? 'Close Short'
-    : 'Close Long'
-  
-  const buttonColor = (side === 'LONG' || side === 'BUY') 
-    ? 'bg-green-600 hover:bg-green-500' 
-    : 'bg-red-600 hover:bg-red-500'
+  const buttonText = side === 'BUY' ? 'Buy (Long)' : 'Sell (Long)'
+  const buttonColor = side === 'BUY' ? 'bg-green-600 hover:bg-green-500' : 'bg-red-600 hover:bg-red-500'
 
   return (
     <div className="space-y-4">
@@ -88,16 +82,16 @@ export default function TradeButtons({
           <span className="text-xs">Frozen Cash</span>
           <span className="text-xs text-orange-500">{currencySymbol}{frozenCash.toFixed(2)}</span>
         </div>
-        {(side === 'SELL' || side === 'BUY') && (
+        {(side === 'SELL') && (
           <div className="flex justify-between">
             <span className="text-xs">Available Position</span>
             <span className="text-xs text-purple-500">{positionAvailable}</span>
           </div>
         )}
-        {(side === 'LONG' || side === 'SHORT') && (
+        {(side === 'BUY') && (
           <div className="flex justify-between">
             <span className="text-xs">Max Quantity</span>
-            <span className="text-xs">{maxBuyable.toFixed(4)}</span>
+            <span className="text-xs">{maxBuyable.toFixed(8)}</span>
           </div>
         )}
       </div>

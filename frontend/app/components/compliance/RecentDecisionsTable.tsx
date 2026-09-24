@@ -1,9 +1,8 @@
 /**
  * Recent Decisions Table - Display recent trading decisions with compliance scores
  */
-import React from 'react'
 import { CheckCircle, XCircle, TrendingUp, TrendingDown, Minus } from 'lucide-react'
-import { type RecentDecisions } from '@/lib/compliance-api'
+import type { RecentDecisions } from '@/lib/api/generated-types'
 
 interface RecentDecisionsTableProps {
   decisions: RecentDecisions
@@ -18,7 +17,8 @@ export default function RecentDecisionsTable({ decisions }: RecentDecisionsTable
     )
   }
 
-  const formatTimestamp = (timestamp: string) => {
+  const formatTimestamp = (timestamp: string | null) => {
+    if (!timestamp) return '-'
     const date = new Date(timestamp)
     return date.toLocaleString('en-US', {
       month: 'short',

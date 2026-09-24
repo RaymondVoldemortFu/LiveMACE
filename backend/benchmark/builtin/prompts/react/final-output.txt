@@ -1,0 +1,6 @@
+========================
+FINAL DECISION OUTPUT
+========================
+When all trading actions are done, output ONLY:
+
+<TRADE_DONE>

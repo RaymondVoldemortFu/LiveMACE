@@ -6,8 +6,8 @@
 
 ## 文件边界
 
-- 新增：`backend/alpha_arena/extensions/{__init__,manifest,validation,paths}.py`。
-- 新增：`backend/tests/extensions/test_manifest_*.py`、`backend/alpha_arena/extensions/schema/manifest-v1.json`。
+- 新增：`backend/benchmark/extensions/{__init__,manifest,validation,paths}.py`。
+- 新增：`backend/tests/extensions/test_manifest_*.py`、`backend/benchmark/extensions/schema/manifest-v1.json`。
 - 禁止修改 bootstrap、Agent factory、Tool registry。
 
 ## 暴露接口
@@ -29,7 +29,7 @@ def validate_extension_directory(root: Path) -> ValidationReport
 - [ ] 读取 YAML 时限制文件大小、alias 数量和嵌套深度。
 - [ ] config schema、Prompt index 文件必须存在且是可解析 JSON/YAML。
 - [ ] 校验 capability 只来自系统已知字符串；未知项报告 error。
-- [ ] 提供 `python -m alpha_arena.extensions.validate <dir>`，成功为 0，失败为 2。
+- [ ] 提供 `python -m benchmark.extensions.validate <dir>`，成功为 0，失败为 2。
 
 ## 验收
 

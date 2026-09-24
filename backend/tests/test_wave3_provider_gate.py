@@ -1,0 +1,276 @@
+"""Provider acceptance must match the accounts being enabled; tools stay bounded."""
+
+import importlib.util
+import json
+from pathlib import Path
+import sys
+from types import SimpleNamespace
+
+import httpx
+import pytest
+
+ROOT = Path(__file__).resolve().parents[2]
+PUBLIC_APIS = ROOT / "backend/services/agent/public-apis"
+
+
+def load_module(path, name):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.fixture
+def provider(monkeypatch):
+    import dotenv
+
+    monkeypatch.setattr(dotenv, "load_dotenv", lambda *args, **kwargs: None)
+    monkeypatch.setenv("WAVE3_PRODUCTION", "true")
+    monkeypatch.setenv("WAVE3_MODEL", "deepseek-flash")
+    monkeypatch.setenv("BASE_URL", "https://api.deepseek.com/v1")
+    monkeypatch.setenv("API_KEY", "test-only-wave3-key")
+    monkeypatch.setenv("openai_model", "old-model")
+    monkeypatch.setenv("base_url", "https://old-provider.invalid/v1")
+    monkeypatch.setenv("api_key", "test-only-legacy-key")
+    monkeypatch.setenv("LLM_REQUEST_TIMEOUT_SECONDS", "60")
+    monkeypatch.setenv("LLM_MAX_OUTPUT_TOKENS", "1024")
+    monkeypatch.setenv("DEEPSEEK_THINKING_MODE", "disabled")
+    return {
+        "passed": True,
+        "model": "deepseek-flash",
+        "base_url": "https://api.deepseek.com/v1",
+    }
+
+
+def validate(tmp_path, report, accounts=None):
+    runtime = load_module(ROOT / "scripts/wave3_runtime.py", "wave3_gate_test")
+    probe = tmp_path / "probe.json"
+    probe.write_text(json.dumps(report))
+    runtime.validate_model_probe(
+        probe,
+        accounts
+        or [
+            SimpleNamespace(
+                id=1, model="deepseek-flash", base_url="https://api.deepseek.com/v1"
+            )
+        ],
+    )
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"model": "gpt-5.6-luna"},
+        {"base_url": "https://old-provider.invalid/v1"},
+        {"base_url": None},
+        {"passed": "true"},
+        {"passed": False},
+    ],
+)
+def test_schedule_rejects_stale_or_failed_probe(tmp_path, provider, changes):
+    with pytest.raises(ValueError, match="successful model/tool probe"):
+        validate(tmp_path, {**provider, **changes})
+
+
+def test_schedule_accepts_current_provider_with_trailing_slash(tmp_path, provider):
+    validate(tmp_path, {**provider, "base_url": provider["base_url"] + "/"})
+
+
+@pytest.mark.parametrize("field,value", [("model", "old-model"), ("base_url", None)])
+def test_schedule_checks_every_selected_account(tmp_path, provider, field, value):
+    accounts = [
+        SimpleNamespace(id=i, model=provider["model"], base_url=provider["base_url"])
+        for i in (1, 2)
+    ]
+    setattr(accounts[1], field, value)
+    with pytest.raises(ValueError, match="Account 2"):
+        validate(tmp_path, provider, accounts)
+
+
+@pytest.mark.parametrize("content", [None, "{broken", "[]"])
+def test_schedule_fails_closed_for_missing_or_corrupt_evidence(
+    tmp_path, provider, content
+):
+    runtime = load_module(ROOT / "scripts/wave3_runtime.py", "wave3_gate_test")
+    probe = tmp_path / "probe.json"
+    if content is not None:
+        probe.write_text(content)
+    with pytest.raises(ValueError):
+        runtime.validate_model_probe(probe, [])
+
+
+def test_schedule_requires_explicit_environment(tmp_path, provider, monkeypatch):
+    monkeypatch.delenv("WAVE3_MODEL")
+    with pytest.raises(ValueError, match="WAVE3_MODEL"):
+        validate(tmp_path, provider)
+
+
+def make_client(config, handler):
+    client = config.get_openai_client()
+    client._client.close()
+    client._client = httpx.Client(transport=httpx.MockTransport(handler))
+    return client
+
+
+def completion_response(content="OK"):
+    return httpx.Response(
+        200,
+        json={
+            "id": "test",
+            "object": "chat.completion",
+            "created": 0,
+            "model": "deepseek-flash",
+            "choices": [
+                {
+                    "index": 0,
+                    "finish_reason": "stop",
+                    "message": {"role": "assistant", "content": content},
+                }
+            ],
+        },
+    )
+
+
+@pytest.mark.parametrize("tokens,expected", [(None, 1024), (4096, 1024), (128, 128)])
+def test_public_api_uses_current_provider_and_bounded_wire_request(
+    provider, tokens, expected
+):
+    config = load_module(PUBLIC_APIS / "config.py", "wave3_public_config_test")
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return completion_response()
+
+    with make_client(config, handler) as client:
+        assert client.max_retries == 0
+        kwargs = {"max_tokens": tokens} if tokens is not None else {}
+        client.chat.completions.create(
+            model=config.OPENAI_MODEL, messages=[], timeout=900, **kwargs
+        )
+    request = requests[0]
+    assert str(request.url) == "https://api.deepseek.com/v1/chat/completions"
+    assert request.headers["authorization"] == "Bearer test-only-wave3-key"
+    assert json.loads(request.content)["model"] == "deepseek-flash"
+    assert json.loads(request.content)["max_tokens"] == expected
+    assert json.loads(request.content)["thinking"] == {"type": "disabled"}
+    assert request.extensions["timeout"]["read"] == 60
+
+
+def test_public_api_retains_legacy_configuration_outside_wave3(provider, monkeypatch):
+    monkeypatch.setenv("WAVE3_PRODUCTION", "false")
+    config = load_module(PUBLIC_APIS / "config.py", "wave3_public_config_test")
+    assert (config.OPENAI_MODEL, config.BASE_URL, config.API_KEY) == (
+        "old-model",
+        "https://old-provider.invalid/v1",
+        "test-only-legacy-key",
+    )
+
+
+def test_public_api_obeys_parent_request_scope(provider):
+    from datetime import datetime, timedelta, timezone
+    from services.agent.request_scope import RequestScope, use_request_scope
+
+    config = load_module(PUBLIC_APIS / "config.py", "wave3_public_config_test")
+    requests = []
+    scope = RequestScope(
+        deadline_at=datetime.now(timezone.utc) + timedelta(seconds=10),
+        is_cancelled=lambda: False,
+        max_calls=1,
+        max_output_tokens=128,
+        events=SimpleNamespace(record=lambda *args: None),
+    )
+
+    def handler(request):
+        requests.append(request)
+        return completion_response()
+
+    with make_client(config, handler) as client, use_request_scope(scope):
+        client.chat.completions.create(model=config.OPENAI_MODEL, messages=[])
+        with pytest.raises(RuntimeError, match="LLM_BUDGET_EXCEEDED"):
+            client.chat.completions.create(model=config.OPENAI_MODEL, messages=[])
+    assert len(requests) == 1
+    assert json.loads(requests[0].content)["max_tokens"] == 128
+    assert requests[0].extensions["timeout"]["read"] <= 10
+
+
+def test_generated_tool_loads_with_host_config_and_reaches_current_provider(
+    provider, monkeypatch
+):
+    import config as host_config
+
+    server = load_module(PUBLIC_APIS / "api_server.py", "wave3_public_server_test")
+    public_config = server._load_config()
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return completion_response(
+            json.dumps({"expansions": [{"expansion": "Artificial Intelligence"}]})
+        )
+
+    with make_client(public_config, handler) as client:
+        monkeypatch.setattr(public_config, "get_openai_client", lambda: client)
+        result = server._run_api("acronymexpander", {"acronym": "AI"})
+    assert result["status"] == "ok"
+    assert sys.modules["config"] is host_config
+    assert json.loads(requests[0].content)["model"] == "deepseek-flash"
+    assert json.loads(requests[0].content)["thinking"] == {"type": "disabled"}
+
+
+def test_public_api_explicit_thinking_overrides_environment(provider):
+    config = load_module(PUBLIC_APIS / "config.py", "wave3_public_config_test")
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return completion_response()
+
+    explicit = {"thinking": {"type": "enabled"}}
+    with make_client(config, handler) as client:
+        client.chat.completions.create(
+            model=config.OPENAI_MODEL, messages=[], extra_body=explicit
+        )
+    assert json.loads(requests[0].content)["thinking"] == {"type": "enabled"}
+    assert explicit == {"thinking": {"type": "enabled"}}
+
+
+@pytest.mark.parametrize(
+    "arguments,expected",
+    [([], 1), (["--concurrency", "2"], 2), (["--concurrency", "4"], 4)],
+)
+def test_operator_script_sends_selected_concurrency(monkeypatch, arguments, expected):
+    import io
+    import urllib.request
+
+    runtime = load_module(ROOT / "scripts/wave3_runtime.py", "wave3_cli_test")
+    monkeypatch.setattr(runtime, "configure", lambda: None)
+    monkeypatch.setenv("DECISION_OPERATOR_TOKEN", "test-only-token")
+    monkeypatch.setattr(
+        sys, "argv", ["wave3_runtime.py", "round", "--accounts", "1", "2", *arguments]
+    )
+    requests = []
+
+    def urlopen(request, timeout):
+        requests.append(request)
+        return io.BytesIO(b'{"status":"ok"}')
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    runtime.main()
+    assert json.loads(requests[0].data) == {
+        "account_ids": [1, 2],
+        "max_concurrency": expected,
+    }
+
+
+@pytest.mark.parametrize("concurrency", ["0", "5", "many"])
+def test_operator_script_rejects_invalid_concurrency(monkeypatch, concurrency):
+    runtime = load_module(ROOT / "scripts/wave3_runtime.py", "wave3_cli_test")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["wave3_runtime.py", "round", "--accounts", "1", "--concurrency", concurrency],
+    )
+    with pytest.raises(SystemExit) as exc:
+        runtime.main()
+    assert exc.value.code == 2

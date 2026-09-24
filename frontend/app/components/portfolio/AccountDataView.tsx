@@ -20,76 +20,20 @@ import AccountSelector from '@/components/layout/AccountSelector'
 import TradingPanel from '@/components/trading/TradingPanel'
 import { Doughnut } from 'react-chartjs-2'
 import { Chart as ChartJS, ArcElement, Tooltip as ChartTooltip, Legend } from 'chart.js'
-import { AIDecision } from '@/lib/api'
-import { getEvalLeaderboard, getEvalAccountCheckpoints, EvalAccountCheckpointItem, EvalLeaderboardItem } from '@/lib/api'
+import type {
+  AIDecision,
+  EvalAccountCheckpointItem,
+  EvalLeaderboardItem,
+  PortfolioOrder as Order,
+  PortfolioOverview as Overview,
+  PortfolioPosition as Position,
+  PortfolioTrade as Trade,
+} from '@/lib/api/generated-types'
+import { getEvalAccountCheckpoints, getEvalLeaderboard } from '@/lib/api/evaluation'
+import { useTradingActions } from '@/hooks/useTradingActions'
 
 // Register Chart.js components for pie chart
 ChartJS.register(ArcElement, ChartTooltip, Legend)
-
-interface Account {
-  id: number
-  user_id: number
-  name: string
-  account_type: string
-  initial_capital: number
-  current_cash: number
-  frozen_cash: number
-}
-
-interface Overview {
-  account: Account
-  return_rate: number
-  total_assets?: number
-  total_notional_value: number
-  positions_notional_value: number
-  positions_market_value?: number
-}
-
-interface Position {
-  id: number
-  account_id?: number
-  user_id?: number
-  symbol: string
-  name: string
-  market: string
-  quantity: number
-  available_quantity: number
-  avg_cost: number
-  leverage: number
-  last_price?: number | null
-  market_value?: number | null
-  notional_value?: number | null
-}
-
-interface Order {
-  id: number
-  order_no: string
-  symbol: string
-  name: string
-  market: string
-  side: string
-  order_type: string
-  price?: number
-  quantity: number
-  leverage: number
-  filled_quantity: number
-  status: string
-}
-
-interface Trade {
-  id: number
-  order_id: number
-  account_id?: number
-  user_id?: number
-  symbol: string
-  name: string
-  market: string
-  side: string
-  price: number
-  quantity: number
-  commission: number
-  trade_time: string
-}
 
 interface AccountDataViewProps {
   overview: Overview | null
@@ -107,8 +51,6 @@ interface AccountDataViewProps {
   accounts?: any[]
   loadingAccounts?: boolean
 }
-
-const API_BASE = typeof window !== 'undefined' ? window.location.origin : 'http://127.0.0.1:5611'
 
 const EVAL_INTERVAL_OPTIONS: Array<{ label: string; seconds: number }> = [
   { label: '15m', seconds: 15 * 60 },
@@ -162,7 +104,7 @@ export default function AccountDataView({
         setEvalLoading(true)
         const res = await getEvalLeaderboard(evalIntervalSeconds, 'pnl')
         if (cancelled) return
-        setEvalPeriodEnd(res.period_end)
+        setEvalPeriodEnd(res.period_end ?? null)
         setLeaderboardItems(res.items || [])
       } catch (e: any) {
         if (cancelled) return
@@ -241,18 +183,12 @@ export default function AccountDataView({
     ))
   }, [accounts, leaderboardItems])
 
+  const trading = useTradingActions(wsRef)
   const cancelOrder = async (orderId: number) => {
     try {
-      const response = await fetch(`${API_BASE}/api/orders/cancel/${orderId}`, {
-        method: 'POST'
-      })
-
-      if (response.ok) {
-        toast.success('Order cancelled')
-        onRefreshData()
-      } else {
-        throw new Error(await response.text())
-      }
+      await trading.cancelOrder(orderId)
+      toast.success('Order cancelled')
+      onRefreshData()
     } catch (error) {
       console.error('Failed to cancel order:', error)
       toast.error('Failed to cancel order')
@@ -270,16 +206,16 @@ export default function AccountDataView({
   return (
     <div className="min-h-full flex flex-col space-y-6">
       {/* Main Content */}
-      <div className={`grid gap-6 ${showAssetCurves ? 'grid-cols-5' : 'grid-cols-1'}`}>
+      <div className={`grid gap-6 ${showAssetCurves ? 'grid-cols-1 xl:grid-cols-5' : 'grid-cols-1'}`}>
         {/* Asset Curves */}
         {showAssetCurves && (
-          <div className="col-span-3">
+          <div className="min-w-0 xl:col-span-3">
             <AssetCurveWithData data={allAssetCurves} wsRef={wsRef} />
           </div>
         )}
 
         {/* Tabs and Trading Panel */}
-        <div className={`${showAssetCurves ? 'col-span-2' : 'col-span-1'} flex flex-col`}>
+        <div className={`${showAssetCurves ? 'xl:col-span-2' : 'col-span-1'} min-w-0 flex flex-col`}>
           {/* Account Selector */}
           <div className="flex justify-end mb-4">
             <AccountSelector
@@ -294,7 +230,7 @@ export default function AccountDataView({
           {/* Evaluation leaderboard */}
           <Card className="mb-4">
             <CardHeader className="pb-3">
-              <div className="flex items-center justify-between gap-2">
+              <div className="flex flex-wrap gap-2 items-center justify-between gap-2">
                 <CardTitle className="text-base">Agent 结算评分</CardTitle>
                 <div className="w-[96px]">
                   <Select
@@ -375,7 +311,7 @@ export default function AccountDataView({
                 </Table>
               </div>
 
-              <div className="mt-4 flex items-center justify-between gap-2">
+              <div className="mt-4 flex flex-wrap gap-2 items-center justify-between gap-2">
                 <div className="text-sm font-medium">Checkpoint（按周期）</div>
                 <div className="flex items-center gap-2">
                   <div className="w-[92px]">
@@ -429,7 +365,7 @@ export default function AccountDataView({
                         const vol = typeof it.volatility === 'number' ? it.volatility : null
                         return (
                           <TableRow key={`${it.period_end}-${idx}`}>
-                            <TableCell>{new Date(it.period_end).toLocaleString()}</TableCell>
+                            <TableCell>{(it.period_end ? new Date(it.period_end).toLocaleString() : '-')}</TableCell>
                             <TableCell className="text-right">{pnl === null ? '-' : pnl.toFixed(2)}</TableCell>
                             <TableCell className="text-right">{rr === null ? '-' : `${(rr * 100).toFixed(2)}%`}</TableCell>
                             <TableCell className="text-right">{vol === null ? '-' : `${(vol * 100).toFixed(2)}%`}</TableCell>
@@ -444,9 +380,9 @@ export default function AccountDataView({
           </Card>
 
           {/* Content Area */}
-          <div className={`${showTradingPanel ? 'grid grid-cols-4 gap-4' : ''}`}>
+          <div className={`${showTradingPanel ? 'grid grid-cols-1 xl:grid-cols-4 gap-4' : ''}`}>
             {/* Tabs */}
-            <div className={`${showTradingPanel ? 'col-span-3' : 'col-span-1'}`}>
+            <div className={`${showTradingPanel ? 'xl:col-span-3' : 'col-span-1'} min-w-0`}>
               <Tabs defaultValue="ai-decisions" className="flex flex-col">
                 <TabsList className="grid w-full grid-cols-4">
                   <TabsTrigger value="ai-decisions">AI Decisions</TabsTrigger>
@@ -483,16 +419,14 @@ export default function AccountDataView({
               <div className="col-span-1">
                 <TradingPanel
                   onPlace={(payload) => {
-                    // Handle order placement via websocket
-                    if (wsRef?.current && wsRef.current.readyState === WebSocket.OPEN) {
-                      wsRef.current.send(JSON.stringify({
-                        type: 'place_order',
-                        ...payload
-                      }))
+                    try {
+                      trading.placeOrder(payload)
+                    } catch (error) {
+                      console.warn('WS not connected, cannot place order', error)
                     }
                   }}
                   user={overview?.account ? {
-                    id: overview.account.id.toString(),
+                    id: overview.account.user_id.toString(),
                     current_cash: overview.account.current_cash,
                     frozen_cash: overview.account.frozen_cash,
                     has_password: true // Assume has password for now
@@ -500,7 +434,8 @@ export default function AccountDataView({
                   positions={positions.map(p => ({
                     symbol: p.symbol,
                     market: p.market,
-                    available_quantity: p.available_quantity
+                    available_quantity: p.available_quantity,
+                    side: p.side
                   }))}
                   lastPrices={Object.fromEntries(
                     positions.map(p => [`${p.symbol}.${p.market}`, p.last_price ?? null])
@@ -522,7 +457,7 @@ function OrderBook({ orders, onCancelOrder }: { orders: Order[], onCancelOrder: 
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead>Time</TableHead>
+            <TableHead>Order ID</TableHead>
             <TableHead>Order No</TableHead>
             <TableHead>Symbol</TableHead>
             <TableHead>Side</TableHead>
