@@ -227,7 +227,7 @@ def test_memory_provider_zero_arg_construction_does_not_open_a_session(monkeypat
 
 
 def test_register_default_tools_omits_memory_when_disabled(monkeypatch):
-    from services.agent import env_wrapper
+    from tests.legacy_fixtures import tools as env_wrapper
 
     account = SimpleNamespace(
         model="test-model",

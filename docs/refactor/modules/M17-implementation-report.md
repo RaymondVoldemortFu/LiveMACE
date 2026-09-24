@@ -34,6 +34,6 @@
 - 四个示例的 `validate`、`test` 和 `list` CLI smoke test 通过；
 - wheel smoke test 已写入 `backend/tests/extensions/test_m17_sdk.py`，并确认 wheel 内包含四个 examples 目录及 `alpha-arena` entry point。
 
-## 延期项
+## WAVE 4 兼容入口收尾
 
-M03/M06/M08 遗留的 deprecated compatibility re-export 暂不删除。Wave 2 已提供新的内置 Agent/Tool 实现，但生产决策与评测入口仍引用部分 legacy adapter；提前删除会破坏现有运行路径。待入口切换完成后单独清理并补充回归验证。
+生产决策及评测已切换到 Runtime/Catalog 入口，现已删除 M03/M06/M08 遗留的 factory/core/env_wrapper 兼容模块及旧 Prompt 常量模块；审计 Prompt 由内置 Prompt registry 提供。迁移对照需要的旧实现移至 `backend/tests/legacy_fixtures/`，仅由测试导入。内置 Agent/Tool/Prompt 迁移、交易链及 examples/SDK 回归通过，详见 [WAVE 4 收尾与验收报告](../wave4-implementation-report.md)。

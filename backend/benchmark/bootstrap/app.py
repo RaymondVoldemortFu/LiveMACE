@@ -133,6 +133,25 @@ def create_app(
     _register_static(app, settings)
     _register_routes(app)
     _register_spa(app, settings)
+    from fastapi.openapi.utils import get_openapi
+    from schemas.control_plane import PortfolioSnapshot, PortfolioUser, TradingAccountCreate, TradingAccountUpdate
+
+    def openapi():
+        if app.openapi_schema is None:
+            schema = get_openapi(title=app.title, version=app.version, routes=app.routes)
+            components = schema.setdefault("components", {}).setdefault("schemas", {})
+            for model in (PortfolioSnapshot, PortfolioUser, TradingAccountCreate, TradingAccountUpdate):
+                definition = model.model_json_schema(ref_template="#/components/schemas/{model}")
+                components.update(definition.pop("$defs", {}))
+                components[model.__name__] = definition
+            # WebSocket has no HTTP operation; publish its payload contract explicitly.
+            schema["x-websocket-snapshot"] = {"$ref": "#/components/schemas/PortfolioSnapshot"}
+            for method, path, model in (("post", "/api/account/", TradingAccountCreate), ("put", "/api/account/{account_id}", TradingAccountUpdate)):
+                schema["paths"][path][method]["requestBody"]["content"]["application/json"]["schema"] = {"$ref": f"#/components/schemas/{model.__name__}"}
+            app.openapi_schema = schema
+        return app.openapi_schema
+
+    app.openapi = openapi
     return app
 
 

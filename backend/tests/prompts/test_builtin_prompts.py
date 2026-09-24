@@ -8,7 +8,7 @@ from benchmark.builtin.prompts import (
     validate_profile_contract,
 )
 from config.agent_config import AgentConfig
-from services.agent.prompts.advanced_multi_agent_prompts import (
+from tests.legacy_fixtures.advanced_multi_agent_prompts import (
     ADVANCED_EXECUTION_PROMPT,
     ANALYST_AGENT_PROMPT,
     CODER_AGENT_PROMPT as ADVANCED_CODER_AGENT_PROMPT,
@@ -17,16 +17,16 @@ from services.agent.prompts.advanced_multi_agent_prompts import (
     TRADING_AGENT_PROMPT as ADVANCED_TRADING_AGENT_PROMPT,
     Advanced_MANAGER_PROMPT,
 )
-from services.agent.prompts.multi_agent_prompts import (
+from tests.legacy_fixtures.multi_agent_prompts import (
     CODER_AGENT_PROMPT,
     MANAGER_PROMPT,
     NEWS_AGENT_PROMPT,
     TRADING_AGENT_PROMPT,
 )
-from services.agent.prompts.sub_agent_prompts import SUB_AGENT_SYSTEM_PROMPT
-from services.agent.prompts.system_prompts import get_trade_agent_prompt
-from services.agent.rule_aware.llm_auditor import AUDIT_SYSTEM_PROMPT
-from services.agent.rule_aware.prompts import (
+from tests.legacy_fixtures.sub_agent_prompts import SUB_AGENT_SYSTEM_PROMPT
+from tests.legacy_fixtures.system_prompts import get_trade_agent_prompt
+AUDIT_SYSTEM_PROMPT = get_builtin_prompt_registry().render_slot("core.compliance-audit.default", "system", {}).content
+from tests.legacy_fixtures.rule_aware_prompts import (
     RULE_AWARE_REMINDER_PROMPT,
     RULE_AWARE_SYSTEM_PROMPT,
 )

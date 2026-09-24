@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select'
-import { getCryptoSymbols, getPopularCryptos } from '../../lib/api'
+import { getCryptoSymbols, getPopularCryptos } from '@/lib/api/crypto'
 
 interface CryptoInfo {
   symbol: string
@@ -43,8 +43,7 @@ export default function OrderForm({
   onLeverageChange,
   onSideChange,
   onAdjustPrice,
-  onAdjustQuantity,
-  lastPrices = {}
+  onAdjustQuantity
 }: OrderFormProps) {
   const [allSymbols, setAllSymbols] = useState<string[]>([])
   const [popularCryptos, setPopularCryptos] = useState<CryptoInfo[]>([])

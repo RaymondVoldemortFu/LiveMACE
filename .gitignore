@@ -383,3 +383,5 @@ docs/contributor-analysis/figures/timing/
 docs/contributor-analysis
 docs/contributor-contribution-analysis.md
 docs/contributor-contribution-analysis.pdf
+!backend/tests/legacy_fixtures/
+!backend/tests/legacy_fixtures/*.py

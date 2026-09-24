@@ -37,7 +37,7 @@ from benchmark.prompts import (
     load_prompt_directory,
 )
 from benchmark.prompts.renderer import parse_template, render_template
-from services.agent.factory import create_agent
+from tests.legacy_fixtures.agents import create_agent
 from services.agent.multi_agent import MultiAgent
 from services.agent.multi_agent_advanced import AdvancedMultiAgent
 from services.agent.tools import Tool, ToolRegistry

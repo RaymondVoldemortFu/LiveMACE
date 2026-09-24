@@ -12,9 +12,9 @@ except Exception:  # pragma: no cover - optional dependency fallback
 from services.evaluation.base import BaseEvaluator
 from services.evaluation.judge_output_utils import (
     extract_json_object,
-    is_likely_truncated_json,
     normalize_judge_parsed,
 )
+from benchmark.providers.llm import LLMClientPort, LLMRequest, LLMResponse
 from services.agent.llm_client import LLMClient
 
 try:
@@ -149,9 +149,50 @@ def _build_judge_messages(system_prompt: str, account_info: Dict[str, Any], step
     ]
 
 
-class LLMToolJudgeEvaluator(BaseEvaluator):
-    def __init__(self, llm: LLMClient, system_prompt: str):
+class DirectChatLLMPort:
+    """Provider-backed port. Live calls stay on the integration judge path."""
+
+    def __init__(self, llm: LLMClient):
         self.llm = llm
+        self.model = llm.model
+
+    def complete(self, request: LLMRequest) -> LLMResponse:
+        if not isinstance(request, LLMRequest):
+            raise TypeError("request must be LLMRequest")
+        messages = [dict(message) for message in request.messages]
+        kwargs: Dict[str, Any] = {
+            "model": self.llm.model,
+            "messages": messages,
+            "tools": None,
+            "temperature": request.temperature,
+            "timeout": request.metadata.get("timeout_seconds"),
+        }
+        response_format = request.metadata.get("response_format")
+        if response_format is not None:
+            kwargs["response_format"] = dict(response_format)
+        response = self.llm.client.chat.completions.create(**kwargs)
+        return LLMResponse(content=response.choices[0].message.content or "")
+
+
+class LLMToolJudgeEvaluator(BaseEvaluator):
+    def __init__(
+        self,
+        llm: Optional[LLMClient] = None,
+        system_prompt: str = "",
+        *,
+        llm_port: Optional[LLMClientPort] = None,
+        model: Optional[str] = None,
+    ):
+        if llm_port is None:
+            if llm is None:
+                raise TypeError("LLM judge requires an LLMClient or LLMClientPort")
+            llm_port = DirectChatLLMPort(llm)
+        resolved_model = model or getattr(llm, "model", None) or getattr(llm_port, "model", None)
+        if not isinstance(resolved_model, str) or not resolved_model:
+            raise TypeError("LLM judge requires a model name")
+        self.llm = llm
+        self.llm_port = llm_port
+        self.model = resolved_model
         self.system_prompt = system_prompt
 
     @property
@@ -169,7 +210,7 @@ class LLMToolJudgeEvaluator(BaseEvaluator):
         account_info = agent_data.get("account_info") or {}
         trace_id = str(trace.get("trace_id") or "unknown")
         account_name = str(account_info.get("account_name") or "unknown")
-        context_label = f"trace_id={trace_id} account={account_name} model={self.llm.model}"
+        context_label = f"trace_id={trace_id} account={account_name} model={self.model}"
 
         system_prompt = _build_judge_system_prompt(self.system_prompt)
         messages = _build_judge_messages(system_prompt, account_info, steps)
@@ -224,15 +265,15 @@ class LLMToolJudgeEvaluator(BaseEvaluator):
         else:
             parsed = normalize_judge_parsed({}, content)
             parsed["reason"] = "failed_to_parse_json"
-        prompt_tokens = _count_message_tokens(messages, self.llm.model)
-        completion_tokens = _count_text_tokens(content, self.llm.model)
+        prompt_tokens = _count_message_tokens(messages, self.model)
+        completion_tokens = _count_text_tokens(content, self.model)
         routing_quality = compute_routing_quality_from_steps(steps)
         return {
             "judge_raw": content,
             "judge_parsed": parsed,
             "routing_quality": routing_quality,
             "token_usage": {
-                "model": self.llm.model,
+                "model": self.model,
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens,
                 "total_tokens": prompt_tokens + completion_tokens,
@@ -259,21 +300,23 @@ class LLMToolJudgeEvaluator(BaseEvaluator):
             timeout_retries = 2
         timeout_retries = max(0, timeout_retries)
 
-        kwargs: Dict[str, Any] = {
-            "model": self.llm.model,
-            "messages": messages,
-            "tools": None,
-            "temperature": temperature,
-            "timeout": timeout_sec,
-        }
+        metadata: Dict[str, Any] = {"timeout_seconds": timeout_sec}
         if force_json_object:
-            kwargs["response_format"] = {"type": "json_object"}
+            metadata["response_format"] = {"type": "json_object"}
+        request = LLMRequest(
+            messages=tuple(messages),
+            model=self.model,
+            temperature=temperature,
+            metadata=metadata,
+        )
 
         attempt = 0
         while True:
             try:
-                response = self.llm.client.chat.completions.create(**kwargs)
-                return response.choices[0].message.content or ""
+                response = self.llm_port.complete(request)
+                if not isinstance(response, LLMResponse):
+                    raise TypeError("LLMClientPort.complete must return LLMResponse")
+                return response.content
             except Exception as e:
                 is_timeout = self._is_timeout_error(e)
                 if is_timeout and attempt < timeout_retries:

@@ -3,8 +3,10 @@
   "private": true,
   "scripts": {
     "dev": "vite --port 5621",
-    "build": "vite build",
-    "preview": "vite preview"
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test tests/*.test.mjs"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.15",
@@ -33,7 +35,9 @@
     "@vitejs/plugin-react": "^4.0.0",
     "autoprefixer": "^10.4.21",
     "postcss": "^8.5.6",
+    "react-test-renderer": "18.3.1",
     "tailwindcss": "^3.3.3",
+    "typescript": "^5.9.3",
     "vite": "^4.4.0"
   }
 }

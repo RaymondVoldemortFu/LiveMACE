@@ -12,6 +12,7 @@ from benchmark.accounts import (
     config_from_legacy_account,
     save_runtime_config,
 )
+from benchmark.accounts.config import mirror_legacy_account_columns
 from benchmark.contracts import to_jsonable
 from benchmark.extensions import ExtensionRuntime
 from benchmark.extensions.host import get_extension_runtime
@@ -113,7 +114,55 @@ class ExtensionConfigService:
         ]
 
     def list_toolsets(self) -> list[dict[str, Any]]:
-        return []
+        """Named UI groups expand to the account's existing per-tool opt-outs."""
+        groups = {}
+        for tool in self.list_tools():
+            capabilities = tool['requested_capabilities']
+            category = next((name for capability, name in (
+                ('trading.write', 'trading'), ('sandbox.write', 'sandbox'),
+                ('memory.read', 'memory'), ('memory.write', 'memory'),
+                ('network.read', 'research'), ('market.read', 'market'),
+                ('account.read', 'account'),
+            ) if capability in capabilities), 'other')
+            group = groups.setdefault(category, {
+                'id': f'core.{category}-tools', 'name': category.title(),
+                'version': '1.0.0', 'source': 'catalog', 'status': 'loaded',
+                'description': f'{category.title()} tools', 'config_schema': {},
+                'requested_capabilities': [], 'allowed_capabilities': [], 'tool_names': [],
+            })
+            group['tool_names'].append(tool['name'])
+            for field in ('requested_capabilities', 'allowed_capabilities'):
+                group[field] = sorted(set(group[field]) | set(tool[field]))
+        return [groups[key] for key in sorted(groups)]
+
+    def list_tools(self) -> list[dict[str, Any]]:
+        allowed = set(self.catalog.allowed_capabilities)
+        items: list[dict[str, Any]] = []
+        for spec in self.runtime.tools.list():
+            entry = self.runtime.tools.get(spec.name)
+            extension_id = entry.extension.id
+            source = (
+                "builtin"
+                if extension_id.startswith(("core.", "baseline.", "benchmark."))
+                else "external"
+            )
+            requested = list(spec.required_capabilities)
+            items.append(
+                {
+                    "id": spec.name,
+                    "name": spec.name,
+                    "version": entry.extension.version,
+                    "description": spec.description,
+                    "source": source,
+                    "status": "loaded",
+                    "side_effect": spec.side_effect.value,
+                    "requested_capabilities": requested,
+                    "allowed_capabilities": [
+                        capability for capability in requested if capability in allowed
+                    ],
+                }
+            )
+        return items
 
     def list_prompts(self) -> list[dict[str, Any]]:
         return [
@@ -248,7 +297,8 @@ class ExtensionConfigService:
             ) from exc
 
         with self.uow_factory() as uow:
-            if uow.accounts.get(account_id) is None:
+            account = uow.accounts.get_for_update(account_id)
+            if account is None:
                 raise AccountNotFoundError(f"account not found: {account_id}")
             try:
                 result = save_runtime_config(
@@ -272,6 +322,7 @@ class ExtensionConfigService:
                     "runtime configuration is invalid",
                     details={"errors": [_issue_dict(issue) for issue in result.issues]},
                 )
+            mirror_legacy_account_columns(account, result.config)
             uow.commit()
         return self.get_runtime_config(account_id)
 

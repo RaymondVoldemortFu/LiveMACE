@@ -3,7 +3,7 @@
  * Shows overview of all rule-aware accounts with comparison charts
  */
 import { useState, useEffect } from 'react'
-import { Shield, TrendingUp, CheckCircle, AlertCircle, Activity, BarChart3, Info } from 'lucide-react'
+import { Shield, CheckCircle, AlertCircle, Activity, BarChart3, Info } from 'lucide-react'
 import { Line } from 'react-chartjs-2'
 import {
   Chart as ChartJS,
@@ -16,15 +16,8 @@ import {
   Legend,
   ChartOptions,
 } from 'chart.js'
-import {
-  getComplianceStats,
-  getRuleSummary,
-  getComplianceHistory,
-  type ComplianceStats,
-  type RuleSummary,
-  type ComplianceHistory,
-} from '@/lib/compliance-api'
-import { type TradingAccount } from '@/lib/api'
+import { getComplianceHistory, getComplianceStats, getRuleSummary } from '@/lib/api/compliance'
+import type { ComplianceHistory, ComplianceStats, RuleSummary, TradingAccount } from '@/lib/api/generated-types'
 import RuleSummaryCard from './RuleSummaryCard'
 
 // Register Chart.js components
@@ -166,6 +159,7 @@ export default function ComplianceDashboard({ accounts }: ComplianceDashboardPro
       
       if (data.history?.records) {
         data.history.records.forEach(record => {
+          if (!record.timestamp) return
           const normalizedTime = normalizeToFiveMinutes(record.timestamp)
           const value = metric === 's_rule_sat' ? record.s_rule_sat :
                        metric === 's_audit' ? record.s_audit :

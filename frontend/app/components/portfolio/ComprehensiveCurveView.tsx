@@ -15,7 +15,8 @@ import { Card } from '@/components/ui/card'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Button } from '@/components/ui/button'
 import { isBaselineAccountName } from '@/lib/baselineAccounts'
-import { getDecisionSchedule } from '@/lib/api'
+import { getDecisionSchedule } from '@/lib/api/accounts'
+import { useAssetCurve } from '@/hooks/useAssetCurve'
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend)
 
@@ -30,15 +31,8 @@ interface AssetCurveData {
   username: string
 }
 
-interface AccountLike {
-  id: number
-  name: string
-  model?: string
-  agent_type?: string
-  memory_enabled?: string
-  tool_routing_enabled?: string
-  enable_rule_aware?: boolean
-}
+type AccountLike = Pick<import('@/lib/api/generated-types').TradingAccount,
+  'id' | 'name' | 'model' | 'agent_type' | 'memory_enabled' | 'tool_routing_enabled' | 'enable_rule_aware'>
 
 interface ComprehensiveCurveViewProps {
   data?: AssetCurveData[]
@@ -120,10 +114,7 @@ const formatProfit = (item: AssetCurveData): number => {
 
 export default function ComprehensiveCurveView({ data: initialData, accounts = [], wsRef }: ComprehensiveCurveViewProps) {
   const [timeframe, setTimeframe] = useState<Timeframe>('5m')
-  const [data, setData] = useState<AssetCurveData[]>(initialData || [])
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [isInitialized, setIsInitialized] = useState(false)
+  const { data, loading, error } = useAssetCurve<AssetCurveData>(wsRef, timeframe, initialData)
   const [category, setCategory] = useState<CurveCategory>('avg-by-model')
   const [nextDecisionTimeUtc8, setNextDecisionTimeUtc8] = useState<string>('加载中...')
 
@@ -147,53 +138,6 @@ export default function ComprehensiveCurveView({ data: initialData, accounts = [
     }
     return map
   }, [accounts])
-
-  useEffect(() => {
-    if (!wsRef?.current) return
-    const handleMessage = (event: MessageEvent) => {
-      try {
-        const msg = JSON.parse(event.data)
-        if (msg.type === 'asset_curve_data' && msg.timeframe === timeframe) {
-          setData(msg.data || [])
-          setLoading(false)
-          setError(null)
-          setIsInitialized(true)
-        } else if (msg.type === 'asset_curve_error' && msg.timeframe === timeframe) {
-          setData([])
-          setLoading(false)
-          setError(msg.message || 'Failed to load asset curve')
-          setIsInitialized(true)
-        } else if (msg.type === 'asset_curve_update' && msg.timeframe === timeframe) {
-          setData(msg.data || [])
-          setIsInitialized(true)
-        }
-      } catch (err) {
-        console.error('Failed to parse WebSocket message:', err)
-      }
-    }
-
-    wsRef.current.addEventListener('message', handleMessage)
-    return () => wsRef.current?.removeEventListener('message', handleMessage)
-  }, [wsRef, timeframe])
-
-  useEffect(() => {
-    if (wsRef?.current && wsRef.current.readyState === WebSocket.OPEN) {
-      setData([])
-      setLoading(true)
-      setError(null)
-      wsRef.current.send(JSON.stringify({ type: 'get_asset_curve', timeframe }))
-    } else if (initialData && timeframe === '1h' && !isInitialized) {
-      setData(initialData)
-      setIsInitialized(true)
-    }
-  }, [timeframe, wsRef])
-
-  useEffect(() => {
-    if (initialData && !isInitialized && timeframe === '1h') {
-      setData(initialData)
-      setIsInitialized(true)
-    }
-  }, [])
 
   useEffect(() => {
     let mounted = true

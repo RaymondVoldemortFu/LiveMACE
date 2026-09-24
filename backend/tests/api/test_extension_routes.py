@@ -35,14 +35,21 @@ def test_catalog_routes_are_typed_and_do_not_leak_paths_or_secrets():
         agents = client.get("/api/extensions/agents")
         prompts = client.get("/api/extensions/prompts")
         toolsets = client.get("/api/extensions/toolsets")
+        tools = client.get("/api/extensions/tools")
 
     assert extensions.status_code == 200
     assert extensions.json()[0]["status"] == "loaded"
     assert agents.status_code == 200
     assert prompts.status_code == 200
-    assert toolsets.json() == []
+    assert toolsets.json()
+    grouped = {name for group in toolsets.json() for name in group["tool_names"]}
+    assert grouped == {tool["name"] for tool in tools.json()}
+    assert tools.status_code == 200
+    trade_tools = [item for item in tools.json() if item["side_effect"] == "trading_write"]
+    assert trade_tools
+    assert "trading.write" in trade_tools[0]["requested_capabilities"]
     serialized = " ".join(
-        response.text for response in (extensions, agents, prompts, toolsets)
+        response.text for response in (extensions, agents, prompts, toolsets, tools)
     ).lower()
     assert "api_key" not in serialized
     assert "entrypoint" not in serialized

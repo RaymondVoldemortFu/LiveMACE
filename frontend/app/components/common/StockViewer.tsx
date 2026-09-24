@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react'
 import { RefreshCw } from 'lucide-react'
+import { getCryptoInfo } from '@/lib/api/ranking'
 
 declare global {
   interface Window {
@@ -39,8 +40,7 @@ export default function cryptoViewer({ symbol, title, subtitle, className = "" }
     setcryptoInfoError(null)
 
     try {
-      const response = await fetch(`/api/ranking/crypto-info/${symbol}`)
-      const data = await response.json()
+      const data = await getCryptoInfo(symbol)
       
       if (data.success) {
         setcryptoInfo(data.data || [])

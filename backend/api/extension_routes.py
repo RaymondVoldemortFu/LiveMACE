@@ -12,6 +12,8 @@ from schemas.extensions import (
     ComponentSchemaOut,
     ExtensionOut,
     PromptProfileOut,
+    ToolOut,
+    ToolsetOut,
     RuntimeConfigOut,
     RuntimeConfigSaveRequest,
     RuntimeConfigValidateRequest,
@@ -50,9 +52,14 @@ def list_agents(service: ExtensionConfigService = Depends(get_extension_config_s
     return service.list_agents()
 
 
-@router.get("/api/extensions/toolsets", response_model=list[ComponentOut])
+@router.get("/api/extensions/toolsets", response_model=list[ToolsetOut])
 def list_toolsets(service: ExtensionConfigService = Depends(get_extension_config_service)):
     return service.list_toolsets()
+
+
+@router.get("/api/extensions/tools", response_model=list[ToolOut])
+def list_tools(service: ExtensionConfigService = Depends(get_extension_config_service)):
+    return service.list_tools()
 
 
 @router.get("/api/extensions/prompts", response_model=list[PromptProfileOut])

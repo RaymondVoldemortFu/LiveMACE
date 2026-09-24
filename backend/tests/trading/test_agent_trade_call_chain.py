@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from benchmark.contracts import TradeCommandResult
-from services.agent.factory import create_agent
+from tests.legacy_fixtures.agents import create_agent
 from services.agent.tools import ToolRegistry
 from tests.fakes import FakeLLM, FakeLLMResponse, FakeToolCall
 
@@ -34,7 +34,7 @@ class _SearchAgent:
 
 def _registered_default_tools(monkeypatch, captured_commands):
     import benchmark.application.trading as trading_app
-    from services.agent import env_wrapper
+    from tests.legacy_fixtures import tools as env_wrapper
 
     account = SimpleNamespace(
         model="test-model",

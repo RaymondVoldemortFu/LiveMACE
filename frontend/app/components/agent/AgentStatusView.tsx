@@ -1,10 +1,11 @@
-import React, { useEffect, useState, useRef, useMemo } from 'react'
+import { useEffect, useState, useRef, useMemo } from 'react'
 import { isBaselineAccountName } from '@/lib/baselineAccounts'
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Button } from "@/components/ui/button"
-import { getLatestTraceId, getAgentTrace, getTraceHistory, AgentTrace, AgentStep, TraceSummary } from '@/lib/api'
-import { Bot, User, Terminal, AlertCircle, RefreshCcw, History, Clock, Brain } from 'lucide-react'
+import type { AgentStep, AgentTrace, TraceSummary } from '@/lib/api/generated-types'
+import { useAgentTrace } from '@/hooks/useAgentTrace'
+import { Bot, User, Terminal, RefreshCcw, History, Clock, Brain } from 'lucide-react'
 import {
   Sheet,
   SheetContent,
@@ -19,6 +20,7 @@ interface AgentStatusViewProps {
 }
 
 export default function AgentStatusView({ accounts }: AgentStatusViewProps) {
+    const { getAgentTrace, getLatestTraceId, getTraceHistory } = useAgentTrace()
     const agentTraceAccounts = useMemo(
         () => (accounts || []).filter((a) => !isBaselineAccountName(a?.name)),
         [accounts]
@@ -171,7 +173,7 @@ export default function AgentStatusView({ accounts }: AgentStatusViewProps) {
                             <Brain size={16} />
                         </div>
                         <span className="text-xs text-muted-foreground">MEMORY</span>
-                        <span className="text-xs text-muted-foreground">{new Date(step.created_at).toLocaleTimeString()}</span>
+                        <span className="text-xs text-muted-foreground">{(step.created_at ? new Date(step.created_at).toLocaleTimeString() : '-')}</span>
                     </div>
                     <div className="max-w-[80%] rounded-lg p-3 bg-orange-50 border border-orange-200 text-xs text-muted-foreground whitespace-pre-wrap break-all [overflow-wrap:anywhere]">
                         {step.content}
@@ -226,7 +228,7 @@ export default function AgentStatusView({ accounts }: AgentStatusViewProps) {
                             {agentName}
                         </span>
                     )}
-                    <span className="text-xs text-muted-foreground">{new Date(step.created_at).toLocaleTimeString()}</span>
+                    <span className="text-xs text-muted-foreground">{(step.created_at ? new Date(step.created_at).toLocaleTimeString() : '-')}</span>
                 </div>
                 
                 <div className={`max-w-[80%] rounded-lg p-3 ${isUser ? 'bg-primary text-primary-foreground' : 'bg-muted border'} overflow-hidden break-all [overflow-wrap:anywhere]`}>
@@ -252,14 +254,14 @@ export default function AgentStatusView({ accounts }: AgentStatusViewProps) {
                         </div>
                     )}
 
-                    {step.tool_output && typeof step.tool_output === 'object' && Array.isArray((step.tool_output as any).selected_tools) && (
+                    {Boolean(step.tool_output) && typeof step.tool_output === 'object' && Array.isArray((step.tool_output as any).selected_tools) && (
                         <div className="mt-2 bg-black/5 p-2 rounded text-xs font-mono overflow-x-auto whitespace-pre-wrap break-all [overflow-wrap:anywhere]">
                             <div className="font-bold text-blue-600 mb-1">Selected Tools:</div>
                             <pre className="whitespace-pre-wrap break-all [overflow-wrap:anywhere]">{(step.tool_output as any).selected_tools.join(', ')}</pre>
                         </div>
                     )}
 
-                    {step.tool_output && (
+                    {Boolean(step.tool_output) && (
                          <div className="mt-2 bg-black/5 p-2 rounded text-xs font-mono overflow-x-auto whitespace-pre-wrap break-all [overflow-wrap:anywhere]">
                             <div className="font-bold text-blue-600 mb-1">Tool Output:</div>
                             <pre className="whitespace-pre-wrap break-all [overflow-wrap:anywhere]">{typeof step.tool_output === 'string' ? step.tool_output : JSON.stringify(step.tool_output, null, 2)}</pre>

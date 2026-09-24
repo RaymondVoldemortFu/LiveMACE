@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import toast from 'react-hot-toast'
 import {
   Dialog,
@@ -20,15 +20,14 @@ import {
 } from "@/components/ui/select"
 import { Plus, Pencil, Eye } from 'lucide-react'
 import {
-  getAccounts as getAccounts,
-  createAccount as createAccount,
-  updateAccount as updateAccount,
+  createAccount,
   getAccountSystemPrompt,
+  getAccounts,
   testLLMConnection,
-  type AccountSystemPromptResponse,
-  type TradingAccount,
-  type TradingAccountCreate,
-} from '@/lib/api'
+  updateAccount,
+} from '@/lib/api/accounts'
+import type { AccountSystemPromptResponse, TradingAccount, TradingAccountCreate } from '@/lib/api/generated-types'
+import { RuntimeConfigPanel, type RuntimeConfigHandle } from '@/components/extensions/RuntimeConfigPanel'
 import { isBaselineAccountName } from '@/lib/baselineAccounts'
 
 interface SettingsDialogProps {
@@ -37,18 +36,8 @@ interface SettingsDialogProps {
   onAccountUpdated?: () => void  // Add callback for when account is updated
 }
 
-interface AIAccount extends TradingAccount {
-  model?: string
-  base_url?: string
-  api_key?: string
-}
-
-interface AIAccountCreate extends TradingAccountCreate {
-  model?: string
-  base_url?: string
-  api_key?: string
-  enable_rule_aware?: boolean
-}
+type AIAccount = TradingAccount
+type AIAccountCreate = TradingAccountCreate
 
 const AGENT_TYPE_OPTIONS = [
   { value: 'react', label: 'ReAct Agent' },
@@ -59,7 +48,7 @@ const AGENT_TYPE_OPTIONS = [
   { value: 'grid', label: 'Baseline: Grid Trading' },
 ]
 
-const getAgentTypeLabel = (agentType?: string) => {
+const getAgentTypeLabel = (agentType?: string | null) => {
   const normalizedAgentType = (agentType || '').trim().toLowerCase()
   const matched = AGENT_TYPE_OPTIONS.find((option) => option.value === normalizedAgentType)
   return matched?.label || 'ReAct Agent'
@@ -76,6 +65,9 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
   const [viewingPromptAccountId, setViewingPromptAccountId] = useState<number | null>(null)
   const [promptLoadingAccountId, setPromptLoadingAccountId] = useState<number | null>(null)
   const [accountPrompts, setAccountPrompts] = useState<Record<number, AccountSystemPromptResponse>>({})
+  const runtimeRef = useRef<RuntimeConfigHandle | null>(null)
+  const [runtimeDirty, setRuntimeDirty] = useState(false)
+  const [selectedRuntimeAgentId, setSelectedRuntimeAgentId] = useState<string | null>(null)
   const [newAccount, setNewAccount] = useState<AIAccountCreate>({
     name: '',
     model: '',
@@ -227,7 +219,15 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
       
       const hasNewKey = Boolean(editAccount.api_key?.trim())
       const hasModelAndUrl = Boolean(editAccount.model?.trim() && editAccount.base_url?.trim())
-      const isBaseline = ['buy_hold', 'grid'].includes((editAccount.agent_type || '').trim().toLowerCase())
+      const agentId = runtimeRef.current?.agentId ?? null
+      if (!agentId) {
+        setError('Runtime components are still loading')
+        setLoading(false)
+        setTesting(false)
+        return
+      }
+      const isBaseline = agentId === 'baseline.buy-hold'
+        || agentId === 'baseline.grid'
         || isBaselineAccountName(editAccount.name)
       const requiresModel = accounts.find(account => account.id === editingId)?.account_type === 'AI' && !isBaseline
       if (requiresModel && !hasModelAndUrl) {
@@ -272,8 +272,14 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
       
       setTesting(false)
       setTestResult('Saving account...')
-      
-      await updateAccount(editingId, { ...editAccount, api_key: hasNewKey ? editAccount.api_key : undefined })
+
+      await runtimeRef.current?.save()
+      await updateAccount(editingId, {
+        name: editAccount.name,
+        model: editAccount.model,
+        base_url: editAccount.base_url,
+        api_key: hasNewKey ? editAccount.api_key : undefined,
+      })
       setEditingId(null)
       setEditAccount({
         name: '',
@@ -304,6 +310,8 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
   }
 
   const startEdit = (account: AIAccount) => {
+    setSelectedRuntimeAgentId(null)
+    setRuntimeDirty(false)
     setEditingId(account.id)
     setEditAccount({
       name: account.name,
@@ -318,6 +326,8 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
   }
 
   const cancelEdit = () => {
+    setSelectedRuntimeAgentId(null)
+    setRuntimeDirty(false)
     setEditingId(null)
     setEditAccount({
       name: '',
@@ -359,9 +369,19 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
     }
   }
 
+  const requestClose = (nextOpen: boolean) => {
+    if (!nextOpen && (runtimeDirty || editingId !== null)) {
+      const discard = window.confirm('Discard unsaved account changes?')
+      if (!discard) return
+      setRuntimeDirty(false)
+      cancelEdit()
+    }
+    onOpenChange(nextOpen)
+  }
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-hidden flex flex-col">
+    <Dialog open={open} onOpenChange={requestClose}>
+      <DialogContent className="sm:max-w-3xl max-h-[90vh] overflow-hidden flex flex-col">
         <DialogHeader>
           <DialogTitle>Account Management</DialogTitle>
           <DialogDescription>
@@ -398,51 +418,17 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
                   <div key={account.id} className="border rounded-lg p-4">
                     {editingId === account.id ? (
                       <div className="space-y-3">
-                        <div className="grid grid-cols-2 gap-3">
-                          <Input
-                            placeholder="Account name"
-                            value={editAccount.name || ''}
-                            onChange={(e) => setEditAccount({ ...editAccount, name: e.target.value })}
-                          />
-                          <Select
-                            value={editAccount.agent_type || 'react'}
-                            onValueChange={(value) => setEditAccount({ ...editAccount, agent_type: value })}
-                          >
-                            <SelectTrigger>
-                              <SelectValue placeholder="Agent Type" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {AGENT_TYPE_OPTIONS.map((option) => (
-                                <SelectItem key={option.value} value={option.value}>
-                                  {option.label}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </div>
-
-                        {/* Rule-Aware Toggle for Edit */}
-                        <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
-                          <div className="flex items-center gap-2">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-primary">
-                              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/>
-                              <path d="m9 12 2 2 4-4"/>
-                            </svg>
-                            <div>
-                              <p className="text-sm font-medium">Enable Rule-Aware Trading</p>
-                              <p className="text-xs text-muted-foreground">Monitor compliance with trading rules (R0/R1/R2)</p>
-                            </div>
-                          </div>
-                          <label className="relative inline-flex items-center cursor-pointer">
-                            <input
-                              type="checkbox"
-                              className="sr-only peer"
-                              checked={editAccount.enable_rule_aware || false}
-                              onChange={(e) => setEditAccount({ ...editAccount, enable_rule_aware: e.target.checked })}
-                            />
-                            <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-primary/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
-                          </label>
-                        </div>
+                        <Input
+                          placeholder="Account name"
+                          value={editAccount.name || ''}
+                          onChange={(e) => setEditAccount({ ...editAccount, name: e.target.value })}
+                        />
+                        <RuntimeConfigPanel
+                          ref={runtimeRef}
+                          accountId={account.id}
+                          onDirtyChange={setRuntimeDirty}
+                          onAgentChange={setSelectedRuntimeAgentId}
+                        />
 
                         <Input
                             placeholder="Model"
@@ -460,22 +446,6 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
                           value={editAccount.api_key || ''}
                           onChange={(e) => setEditAccount({ ...editAccount, api_key: e.target.value })}
                         />
-                        <div className="flex items-center space-x-2">
-                          <Switch
-                            id="memory-enabled-edit"
-                            checked={editAccount.memory_enabled === 'true'}
-                            onCheckedChange={(checked) => setEditAccount({ ...editAccount, memory_enabled: checked ? 'true' : 'false' })}
-                          />
-                          <Label htmlFor="memory-enabled-edit">Enable Memory System</Label>
-                        </div>
-                        <div className="flex items-center space-x-2">
-                          <Switch
-                            id="tool-routing-enabled-edit"
-                            checked={editAccount.tool_routing_enabled === 'true'}
-                            onCheckedChange={(checked) => setEditAccount({ ...editAccount, tool_routing_enabled: checked ? 'true' : 'false' })}
-                          />
-                          <Label htmlFor="tool-routing-enabled-edit">Enable Tool Routing</Label>
-                        </div>
                         {testResult && (
                           <div className={`text-xs p-2 rounded ${
                             testResult.includes('❌') 
@@ -486,7 +456,7 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
                           </div>
                         )}
                         <div className="flex gap-2">
-                          <Button onClick={handleUpdateAccount} disabled={loading || testing} size="sm">
+                          <Button onClick={handleUpdateAccount} disabled={loading || testing || !selectedRuntimeAgentId} size="sm">
                             {testing ? 'Saving...' : editAccount.api_key ? 'Test and Save' : 'Save'}
                           </Button>
                           <Button onClick={cancelEdit} variant="outline" size="sm" disabled={loading || testing}>

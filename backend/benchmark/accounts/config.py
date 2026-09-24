@@ -26,6 +26,7 @@ _LEGACY_AGENT_IDS: dict[str, str] = {
 
 # Agents that run without an LLM prompt profile.
 _BASELINE_AGENT_IDS = frozenset({"baseline.buy-hold", "baseline.grid"})
+_AGENT_TYPES_BY_ID = {agent_id: agent_type for agent_type, agent_id in _LEGACY_AGENT_IDS.items() if agent_type != "default"}
 
 # Default prompt profile per non-baseline agent, ignoring react's flag matrix.
 _DEFAULT_PROMPT_PROFILE: dict[str, str] = {
@@ -272,8 +273,23 @@ def config_from_legacy_account(account: Any) -> AccountExtensionConfig:
     )
 
 
+def mirror_legacy_account_columns(account, config: AccountExtensionConfig) -> None:
+    """Keep scheduler and compliance columns aligned with the saved runtime config."""
+
+    agent_type = _AGENT_TYPES_BY_ID.get(config.agent_id, "react")
+    account.agent_type = agent_type
+    account.enable_rule_aware = "true" if config.agent_id == "core.rule-aware" else "false"
+    memory = config.agent_config.get("memory_enabled")
+    if isinstance(memory, bool):
+        account.memory_enabled = "true" if memory else "false"
+    routing = config.agent_config.get("tool_routing_enabled")
+    if isinstance(routing, bool):
+        account.tool_routing_enabled = "true" if routing else "false"
+
+
 __all__ = [
     "AccountExtensionConfig",
     "ConfigValidationError",
     "config_from_legacy_account",
+    "mirror_legacy_account_columns",
 ]

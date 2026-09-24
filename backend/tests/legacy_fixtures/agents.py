@@ -1,9 +1,4 @@
-"""Deprecated compatibility facade over the public Agent registry.
-
-New extensions register through :mod:`benchmark.agents`.  This module keeps
-the old ``create_agent(agent_type, llm, tools, **kwargs)`` API stable until
-M10 switches production callers to ``AgentRuntime``.
-"""
+"""Registry constructor for legacy-agent characterization tests."""
 
 from __future__ import annotations
 
@@ -34,9 +29,9 @@ from benchmark.builtin.agents.rule_aware import (
 from benchmark.builtin.prompts import get_builtin_prompt_registry
 from benchmark.infrastructure.adapters import LegacyLLMClientAdapter
 
-from .base import BaseAgent
-from .llm_client import LLMClient
-from .tools import ToolRegistry
+from services.agent.base import BaseAgent
+from services.agent.llm_client import LLMClient
+from services.agent.tools import ToolRegistry
 
 logger = logging.getLogger(__name__)
 

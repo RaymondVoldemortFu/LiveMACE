@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 from benchmark.builtin.prompts import render_template_source
 from benchmark.builtin.prompts.preview import preview_system_prompt_for_account
-from services.agent.prompts.system_prompts import get_trade_agent_prompt
+from tests.legacy_fixtures.system_prompts import get_trade_agent_prompt
 
 
 def _account(**flags):

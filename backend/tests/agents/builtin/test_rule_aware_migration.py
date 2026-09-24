@@ -30,7 +30,7 @@ from benchmark.contracts import (
 from benchmark.infrastructure.adapters import LegacyLLMClientAdapter
 from benchmark.providers import LLMResponse, LLMToolCall
 from benchmark.testing import FakeLLMClientPort
-from services.agent.factory import create_agent
+from tests.legacy_fixtures.agents import create_agent
 from services.agent.llm_client import LLMClient
 from services.agent.rule_aware.rule_aware_agent import RuleAwareAgent
 from services.agent.tools import Tool, ToolRegistry

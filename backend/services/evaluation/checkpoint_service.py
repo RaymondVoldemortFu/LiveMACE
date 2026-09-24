@@ -4,17 +4,13 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Optional, List, Iterable
-import logging
 import math
 
 from sqlalchemy.orm import Session
 
-from database.connection import SessionLocal
 from database.models import Account, AgentPeriodCheckpoint
 from services.asset_calculator import calc_positions_market_value
 from services.time_source import now_utc
-
-logger = logging.getLogger(__name__)
 
 
 VOLATILITY_LOOKBACK = 20
@@ -212,48 +208,9 @@ def run_checkpoint_job(interval_seconds: int = 3600) -> int:
 
 
 def run_checkpoint_jobs(interval_seconds_list: Iterable[int]) -> int:
-    """Create checkpoints for all active AI accounts for multiple intervals.
+    """Scheduler entry. Computation lives in CheckpointService."""
 
-    This reuses one DB session and a single 'now' timestamp, keeping period alignment
-    consistent within a poll.
+    from benchmark.application.evaluation.checkpoint import CheckpointService
 
-    Returns number of created checkpoints in total.
-    """
-    intervals = [int(x) for x in interval_seconds_list if int(x) > 0]
-    # De-duplicate while keeping deterministic order
-    intervals = sorted(set(intervals))
-    if not intervals:
-        return 0
-
-    db: Session = SessionLocal()
-    created = 0
-    # Use unified virtual time source across the system (supports DELTA_T_MINUTES simulation).
-    now = now_utc()
-    try:
-        accounts: List[Account] = _list_active_ai_accounts(db)
-
-        for interval_seconds in intervals:
-            for account in accounts:
-                try:
-                    ckpt = create_checkpoint_if_due(
-                        db,
-                        account,
-                        interval_seconds=interval_seconds,
-                        now=now,
-                    )
-                    if ckpt is not None:
-                        created += 1
-                except Exception as e:
-                    logger.error(
-                        f"Checkpoint creation failed for account {account.id} ({account.name}) interval={interval_seconds}s: {e}",
-                        exc_info=True,
-                    )
-
-        if created:
-            db.commit()
-        else:
-            db.rollback()
-
-        return created
-    finally:
-        db.close()
+    result = CheckpointService().run_due(tuple(interval_seconds_list), now_utc())
+    return result.created

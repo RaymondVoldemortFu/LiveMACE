@@ -25,13 +25,14 @@ from config.api_feature_config import ApiFeatureConfig
 from benchmark.builtin.prompts.preview import preview_system_prompt_for_account
 from services.security.api_key_security import encrypt_api_key, mask_api_key_for_display
 from services.account_api_service import AccountApiService
+from schemas.control_plane import TradingAccount, AccountSystemPromptResponse, DecisionSchedule, TradingAccountCreate, TradingAccountUpdate
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/account", tags=["account"])
 
 
-@router.get("/list")
+@router.get("/list", response_model=list[TradingAccount])
 async def list_all_accounts(db: Session = Depends(get_db)):
     """Get all active accounts (for paper trading demo)"""
     try:
@@ -66,7 +67,7 @@ async def list_all_accounts(db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"Failed to list accounts: {str(e)}")
 
 
-@router.get("/decision-schedule")
+@router.get("/decision-schedule", response_model=DecisionSchedule)
 async def get_decision_schedule():
     """Get AI decision scheduler status."""
     try:
@@ -139,7 +140,7 @@ async def get_specific_account_overview(account_id: int, db: Session = Depends(g
         raise HTTPException(status_code=500, detail=f"Failed to get account overview: {str(e)}")
 
 
-@router.get("/{account_id}/system-prompt")
+@router.get("/{account_id}/system-prompt", response_model=AccountSystemPromptResponse)
 async def get_account_system_prompt(account_id: int, db: Session = Depends(get_db)):
     """Get rendered system prompt for a specific account."""
     try:
@@ -217,7 +218,7 @@ async def get_account_overview(db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"Failed to get overview: {str(e)}")
 
 
-@router.post("/")
+@router.post("/", response_model=TradingAccount)
 async def create_new_account(payload: dict, db: Session = Depends(get_db)):
     """Create a new account for the default user (for paper trading demo)"""
     try:
@@ -306,7 +307,7 @@ async def create_new_account(payload: dict, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"Failed to create account: {str(e)}")
 
 
-@router.put("/{account_id}")
+@router.put("/{account_id}", response_model=TradingAccount)
 async def update_account_settings(account_id: int, payload: dict, db: Session = Depends(get_db)):
     """Update account settings (for paper trading demo)"""
     try:

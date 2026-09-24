@@ -5,7 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Brain } from 'lucide-react'
-import { getMemories, getMemoryMetrics, getMemoryGrowthTimeline } from '@/lib/api'
+import { getMemories, getMemoryGrowthTimeline, getMemoryMetrics } from '@/lib/api/memory'
 
 interface MemoryViewProps {
   account: any

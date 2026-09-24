@@ -12,7 +12,7 @@ from database.models import (
 )
 from services.account_api_service import AccountApiService
 from services.agent_api_service import AgentApiService
-from services.compliance_api_service import ComplianceApiService
+from benchmark.application.compliance.service import ComplianceService as ComplianceApiService
 from services.evaluation_api_service import EvaluationApiService
 from services.memory_api_service import MemoryApiService
 from services.ranking_api_service import RankingApiService

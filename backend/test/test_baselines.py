@@ -96,14 +96,13 @@ def sample_account():
 
 
 @patch("services.baselines._is_trading_open", return_value=True)
-@patch("services.baselines.check_and_execute_order", return_value=True)
-@patch("services.baselines.create_order")
+@patch("benchmark.application.trading.get_default_trade_gateway")
 @patch("services.baselines.calc_positions_value", return_value=0.0)
 def test_buy_hold_run_tick_places_market_buy(
-    _calc_pv, mock_create_order, _chk, _open, sample_account
+    _calc_pv, mock_gateway, _open, sample_account
 ):
-    mock_order = SimpleNamespace(id=1, price=50000.0, filled_quantity=0.01)
-    mock_create_order.return_value = mock_order
+    mock_create_order = mock_gateway.return_value.create_order
+    mock_create_order.return_value = SimpleNamespace(accepted=True)
 
     cfg = BuyHoldConfig(
         universe=["BTC"],
@@ -119,21 +118,21 @@ def test_buy_hold_run_tick_places_market_buy(
     bh.run_tick(db, sample_account, prices, now=now)
 
     assert mock_create_order.called
-    call_kw = mock_create_order.call_args.kwargs
-    assert call_kw["symbol"] == "BTC"
-    assert call_kw["side"] == "BUY"
-    assert call_kw["market"] == "CRYPTO"
-    assert call_kw["order_type"] == "MARKET"
+    command = mock_create_order.call_args.args[0]
+    assert command.symbol == "BTC"
+    assert command.side == "BUY"
+    assert command.market.value == "CRYPTO"
+    assert command.order_type == "MARKET"
 
 
 @patch("services.baselines._is_trading_open", return_value=True)
-@patch("services.baselines.check_and_execute_order", return_value=True)
-@patch("services.baselines.create_order")
+@patch("benchmark.application.trading.get_default_trade_gateway")
 @patch("services.baselines.calc_positions_value", return_value=0.0)
 def test_buy_hold_skips_second_tick_same_period(
-    _calc_pv, mock_create_order, _chk, _open, sample_account
+    _calc_pv, mock_gateway, _open, sample_account
 ):
-    mock_create_order.return_value = SimpleNamespace(id=1, price=1.0, filled_quantity=1.0)
+    mock_create_order = mock_gateway.return_value.create_order
+    mock_create_order.return_value = SimpleNamespace(accepted=True)
 
     cfg = BuyHoldConfig(
         universe=["BTC"],
@@ -165,20 +164,20 @@ def test_buy_hold_no_op_when_no_prices(_calc_pv, _open, sample_account):
     )
     bh = BuyHoldBaseline(config=cfg)
     db = _db_mock_for_positions([])
-    with patch("services.baselines.create_order") as mock_co:
+    with patch("benchmark.application.trading.get_default_trade_gateway") as mock_gateway:
+        mock_co = mock_gateway.return_value.create_order
         bh.run_tick(db, sample_account, {}, now=datetime.now(timezone.utc))
         assert not mock_co.called
 
 
 @patch("services.baselines._is_trading_open", return_value=True)
-@patch("services.baselines.check_and_execute_order", return_value=True)
-@patch("services.baselines.create_order")
+@patch("benchmark.application.trading.get_default_trade_gateway")
 @patch("services.baselines.calc_positions_value", return_value=0.0)
-@patch("services.baselines.process_all_pending_orders")
 def test_grid_run_tick_creates_limit_orders(
-    _proc, _calc_pv, mock_create_order, _chk, _open, sample_account
+    _calc_pv, mock_gateway, _open, sample_account
 ):
-    mock_create_order.return_value = SimpleNamespace(id=2, price=100.0, filled_quantity=0.0)
+    mock_create_order = mock_gateway.return_value.create_order
+    mock_create_order.return_value = SimpleNamespace(accepted=True)
 
     cfg = GridConfig(
         universe=["BTC"],
@@ -197,10 +196,10 @@ def test_grid_run_tick_creates_limit_orders(
     grid.run_tick(db, sample_account, {"BTC": 50_000.0})
 
     limit_calls = [
-        c for c in mock_create_order.call_args_list if c.kwargs.get("order_type") == "LIMIT"
+        c for c in mock_create_order.call_args_list if c.args[0].order_type == "LIMIT"
     ]
     assert len(limit_calls) >= 1
-    sides = {c.kwargs["side"] for c in limit_calls}
+    sides = {c.args[0].side for c in limit_calls}
     assert "BUY" in sides or "SELL" in sides
 
 

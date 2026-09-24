@@ -1,4 +1,3 @@
-import React from 'react'
 import { Button } from '@/components/ui/button'
 import { toast } from 'react-hot-toast'
 
@@ -29,7 +28,6 @@ interface AuthDialogProps {
 export default function AuthDialog({
   isOpen,
   pendingTrade,
-  user,
   onClose,
   onAuthenticate,
   orderData

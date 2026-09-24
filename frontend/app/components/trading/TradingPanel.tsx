@@ -3,6 +3,7 @@ import { toast } from 'react-hot-toast'
 import OrderForm from './OrderForm'
 import AuthDialog from './AuthDialog'
 import TradeButtons from './TradeButtons'
+import { verifyAuthSession as requestAuthVerification } from '@/lib/api/accounts'
 
 interface User {
   id?: string
@@ -11,7 +12,7 @@ interface User {
   has_password: boolean
 }
 
-interface PositionLite { symbol: string; market: string; available_quantity: number; side?: string }
+interface PositionLite { symbol: string; market: string; available_quantity: number; side?: string | null }
 
 interface TradingPanelProps {
   onPlace: (payload: any) => void
@@ -85,12 +86,7 @@ export default function TradingPanel({ onPlace, user, positions = [], lastPrices
 
   const verifyAuthSession = async (token: string) => {
     try {
-      const response = await fetch('/api/account/auth/verify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_token: token })
-      })
-      const data = await response.json()
+      const data = await requestAuthVerification(token)
       
       if (data.valid && String(data.user_id) === user?.id) {
         setAuthSessionToken(token)

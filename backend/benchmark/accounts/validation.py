@@ -170,15 +170,15 @@ def validate_extension_config(
 
 
 def _default_agent_registry() -> Any:
-    """Build a frozen registry of the built-in Agents.
+    """Build the default registry through the public built-in registration API."""
+    from benchmark.agents import AgentRegistry
+    from benchmark.builtin.agents import register_builtin_agents
 
-    Mirrors ``services.agent.factory._create_legacy_registry`` so validation
-    sees the same component ids production resolves, including the three agents
-    still exposed through the legacy compatibility facade.
-    """
-    from services.agent.factory import _LEGACY_REGISTRY
+    registry = AgentRegistry()
+    register_builtin_agents(registry)
+    registry.freeze()
+    return registry
 
-    return _LEGACY_REGISTRY
 
 
 __all__ = [

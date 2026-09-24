@@ -12,13 +12,23 @@ MySQL-production split in RFC-0000.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Callable, List, Optional
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from benchmark.persistence.errors import PersistenceConflictError
+
+
+def _naive_utc(value: Optional[datetime]) -> Optional[datetime]:
+    """Columns store naive UTC. Aware bounds are converted before comparison."""
+
+    if value is None:
+        return None
+    if value.tzinfo is None or value.utcoffset() is None:
+        return value
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
 
 
 class _RepositoryBase:
@@ -65,6 +75,21 @@ class SqlAlchemyAccountRepository(_RepositoryBase):
             .filter(Account.is_active == "true", Account.account_type == "AI")
             .all()
         )
+
+    def list_ai_accounts(self, agent_type: Optional[str] = None) -> List:
+        from database.models import Account
+
+        query = self._session.query(Account).filter(Account.account_type == "AI")
+        if agent_type:
+            query = query.filter(Account.agent_type == agent_type)
+        return query.all()
+
+    def get_many(self, account_ids: List[int]) -> List:
+        from database.models import Account
+
+        if not account_ids:
+            return []
+        return self._session.query(Account).filter(Account.id.in_(account_ids)).all()
 
     def list_by_user(self, user_id: int, active_only: bool = True) -> List:
         from database.models import Account
@@ -242,6 +267,23 @@ class SqlAlchemyTradeRepository(_RepositoryBase):
             .all()
         )
 
+    def list_for_account_between(
+        self,
+        account_id: int,
+        start: Optional[datetime] = None,
+        end: Optional[datetime] = None,
+    ) -> List:
+        from database.models import Trade
+
+        query = self._session.query(Trade).filter(Trade.account_id == account_id)
+        start_utc = _naive_utc(start)
+        end_utc = _naive_utc(end)
+        if start_utc is not None:
+            query = query.filter(Trade.trade_time >= start_utc)
+        if end_utc is not None:
+            query = query.filter(Trade.trade_time <= end_utc)
+        return query.order_by(Trade.trade_time.asc()).all()
+
     def list_by_order(self, order_id: int) -> List:
         from database.models import Trade
 
@@ -318,6 +360,25 @@ class SqlAlchemyDecisionRepository(_RepositoryBase):
             query = query.limit(limit)
         return query.all()
 
+    def list_for_account_between(
+        self,
+        account_id: int,
+        start: Optional[datetime] = None,
+        end: Optional[datetime] = None,
+    ) -> List:
+        from database.models import AIDecisionLog
+
+        query = self._session.query(AIDecisionLog).filter(
+            AIDecisionLog.account_id == account_id
+        )
+        start_utc = _naive_utc(start)
+        end_utc = _naive_utc(end)
+        if start_utc is not None:
+            query = query.filter(AIDecisionLog.decision_time >= start_utc)
+        if end_utc is not None:
+            query = query.filter(AIDecisionLog.decision_time <= end_utc)
+        return query.order_by(AIDecisionLog.decision_time.asc()).all()
+
 
 class SqlAlchemyTraceRepository(_RepositoryBase):
 
@@ -347,6 +408,33 @@ class SqlAlchemyTraceRepository(_RepositoryBase):
         if limit is not None:
             query = query.limit(limit)
         return query.all()
+
+    def list_for_account_between(
+        self,
+        account_id: int,
+        start: Optional[datetime] = None,
+        end: Optional[datetime] = None,
+    ) -> List:
+        from database.models import AgentTrace
+
+        query = self._session.query(AgentTrace).filter(AgentTrace.account_id == account_id)
+        start_utc = _naive_utc(start)
+        end_utc = _naive_utc(end)
+        if start_utc is not None:
+            query = query.filter(AgentTrace.created_at >= start_utc)
+        if end_utc is not None:
+            query = query.filter(AgentTrace.created_at <= end_utc)
+        return query.order_by(AgentTrace.created_at.asc()).all()
+
+    def list_runtime_events(self, trace_id: str) -> List:
+        from database.models import RuntimeEvent
+
+        return (
+            self._session.query(RuntimeEvent)
+            .filter(RuntimeEvent.trace_id == trace_id)
+            .order_by(RuntimeEvent.sequence.asc(), RuntimeEvent.id.asc())
+            .all()
+        )
 
 
 class SqlAlchemySnapshotRepository(_RepositoryBase):
@@ -418,6 +506,99 @@ class SqlAlchemyEvaluationRepository(_RepositoryBase):
             )
         return query.order_by(AgentPeriodCheckpoint.period_end.asc()).all()
 
+    def list_recent(self, account_id: int, interval_seconds: int, limit: int) -> List:
+        from database.models import AgentPeriodCheckpoint
+
+        return (
+            self._session.query(AgentPeriodCheckpoint)
+            .filter(
+                AgentPeriodCheckpoint.account_id == account_id,
+                AgentPeriodCheckpoint.interval_seconds == interval_seconds,
+            )
+            .order_by(AgentPeriodCheckpoint.period_end.desc())
+            .limit(limit)
+            .all()
+        )
+
+    def latest_period_end(self, interval_seconds: int):
+        from database.models import AgentPeriodCheckpoint
+
+        row = (
+            self._session.query(AgentPeriodCheckpoint.period_end)
+            .filter(AgentPeriodCheckpoint.interval_seconds == interval_seconds)
+            .order_by(AgentPeriodCheckpoint.period_end.desc())
+            .first()
+        )
+        return None if row is None else row[0]
+
+    def list_period(
+        self,
+        interval_seconds: int,
+        period_end: datetime,
+        order_by: str,
+        limit: int,
+    ) -> List:
+        from database.models import AgentPeriodCheckpoint
+
+        query = self._session.query(AgentPeriodCheckpoint).filter(
+            AgentPeriodCheckpoint.interval_seconds == interval_seconds,
+            AgentPeriodCheckpoint.period_end == period_end,
+        )
+        if order_by == "pnl":
+            query = query.order_by(AgentPeriodCheckpoint.pnl.desc())
+        elif order_by == "volatility":
+            query = query.order_by(AgentPeriodCheckpoint.volatility.asc())
+        else:
+            query = query.order_by(AgentPeriodCheckpoint.return_rate.desc())
+        return query.limit(limit).all()
+
+    def list_between(
+        self,
+        interval_seconds: int,
+        start: Optional[datetime],
+        end: Optional[datetime],
+        limit: int,
+    ) -> List:
+        from database.models import AgentPeriodCheckpoint
+
+        query = self._session.query(AgentPeriodCheckpoint).filter(
+            AgentPeriodCheckpoint.interval_seconds == interval_seconds
+        )
+        if start is not None:
+            query = query.filter(AgentPeriodCheckpoint.period_end >= start)
+        if end is not None:
+            query = query.filter(AgentPeriodCheckpoint.period_end <= end)
+        return query.order_by(AgentPeriodCheckpoint.period_end.desc()).limit(limit).all()
+
+
+class SqlAlchemyRuleEvaluationRepository(_RepositoryBase):
+    def list_for_account(self, account_id: int, *, since=None, limit=None, offset=0, descending=False):
+        from database.models import RuleEvaluationResult
+
+        query = self._session.query(RuleEvaluationResult).filter(RuleEvaluationResult.account_id == account_id)
+        if since is not None:
+            query = query.filter(RuleEvaluationResult.ts >= _naive_utc(since))
+        order = RuleEvaluationResult.ts.desc() if descending else RuleEvaluationResult.ts.asc()
+        query = query.order_by(order).offset(offset)
+        if limit is not None:
+            query = query.limit(limit)
+        return query.all()
+
+    def count_for_account(self, account_id: int) -> int:
+        from database.models import RuleEvaluationResult
+
+        return self._session.query(RuleEvaluationResult).filter(RuleEvaluationResult.account_id == account_id).count()
+
+    def latest(self, account_id: int, trace_id: Optional[str] = None):
+        from database.models import RuleEvaluationResult
+
+        query = self._session.query(RuleEvaluationResult).filter(
+            RuleEvaluationResult.account_id == account_id
+        )
+        if trace_id is not None:
+            query = query.filter(RuleEvaluationResult.trace_id == trace_id)
+        return query.order_by(RuleEvaluationResult.ts.desc(), RuleEvaluationResult.id.desc()).first()
+
 
 class SqlAlchemyUserRepository(_RepositoryBase):
     def add(self, user):
@@ -434,3 +615,36 @@ class SqlAlchemyUserRepository(_RepositoryBase):
         from database.models import User
 
         return self._session.query(User).filter(User.username == username).first()
+
+
+class SqlAlchemyMemoryRepository(_RepositoryBase):
+    """Read-only memory rows for evaluation loaders."""
+
+    def list_by_account(
+        self,
+        account_id: int,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
+        market: Optional[str] = None,
+    ) -> List:
+        from database.models import AgentMemory
+
+        query = self._session.query(AgentMemory).filter(AgentMemory.account_id == account_id)
+        if market:
+            query = query.filter(AgentMemory.market == market)
+        start_utc = _naive_utc(start_time)
+        end_utc = _naive_utc(end_time)
+        if start_utc is not None:
+            query = query.filter(AgentMemory.created_at >= start_utc)
+        if end_utc is not None:
+            query = query.filter(AgentMemory.created_at <= end_utc)
+        return query.order_by(AgentMemory.created_at.asc()).all()
+
+    def list_by_trace(self, trace_id: str) -> List:
+        from database.models import AgentMemory
+
+        return (
+            self._session.query(AgentMemory)
+            .filter(AgentMemory.trace_id == trace_id)
+            .all()
+        )

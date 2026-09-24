@@ -35,7 +35,7 @@ Registry 写入只允许 bootstrap 阶段；startup 完成后 `freeze()`，运�
 - [x] Runtime 统一 deadline/cancellation 状态检查；不得捕获并伪装进程级异常。
 - [x] 检查 `Agent.run()` 返回值不是 coroutine/awaitable；违规时抛 `AgentRuntimeError`，不自动兼容。
 - [x] 现有同步 Agent 直接使用 adapter 转换 context/result 和 trace callback，不再额外放入第二层 worker thread。
-- [x] 将 `factory.create_agent()` 暂时改为 registry facade，并标记 internal deprecated；M04 后删除硬编码分支。
+- [x] 完成 registry 迁移；WAVE 4 已删除生产 factory 兼容入口，旧实现仅留测试对照。
 - [x] 增加并发读取和 freeze 后禁止注册测试。
 
 实现说明与验证结果见 [M03-implementation-report.md](./M03-implementation-report.md)。

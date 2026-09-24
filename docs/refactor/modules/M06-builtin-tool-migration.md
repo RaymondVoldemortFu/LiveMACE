@@ -31,7 +31,7 @@
 - [ ] memory disabled 时由账户 toolset resolution 排除 provider，不在工具内临时判断。
 - [ ] public API 工具保留动态 schema 和 limit，但 namespace 化并报告来源。
 - [ ] sandbox Kline 文件名、row_count 和 source 写入 metadata；写失败返回 ToolResult error。
-- [ ] 迁移完成删除 `register_default_tools()` 的生产调用；可保留一个 tests-only compatibility helper 到 M17。
+- [x] 删除 `register_default_tools()` 的生产调用；对照 helper 位于 `tests/legacy_fixtures/tools.py`。
 
 ## 验收
 

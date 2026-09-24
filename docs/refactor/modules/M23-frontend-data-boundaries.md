@@ -30,16 +30,16 @@ hooks/useTradingActions.ts
 hooks/useAgentTrace.ts
 ```
 
-## TODO
+## 完成清单
 
-- [ ] 从 M21 OpenAPI 生成或校验 TypeScript types；禁止组件自定义同名 Account/Order/Position DTO。
-- [ ] `apiRequest` 统一 JSON、request id、新旧错误解析和取消；各 domain client 只拼 endpoint。
-- [ ] 删除不可达 `/api/users`、`/api/accounts` 封装，除非 M21 明确注册并由 UI 使用。
-- [ ] 将 `TradingPanel`、`StockViewer`、`AccountDataView` 等直接 fetch 迁到 domain client/hook。
-- [ ] WS message 建 discriminated union；client 负责 singleton、重连、heartbeat、订阅和 decode。
-- [ ] App state 可保留在顶层，但 snapshot merge 迁到 `usePortfolioSnapshot`；fast 不清空 full curve。
-- [ ] REST 写操作完成后等待/refetch snapshot，不在前端计算资金/持仓结果。
-- [ ] 合并 M15 extension API re-export，删除旧单文件 API facade。
+- [x] 从 M21 OpenAPI 生成或校验 TypeScript types；禁止组件自定义同名 Account/Order/Position DTO。
+- [x] `apiRequest` 统一 JSON、request id、新旧错误解析和取消；各 domain client 只拼 endpoint。
+- [x] 删除不可达 `/api/users`、`/api/accounts` 封装，除非 M21 明确注册并由 UI 使用。
+- [x] 将 `TradingPanel`、`StockViewer`、`AccountDataView` 等直接 fetch 迁到 domain client/hook。
+- [x] WS message 建 discriminated union；client 负责 singleton、重连、heartbeat、订阅和 decode。
+- [x] App state 可保留在顶层，但 snapshot merge 迁到 `usePortfolioSnapshot`；fast 不清空 full curve。
+- [x] REST 写操作完成后等待/refetch snapshot，不在前端计算资金/持仓结果。
+- [x] 合并 M15 extension API re-export，删除旧单文件 API facade。
 
 ## 验收
 
@@ -52,3 +52,7 @@ hooks/useAgentTrace.ts
 
 前置 M21。API domain clients 可并行；`main.tsx`/WS client 由单一 owner 集成。M15 先新增 extension 模块，最后在此任务合并总入口。
 
+
+## WAVE 4 验收记录
+
+见 [WAVE 4 收尾与验收报告](../wave4-implementation-report.md)。前端构建包含 TypeScript 检查；完整 OpenAPI DTO 再生成比对覆盖字段类型、必填、nullable、嵌套结构与 enum。WS 客户端集中管理连接生命周期，自动化覆盖 StrictMode、重连、账户切换和旧连接消息隔离。

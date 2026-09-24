@@ -7,7 +7,6 @@ import logging
 from typing import Dict, Any, Optional
 
 from benchmark.builtin.prompts import (
-    get_builtin_prompt_registry,
     get_prompt_resolver,
     require_profile_contract,
 )
@@ -15,14 +14,6 @@ from benchmark.prompts import PromptResolver
 from ..llm_client import LLMClient
 
 logger = logging.getLogger(__name__)
-
-
-# Deprecated compatibility export; production auditing resolves the profile at runtime.
-AUDIT_SYSTEM_PROMPT = (
-    get_builtin_prompt_registry()
-    .render_slot("core.compliance-audit.default", "system", {})
-    .content
-)
 
 
 class LLMAuditor:

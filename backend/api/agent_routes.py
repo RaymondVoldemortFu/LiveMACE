@@ -1,3 +1,4 @@
+from schemas.control_plane import AgentTrace, TraceSummary
 from fastapi import Header
 from pydantic import BaseModel, Field
 import os
@@ -16,7 +17,7 @@ from services.agent_api_service import (
 router = APIRouter(prefix="/api/agent", tags=["agent"])
 
 
-@router.get("/trace/{trace_id}")
+@router.get("/trace/{trace_id}", response_model=AgentTrace)
 def get_agent_trace(trace_id: str, db: Session = Depends(get_db)):
     try:
         return AgentApiService(db).get_trace(trace_id)
@@ -32,7 +33,7 @@ def get_latest_trace(account_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-@router.get("/history/{account_id}")
+@router.get("/history/{account_id}", response_model=list[TraceSummary])
 def get_trace_history(account_id: int, limit: int = 20, db: Session = Depends(get_db)):
     return AgentApiService(db).get_trace_history(account_id, limit)
 

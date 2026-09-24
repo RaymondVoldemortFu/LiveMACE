@@ -33,6 +33,7 @@ if TYPE_CHECKING:  # ORM types for typing only; no runtime import side effects
         AccountSnapshot,
         AgentPeriodCheckpoint,
         AgentTrace,
+        RuntimeEvent,
         AIDecisionLog,
         Order,
         Position,
@@ -51,6 +52,10 @@ class AccountRepository(Protocol):
     def get_for_update(self, account_id: int) -> Optional["Account"]: ...
 
     def list_active_ai_accounts(self) -> List["Account"]: ...
+
+    def list_ai_accounts(self, agent_type: Optional[str] = None) -> List["Account"]: ...
+
+    def get_many(self, account_ids: List[int]) -> List["Account"]: ...
 
     def list_by_user(self, user_id: int, active_only: bool = True) -> List["Account"]: ...
 
@@ -108,6 +113,13 @@ class TradeRepository(Protocol):
 
     def list_by_account(self, account_id: int) -> List["Trade"]: ...
 
+    def list_for_account_between(
+        self,
+        account_id: int,
+        start: Optional[datetime] = None,
+        end: Optional[datetime] = None,
+    ) -> List["Trade"]: ...
+
     def list_by_order(self, order_id: int) -> List["Trade"]: ...
 
 
@@ -144,6 +156,13 @@ class DecisionRepository(Protocol):
         self, account_id: int, limit: Optional[int] = None
     ) -> List["AIDecisionLog"]: ...
 
+    def list_for_account_between(
+        self,
+        account_id: int,
+        start: Optional[datetime] = None,
+        end: Optional[datetime] = None,
+    ) -> List["AIDecisionLog"]: ...
+
 
 @runtime_checkable
 class TraceRepository(Protocol):
@@ -154,6 +173,15 @@ class TraceRepository(Protocol):
     def list_by_account(
         self, account_id: int, limit: Optional[int] = None
     ) -> List["AgentTrace"]: ...
+
+    def list_for_account_between(
+        self,
+        account_id: int,
+        start: Optional[datetime] = None,
+        end: Optional[datetime] = None,
+    ) -> List["AgentTrace"]: ...
+
+    def list_runtime_events(self, trace_id: str) -> List["RuntimeEvent"]: ...
 
 
 @runtime_checkable
@@ -184,6 +212,31 @@ class EvaluationRepository(Protocol):
         self,
         account_id: int,
         interval_seconds: Optional[int] = None,
+    ) -> List["AgentPeriodCheckpoint"]: ...
+
+    def list_recent(
+        self,
+        account_id: int,
+        interval_seconds: int,
+        limit: int,
+    ) -> List["AgentPeriodCheckpoint"]: ...
+
+    def latest_period_end(self, interval_seconds: int) -> Optional[datetime]: ...
+
+    def list_period(
+        self,
+        interval_seconds: int,
+        period_end: datetime,
+        order_by: str,
+        limit: int,
+    ) -> List["AgentPeriodCheckpoint"]: ...
+
+    def list_between(
+        self,
+        interval_seconds: int,
+        start: Optional[datetime],
+        end: Optional[datetime],
+        limit: int,
     ) -> List["AgentPeriodCheckpoint"]: ...
 
 

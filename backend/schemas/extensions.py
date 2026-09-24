@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel as PydanticBaseModel, ConfigDict, Field
+
+
+class BaseModel(PydanticBaseModel):
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)
 
 
 class ValidationIssueOut(BaseModel):
@@ -36,6 +40,22 @@ class ComponentOut(BaseModel):
     config_schema: Dict[str, Any] = Field(default_factory=dict)
     requested_capabilities: List[str] = Field(default_factory=list)
     allowed_capabilities: List[str] = Field(default_factory=list)
+
+
+class ToolOut(BaseModel):
+    id: str
+    name: str
+    version: str
+    description: str = ""
+    source: str
+    status: str = "loaded"
+    side_effect: str
+    requested_capabilities: List[str] = Field(default_factory=list)
+    allowed_capabilities: List[str] = Field(default_factory=list)
+
+
+class ToolsetOut(ComponentOut):
+    tool_names: List[str]
 
 
 class PromptProfileOut(BaseModel):

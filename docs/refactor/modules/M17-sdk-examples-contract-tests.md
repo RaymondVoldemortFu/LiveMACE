@@ -40,7 +40,7 @@ def build_fake_context(...) -> DecisionContext
 - [x] CLI `alpha-arena extension validate/test/list`；`list` 可离线列目录内容，不启动 scheduler。
 - [x] 记录 public SPI import 清单、SemVer/api_version 兼容规则和升级示例。
 - [x] 增加 wheel 安装后从临时目录装载 examples 的 smoke test。
-- [ ] 删除 M03/M06/M08 留下的 deprecated compatibility re-export（生产入口仍引用 legacy adapter，延期）。
+- [x] 删除 M03/M06/M08 留下的生产 deprecated compatibility re-export；迁移对照 helper 归入 `backend/tests/legacy_fixtures/`，详见 [WAVE 4 验收报告](../wave4-implementation-report.md)。
 
 ## 验收
 

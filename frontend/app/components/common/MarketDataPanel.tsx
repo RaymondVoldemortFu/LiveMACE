@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react'
+import type { MarketBar } from '@/lib/api/generated-types'
+import { getMarketKline, getMarketStatus } from '@/lib/api/market'
 
 interface Bar { timestamp: number; datetime: string; open: number; high: number; low: number; close: number }
 
@@ -12,17 +14,11 @@ export default function MarketDataPanel() {
   useEffect(() => {
     const controller = new AbortController()
     setLoading(true); setError(''); setBars([]); setStatus('')
-    const read = async (url: string) => {
-      const response = await fetch(url, { signal: controller.signal })
-      const body = await response.json()
-      if (!response.ok) throw new Error(typeof body.detail === 'string' ? body.detail : 'Market data unavailable')
-      return body
-    }
     Promise.all([
-      read(`/api/market/kline/${symbol}?market=${market}&period=1d&count=30`),
-      read(`/api/market/status/${symbol}?market=${market}`)
+      getMarketKline(symbol, market, controller.signal),
+      getMarketStatus(symbol, market, controller.signal),
     ]).then(([history, session]) => {
-      setBars(history.data.filter((bar: Bar) => [bar.open, bar.high, bar.low, bar.close].every(v => Number.isFinite(v) && v > 0)))
+      setBars(history.data.filter((bar): bar is MarketBar & Bar => [bar.open, bar.high, bar.low, bar.close].every(v => typeof v === 'number' && Number.isFinite(v) && v > 0)))
       setStatus(session.market_status)
     }).catch(err => {
       if (!controller.signal.aborted) setError(err.message)

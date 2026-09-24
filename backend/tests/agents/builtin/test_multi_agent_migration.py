@@ -21,7 +21,7 @@ from benchmark.builtin.agents.multi_agent import (
 from benchmark.builtin.prompts import get_builtin_prompt_registry
 from benchmark.contracts import Market, TerminationReason
 from benchmark.infrastructure.adapters import LegacyLLMClientAdapter
-from services.agent.factory import create_agent
+from tests.legacy_fixtures.agents import create_agent
 from services.agent.multi_agent import MULTI_AGENT_FINAL_TOOL_CALL_ID, MultiAgent
 from services.agent.tools import Tool, ToolRegistry
 from tests.agents.builtin.conftest import make_decision_context

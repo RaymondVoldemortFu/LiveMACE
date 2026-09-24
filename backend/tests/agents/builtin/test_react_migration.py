@@ -43,8 +43,8 @@ from benchmark.contracts import (
     TerminationReason,
 )
 from benchmark.infrastructure.adapters import LegacyLLMClientAdapter
-from services.agent.factory import create_agent
-from services.agent.prompts.system_prompts import _get_trade_agent_prompt_legacy
+from tests.legacy_fixtures.agents import create_agent
+from tests.legacy_fixtures.system_prompts import _get_trade_agent_prompt_legacy
 from services.agent.react import DEFAULT_NON_ROUTED_TOOL_NAMES, ReActAgent
 from services.agent.tool_selector import META_TOOL_NAME, REQUIRED_TOOL_NAMES
 from services.agent.tools import Tool, ToolRegistry

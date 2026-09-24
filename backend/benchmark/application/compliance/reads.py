@@ -3,22 +3,18 @@ from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session
 
-from database.models import AIDecisionLog, RuleEvaluationResult
+from benchmark.persistence.sqlalchemy_repositories import SqlAlchemyDecisionRepository, SqlAlchemyRuleEvaluationRepository
 
 
-class ComplianceApiService:
+class ComplianceReadService:
     def __init__(self, db: Session):
-        self.db = db
+        self._rules = SqlAlchemyRuleEvaluationRepository(lambda: db)
+        self._decisions = SqlAlchemyDecisionRepository(lambda: db)
 
     def history(self, account_id: int, limit: int, offset: int):
-        query = (
-            self.db.query(RuleEvaluationResult)
-            .filter(RuleEvaluationResult.account_id == account_id)
-            .order_by(RuleEvaluationResult.ts.desc())
-        )
-        records = query.offset(offset).limit(limit).all()
+        records = self._rules.list_for_account(account_id, limit=limit, offset=offset, descending=True)
         return {
-            "total": query.count(),
+            "total": self._rules.count_for_account(account_id),
             "limit": limit,
             "offset": offset,
             "records": [
@@ -37,15 +33,7 @@ class ComplianceApiService:
 
     def trend(self, account_id: int, period: str, metric: str):
         days_back = {"day": 30, "week": 90, "month": 365}[period]
-        records = (
-            self.db.query(RuleEvaluationResult)
-            .filter(
-                RuleEvaluationResult.account_id == account_id,
-                RuleEvaluationResult.ts >= datetime.utcnow() - timedelta(days=days_back),
-            )
-            .order_by(RuleEvaluationResult.ts.asc())
-            .all()
-        )
+        records = self._rules.list_for_account(account_id, since=datetime.utcnow() - timedelta(days=days_back))
         daily_data = defaultdict(list)
         for record in records:
             date_key = record.ts.date().isoformat() if record.ts else None
@@ -88,9 +76,7 @@ class ComplianceApiService:
         }
 
     def stats(self, account_id: int):
-        records = self.db.query(RuleEvaluationResult).filter(
-            RuleEvaluationResult.account_id == account_id
-        ).all()
+        records = self._rules.list_for_account(account_id)
         if not records:
             return {
                 "total_evaluations": 0,
@@ -123,20 +109,12 @@ class ComplianceApiService:
         }
 
     def recent_decisions(self, account_id: int, limit: int):
-        decisions = (
-            self.db.query(AIDecisionLog)
-            .filter(AIDecisionLog.account_id == account_id)
-            .order_by(AIDecisionLog.decision_time.desc())
-            .limit(limit)
-            .all()
-        )
+        decisions = self._decisions.list_by_account(account_id, limit=limit)
         result = []
         for decision in decisions:
             compliance = None
             if decision.trace_id:
-                compliance = self.db.query(RuleEvaluationResult).filter(
-                    RuleEvaluationResult.trace_id == decision.trace_id
-                ).first()
+                compliance = self._rules.latest(account_id, decision.trace_id)
             result.append(
                 {
                     "trace_id": decision.trace_id,

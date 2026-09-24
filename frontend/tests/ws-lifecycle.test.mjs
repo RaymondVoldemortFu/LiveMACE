@@ -1,28 +1,57 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 import vm from 'node:vm'
 import { transformWithEsbuild } from 'vite'
 
-const filename = new URL('../app/main.tsx', import.meta.url)
-const source = await readFile(filename, 'utf8')
-const { code } = await transformWithEsbuild(`${source}\nexport { App };`, filename.pathname, { loader: 'tsx', format: 'cjs', jsx: 'transform' })
+const appDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../app')
 
-// Run the production effect with deterministic hooks and browser events. No
-// network, browser state, production API or additional test dependency is used.
-function harness() {
-  const states = [], refs = [], effects = [], sockets = [], timers = new Map()
-  let stateIndex = 0, refIndex = 0, timerId = 0
+async function loadModule(relativePath, requireImpl, extra = {}) {
+  const filename = path.join(appDir, relativePath)
+  const source = await readFile(filename, 'utf8')
+  const loader = filename.endsWith('.tsx') ? 'tsx' : 'ts'
+  const { code } = await transformWithEsbuild(source, filename, { loader, format: 'cjs' })
+  const module = { exports: {} }
+  vm.runInNewContext(code, {
+    module,
+    exports: module.exports,
+    require: requireImpl,
+    console: { log() {}, warn() {}, error() {} },
+    ...extra,
+  })
+  return module.exports
+}
+
+const messages = await loadModule('lib/ws/messages.ts', () => ({}), {
+  WebSocket: class { static OPEN = 1 },
+  window: { location: { protocol: 'http:', host: 'localhost' } },
+})
+
+async function harness() {
+  const states = []
+  const refs = []
+  const effects = []
+  const sockets = []
+  const timers = new Map()
+  let stateIndex = 0
+  let refIndex = 0
+  let timerId = 0
   const React = {
-    StrictMode: 'StrictMode',
-    createElement: (type, props, ...children) => ({ type, props, children }),
-    useState: initial => {
+    useState: (initial) => {
       const index = stateIndex++
       states[index] = initial
-      return [initial, value => { states[index] = typeof value === 'function' ? value(states[index]) : value }]
+      return [initial, (value) => {
+        states[index] = typeof value === 'function' ? value(states[index]) : value
+      }]
     },
-    useRef: initial => { const ref = { current: initial }; refs[refIndex++] = ref; return ref },
-    useEffect: effect => effects.push(effect),
+    useRef: (initial) => {
+      const ref = { current: initial }
+      refs[refIndex++] = ref
+      return ref
+    },
+    useEffect: (effect) => effects.push(effect),
   }
   class Socket {
     static OPEN = 1
@@ -38,38 +67,78 @@ function harness() {
     open() { this.readyState = 1; this.emit('open') }
     message(value) { this.emit('message', { data: JSON.stringify(value) }) }
   }
-  const module = { exports: {} }
-  const toast = Object.assign(() => {}, { success() {}, error() {} })
-  vm.runInNewContext(code, {
-    module, exports: module.exports,
-    require(name) {
-      if (name === 'react') return React
-      if (name === 'react-dom/client') return { createRoot: () => ({ render() {} }) }
-      if (name === 'react-hot-toast') return { toast, Toaster: () => null }
-      if (name === '@/lib/api') return { getAccounts: async () => [] }
-      return {}
-    },
+  const client = await loadModule('lib/ws/client.ts', () => messages, {
     WebSocket: Socket,
-    window: { location: { protocol: 'http:', host: 'localhost' } },
-    document: { getElementById: () => ({}) },
-    console: { log() {}, warn() {}, error() {} },
     setTimeout(callback) { const id = ++timerId; timers.set(id, callback); return id },
     clearTimeout(id) { timers.delete(id) },
+    setInterval() { return 1 }, clearInterval() {},
   })
-  module.exports.App()
+  const filename = path.join(appDir, 'hooks/usePortfolioSnapshot.ts')
+  const source = await readFile(filename, 'utf8')
+  return { states, sockets, timers, effects, React, Socket, filename, source, client }
+}
+
+async function start() {
+  const prepared = await harness()
+  const { code } = await transformWithEsbuild(prepared.source, prepared.filename, { loader: 'ts', format: 'cjs' })
+  const module = { exports: {} }
+  const toast = Object.assign(() => {}, { success() {}, error() {} })
+  let timerId = 0
+  vm.runInNewContext(code, {
+    module,
+    exports: module.exports,
+    require(name) {
+      if (name === 'react') return prepared.React
+      if (name === 'react-hot-toast') return { toast }
+      if (name === '@/lib/api/accounts') return { getAccounts: async () => [] }
+      if (name === '@/lib/ws/messages') return messages
+      if (name === '@/lib/ws/client') return prepared.client
+      throw new Error(`unexpected import ${name}`)
+    },
+    WebSocket: prepared.Socket,
+    window: { location: { protocol: 'http:', host: 'localhost' } },
+    console: { log() {}, warn() {}, error() {} },
+    setTimeout(callback) {
+      const id = ++timerId
+      prepared.timers.set(id, callback)
+      return id
+    },
+    clearTimeout(id) { prepared.timers.delete(id) },
+    setInterval() { return 1 },
+    clearInterval() {},
+  })
+  module.exports.usePortfolioSnapshot()
   return {
-    states, refs, sockets, timers, mount: effects[0],
-    tick() { const pending = [...timers.values()]; timers.clear(); pending.forEach(callback => callback()) },
+    states: prepared.states,
+    sockets: prepared.sockets,
+    timers: prepared.timers,
+    mount: prepared.effects[0],
+    tick() {
+      const pending = [...prepared.timers.values()]
+      prepared.timers.clear()
+      pending.forEach((callback) => callback())
+    },
   }
 }
 
 const user = { id: 1, username: 'default' }
-const account = id => ({ id, name: `Account ${id}`, user_id: 1 })
-const snapshot = (selected, marker = selected.id) => ({ type: 'snapshot_full', overview: { account: selected }, positions: [], orders: [], trades: [], ai_decisions: [{ id: marker }] })
-const bootstrap = socket => { socket.open(); socket.message({ type: 'bootstrap_ok', user, account: account(1) }); socket.message(snapshot(account(1))) }
+const account = (id) => ({ id, name: `Account ${id}`, user_id: 1 })
+const snapshot = (selected, marker = selected.id) => ({
+  type: 'snapshot_full',
+  overview: { account: selected },
+  positions: [],
+  orders: [],
+  trades: [],
+  ai_decisions: [{ id: marker }],
+})
+const bootstrap = (socket) => {
+  socket.open()
+  socket.message({ type: 'bootstrap_ok', user, account: account(1) })
+  socket.message(snapshot(account(1)))
+}
 
-test('StrictMode cleanup detaches the first socket and leaves one live subscription', () => {
-  const app = harness()
+test('StrictMode cleanup detaches the first socket and leaves one live subscription', async () => {
+  const app = await start()
   const firstCleanup = app.mount()
   const first = app.sockets[0]
   firstCleanup()
@@ -85,8 +154,8 @@ test('StrictMode cleanup detaches the first socket and leaves one live subscript
 })
 
 for (const closeCode of [1000, 1001, 1006]) {
-  test(`server close ${closeCode} reconnects and restores selection while rejecting default snapshots`, () => {
-    const app = harness()
+  test(`server close ${closeCode} reconnects and restores selection while rejecting default snapshots`, async () => {
+    const app = await start()
     const cleanup = app.mount()
     const first = app.sockets[0]
     bootstrap(first)
@@ -112,8 +181,8 @@ for (const closeCode of [1000, 1001, 1006]) {
   })
 }
 
-test('cleanup cancels a pending reconnect and stale messages cannot update data', () => {
-  const app = harness()
+test('cleanup cancels a pending reconnect and stale messages cannot update data', async () => {
+  const app = await start()
   const cleanup = app.mount()
   bootstrap(app.sockets[0])
   app.sockets[0].close(1001)
@@ -124,8 +193,8 @@ test('cleanup cancels a pending reconnect and stale messages cannot update data'
   assert.equal(app.states[2], null)
 })
 
-test('switch_user accepts its new account and reconnects to that user', () => {
-  const app = harness()
+test('switch_user accepts its new account and reconnects to that user', async () => {
+  const app = await start()
   const cleanup = app.mount()
   const socket = app.sockets[0]
   bootstrap(socket)

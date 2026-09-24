@@ -1,12 +1,19 @@
 from sqlalchemy.orm import Session
-from sqlalchemy import func, and_
 from typing import List, Dict, Optional
 from datetime import datetime
 
-from database.models import Account, AIDecisionLog, Trade, AgentTrace, Position, AgentMemory
+from benchmark.persistence.sqlalchemy_repositories import (
+    SqlAlchemyAccountRepository,
+    SqlAlchemyDecisionRepository,
+    SqlAlchemyMemoryRepository,
+    SqlAlchemyTraceRepository,
+    SqlAlchemyTradeRepository,
+)
+from database.models import Account, AIDecisionLog, Trade, AgentTrace, AgentMemory
 from services.asset_calculator import calc_positions_value
 
 import ast
+
 
 class EvaluationDataLoader:
     """
@@ -17,48 +24,39 @@ class EvaluationDataLoader:
     def __init__(self, db: Session):
         self.db = db
 
+        def provider() -> Session:
+            return db
+
+        self._accounts = SqlAlchemyAccountRepository(provider)
+        self._trades = SqlAlchemyTradeRepository(provider)
+        self._decisions = SqlAlchemyDecisionRepository(provider)
+        self._traces = SqlAlchemyTraceRepository(provider)
+        self._memories = SqlAlchemyMemoryRepository(provider)
+
     def get_agent_accounts(self, agent_type: Optional[str] = None) -> List[Account]:
         """
         Get all AI accounts, optionally filtered by agent architecture.
         """
-        query = self.db.query(Account).filter(Account.account_type == "AI")
-        if agent_type:
-            query = query.filter(Account.agent_type == agent_type)
-        return query.all()
+        return self._accounts.list_ai_accounts(agent_type)
 
     def get_trades(self, account_id: int, start_time: Optional[datetime] = None, end_time: Optional[datetime] = None) -> List[Trade]:
         """
         Get trades for a specific account within a time range.
         """
-        query = self.db.query(Trade).filter(Trade.account_id == account_id)
-        if start_time:
-            query = query.filter(Trade.trade_time >= start_time)
-        if end_time:
-            query = query.filter(Trade.trade_time <= end_time)
-        return query.order_by(Trade.trade_time).all()
+        return self._trades.list_for_account_between(account_id, start_time, end_time)
 
     def get_decisions(self, account_id: int, start_time: Optional[datetime] = None, end_time: Optional[datetime] = None) -> List[AIDecisionLog]:
         """
         Get AI decisions for a specific account within a time range.
         """
-        query = self.db.query(AIDecisionLog).filter(AIDecisionLog.account_id == account_id)
-        if start_time:
-            query = query.filter(AIDecisionLog.decision_time >= start_time)
-        if end_time:
-            query = query.filter(AIDecisionLog.decision_time <= end_time)
-        return query.order_by(AIDecisionLog.decision_time).all()
+        return self._decisions.list_for_account_between(account_id, start_time, end_time)
 
     def get_traces(self, account_id: int, start_time: Optional[datetime] = None, end_time: Optional[datetime] = None) -> List[AgentTrace]:
         """
         Get detailed execution traces for a specific account.
         Note: Traces can be voluminous.
         """
-        query = self.db.query(AgentTrace).filter(AgentTrace.account_id == account_id)
-        if start_time:
-            query = query.filter(AgentTrace.created_at >= start_time)
-        if end_time:
-            query = query.filter(AgentTrace.created_at <= end_time)
-        return query.order_by(AgentTrace.created_at).all()
+        return self._traces.list_for_account_between(account_id, start_time, end_time)
 
     def calculate_pnl(self, account_id: int, start_time: Optional[datetime] = None, end_time: Optional[datetime] = None) -> Dict[str, float]:
         """
@@ -68,7 +66,7 @@ class EvaluationDataLoader:
         For a precise period PnL, one would need historical snapshots of account value.
         Here we return current total profit stats.
         """
-        account = self.db.query(Account).filter(Account.id == account_id).first()
+        account = self._accounts.get(account_id)
         if not account:
             return {"total_pnl": 0.0, "roi": 0.0}
 
@@ -97,8 +95,8 @@ class EvaluationDataLoader:
 
         for acc in accounts:
             pnl_stats = self.calculate_pnl(acc.id)
-            trades_count = self.db.query(func.count(Trade.id)).filter(Trade.account_id == acc.id).scalar()
-            decisions_count = self.db.query(func.count(AIDecisionLog.id)).filter(AIDecisionLog.account_id == acc.id).scalar()
+            trades_count = len(self._trades.list_by_account(acc.id))
+            decisions_count = len(self._decisions.list_by_account(acc.id))
 
             summary.append({
                 "account_id": acc.id,
@@ -127,14 +125,7 @@ class EvaluationDataLoader:
         Returns:
             List of AgentMemory objects
         """
-        query = self.db.query(AgentMemory).filter(AgentMemory.account_id == account_id)
-        if market:
-            query = query.filter(AgentMemory.market == market)
-        if start_time:
-            query = query.filter(AgentMemory.created_at >= start_time)
-        if end_time:
-            query = query.filter(AgentMemory.created_at <= end_time)
-        return query.order_by(AgentMemory.created_at).all()
+        return self._memories.list_by_account(account_id, start_time, end_time, market)
 
     def get_memory_stats(self, account_id: int, start_time: Optional[datetime] = None, end_time: Optional[datetime] = None, market: Optional[str] = None) -> Dict:
         """
@@ -143,15 +134,7 @@ class EvaluationDataLoader:
         Returns:
             Dictionary with memory statistics including count, avg length, etc.
         """
-        query = self.db.query(AgentMemory).filter(AgentMemory.account_id == account_id)
-        if market:
-            query = query.filter(AgentMemory.market == market)
-        if start_time:
-            query = query.filter(AgentMemory.created_at >= start_time)
-        if end_time:
-            query = query.filter(AgentMemory.created_at <= end_time)
-
-        memories = query.all()
+        memories = self._memories.list_by_account(account_id, start_time, end_time, market)
 
         if not memories:
             return {
@@ -208,7 +191,7 @@ class EvaluationDataLoader:
                                 memory_add_count += 1
                             elif tool_name == "memory_search":
                                 memory_search_count += 1
-            except Exception as e:
+            except Exception:
                 continue
 
         return {
@@ -227,4 +210,4 @@ class EvaluationDataLoader:
         Returns:
             List of AgentMemory objects linked to this trace
         """
-        return self.db.query(AgentMemory).filter(AgentMemory.trace_id == trace_id).all()
+        return self._memories.list_by_trace(trace_id)
