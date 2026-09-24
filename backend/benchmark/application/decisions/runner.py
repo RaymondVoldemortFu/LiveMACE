@@ -13,12 +13,12 @@ from benchmark.contracts import to_jsonable
 from benchmark.extensions.host import get_extension_runtime
 from benchmark.infrastructure.adapters.llm import LegacyLLMClientAdapter
 from benchmark.tools import SynchronousToolInvoker
-from database.connection import SessionLocal
 from services.agent.llm_client import LLMClient
 from services.security.api_key_security import is_default_api_key
 
 from .context_builder import load_worker_input
-from .observability import PersistentEventSink, redact
+from benchmark.persistence.events import PersistentEventSink
+from benchmark.persistence.decision_summary import save_run_summary as _save_run_summary
 from .ports import AccountPrompts, BoundedLLM
 
 
@@ -70,8 +70,11 @@ def _run_account(account_id, prices, round_id, events, trace_id, is_cancelled):
     memory_enabled = config.agent_config.get("memory_enabled")
     if memory_enabled is None:
         memory_enabled = worker.memory_enabled
+    selected_tools = runtime.catalog.resolve_tool_names(
+        config.toolset_ids, config.disabled_tools
+    )
     for spec in runtime.tools.list():
-        if spec.name in config.disabled_tools:
+        if spec.name not in selected_tools:
             continue
         if spec.name.startswith("core.memory_") and not memory_enabled:
             continue
@@ -155,42 +158,3 @@ def _run_account(account_id, prices, round_id, events, trace_id, is_cancelled):
         adapter.close()
         if sandbox is not None:
             sandbox.release_container(account_id)
-
-
-def _save_run_summary(account_id, result, prices, *, secrets=()):
-    """Persist a round observation after tools have committed their own trades."""
-    from database.models import Account, Position
-    from services.ai_decision_service import save_ai_decision
-    from services.asset_calculator import calculate_position_market_value
-
-    decision = {
-        "operation": "summary",
-        "reason": redact(
-            result.summary or f"Round finished: {result.termination_reason.value}.", secrets
-        ),
-        "trace_id": result.trace_id,
-        **{
-            key: to_jsonable(value)
-            for key, value in result.metadata.items()
-            if key in {"compliance_audit", "llm_audit", "agent_reasoning"}
-        },
-    }
-    with SessionLocal() as db:
-        account = db.get(Account, account_id)
-        if account is None:
-            raise ValueError("Account no longer exists")
-        positions = db.query(Position).filter(
-            Position.account_id == account_id, Position.quantity != 0
-        ).all()
-        # Reuse this round's quotes but read balances and positions after fills.
-        # Summary persistence never performs a price request or submits an order.
-        total = Decimal(account.current_cash)
-        for position in positions:
-            price = prices.get(position.symbol)
-            if price is None or price <= 0:
-                raise ValueError(f"Missing valuation price for {position.symbol}")
-            total += Decimal(str(calculate_position_market_value(position, price)))
-        save_ai_decision(
-            db, account_id, decision, {"total_assets": total},
-            executed=False, snapshot_prices=prices,
-        )

@@ -202,6 +202,13 @@ class AssetCurvePoint(BaseModel):
     username: str
 
 
+class PersistedAssetCurvePoint(AssetCurvePoint):
+    account_id: int
+    profit_percentage: float
+    cash: float
+    positions_value: float
+
+
 class PortfolioSnapshot(BaseModel):
     model_config = ConfigDict(extra='allow')
     type: str

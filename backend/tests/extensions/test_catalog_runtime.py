@@ -298,7 +298,7 @@ def test_unavailable_toolsets_are_rejected():
     report = catalog.validate_account_config(
         AccountRuntimeConfigDTO(
             agent_id="core.react",
-            toolset_ids=("core.default-tools",),
+            toolset_ids=("core.missing-tools",),
         )
     )
 

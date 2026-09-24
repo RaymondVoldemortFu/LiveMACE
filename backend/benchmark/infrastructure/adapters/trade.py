@@ -1,4 +1,4 @@
-"""Private SQLAlchemy bridge for the transitional legacy trade engine."""
+"""Compose a normalized trade intent with transaction-scoped plan/apply executors."""
 
 from __future__ import annotations
 
@@ -6,15 +6,15 @@ from decimal import Decimal
 from typing import Any, Mapping
 
 
-def execute_legacy_trade(session: Any, command: Any) -> Mapping[str, Any]:
-    """Execute the fixed legacy implementation in the caller-owned UoW.
+def execute_trade_transaction(session: Any, command: Any) -> Mapping[str, Any]:
+    """Execute the trade orchestration in the caller-owned UoW.
 
     This module is infrastructure-only.  No application protocol accepts a
     callback capable of replacing this function or receiving ``session``.
     """
-    from services.agent.trade_execution_tool import _execute_trade_tool_legacy
+    from services.agent.trade_execution_tool import execute_trade_in_transaction
 
-    return _execute_trade_tool_legacy(
+    return execute_trade_in_transaction(
         db=session,
         account_id=command.account_id,
         operation=command.operation,
@@ -32,9 +32,7 @@ def execute_legacy_trade(session: Any, command: Any) -> Mapping[str, Any]:
             else None
         ),
         usd_amount=(
-            _as_float(command.sizing_value)
-            if command.sizing_mode == "usd"
-            else None
+            _as_float(command.sizing_value) if command.sizing_mode == "usd" else None
         ),
         close_ratio=(
             _as_float(command.sizing_value)

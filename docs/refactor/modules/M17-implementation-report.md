@@ -37,3 +37,7 @@
 ## WAVE 4 兼容入口收尾
 
 生产决策及评测已切换到 Runtime/Catalog 入口，现已删除 M03/M06/M08 遗留的 factory/core/env_wrapper 兼容模块及旧 Prompt 常量模块；审计 Prompt 由内置 Prompt registry 提供。迁移对照需要的旧实现移至 `backend/tests/legacy_fixtures/`，仅由测试导入。内置 Agent/Tool/Prompt 迁移、交易链及 examples/SDK 回归通过，详见 [WAVE 4 收尾与验收报告](../wave4-implementation-report.md)。
+
+## 2026-09-25 SDK 与默认测试收尾
+
+补入此前被忽略的 `tests/testing/test_contracts.py`，使 awaitable provider 夹具先满足现行 SPI，字符串样例与当前 `example` 契约一致。pytest 默认排除 integration；外部 provider 或 MySQL 集成需显式 `-m integration`。完整 `tests` 和 `test` 目录均纳入最终回归，证据见 [整体完成核查](../overall-completion-audit.md)。

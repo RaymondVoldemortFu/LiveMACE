@@ -57,7 +57,9 @@ class AccountRepository(Protocol):
 
     def get_many(self, account_ids: List[int]) -> List["Account"]: ...
 
-    def list_by_user(self, user_id: int, active_only: bool = True) -> List["Account"]: ...
+    def list_by_user(
+        self, user_id: int, active_only: bool = True
+    ) -> List["Account"]: ...
 
     def update_cash(
         self,
@@ -82,10 +84,11 @@ class AccountRuntimeConfigRepository(Protocol):
     def list_all(self) -> List["AccountRuntimeConfig"]: ...
 
 
-
 @runtime_checkable
 class PositionRepository(Protocol):
-    def get(self, account_id: int, symbol: str, market: str) -> Optional["Position"]: ...
+    def get(
+        self, account_id: int, symbol: str, market: str
+    ) -> Optional["Position"]: ...
 
     def list_by_account(self, account_id: int) -> List["Position"]: ...
 
@@ -102,7 +105,9 @@ class OrderRepository(Protocol):
 
     def list_by_account(self, account_id: int) -> List["Order"]: ...
 
-    def list_pending_for_update(self, account_id: Optional[int] = None) -> List["Order"]: ...
+    def list_pending_for_update(
+        self, account_id: Optional[int] = None
+    ) -> List["Order"]: ...
 
     def list_pending_account_ids(self) -> List[int]: ...
 
@@ -247,3 +252,22 @@ class UserRepository(Protocol):
     def get(self, user_id: int) -> Optional["User"]: ...
 
     def get_by_username(self, username: str) -> Optional["User"]: ...
+
+
+@runtime_checkable
+class RuleEvaluationRepository(Protocol):
+    """Read persisted compliance scores without exposing a database session."""
+
+    def list_for_account(
+        self,
+        account_id: int,
+        *,
+        since: Optional[datetime] = None,
+        limit: Optional[int] = None,
+        offset: int = 0,
+        descending: bool = False,
+    ) -> List: ...
+
+    def count_for_account(self, account_id: int) -> int: ...
+
+    def latest(self, account_id: int, trace_id: Optional[str] = None): ...

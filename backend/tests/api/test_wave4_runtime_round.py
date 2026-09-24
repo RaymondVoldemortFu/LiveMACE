@@ -37,7 +37,7 @@ def test_four_agents_are_selected_on_next_round_after_api_save(tmp_path, monkeyp
     app.dependency_overrides[get_extension_config_service] = lambda: service
     monkeypatch.setattr(ApiFeatureConfig, 'ENABLE_ACCOUNT_UPDATE_API', True)
     monkeypatch.setattr(runner, 'get_extension_runtime', lambda: runtime)
-    monkeypatch.setattr(runner, 'load_worker_input', lambda aid, prices, rid: load_worker_input(aid, prices, rid, session_factory=sessions))
+    monkeypatch.setattr(runner, 'load_worker_input', lambda aid, prices, rid: load_worker_input(aid, prices, rid, uow_factory=lambda: SqlAlchemyUnitOfWork(sessions)))
     monkeypatch.setattr(runner, 'LLMClient', lambda **kw: SimpleNamespace(model='fake', call=lambda **_: (_ for _ in ()).throw(AssertionError('Live LLM forbidden'))))
     monkeypatch.setattr(runner, '_save_run_summary', lambda *a, **kw: None)
     selected = []
@@ -55,7 +55,7 @@ def test_four_agents_are_selected_on_next_round_after_api_save(tmp_path, monkeyp
     agent_ids = ['core.react', 'core.multi-agent', 'core.advanced-multi-agent', 'core.rule-aware']
     with TestClient(app) as client:
         for index, agent_id in enumerate(agent_ids):
-            draft = dict(agent_id=agent_id, agent_config={}, prompt_profile_id=agent_id + '.default', disabled_tools=disabled)
+            draft = dict(agent_id=agent_id, agent_config={}, prompt_profile_id=agent_id + '.default', toolset_ids=['core.account-tools', 'core.trading-tools'], disabled_tools=disabled)
             if agent_id == 'core.react':
                 draft['agent_config'] = dict(memory_enabled=True, tool_routing_enabled=False)
             valid = client.post(f'/api/account/{account_id}/runtime-config/validate', json={'config':draft})
@@ -65,6 +65,8 @@ def test_four_agents_are_selected_on_next_round_after_api_save(tmp_path, monkeyp
             previous = stored.json()['updated_at']
             runner._run_account(account_id, {'BTC':60000}, f'round-{index}', events, f'trace-{index}', lambda:False)
             assert selected[-1][0] == agent_id
+            assert stored.json()['config']['toolset_ids'] == ['core.account-tools', 'core.trading-tools']
+            assert set(selected[-1][2]) == set(runtime.catalog.resolve_tool_names(toolset_ids=('core.account-tools', 'core.trading-tools'), disabled_tools=disabled))
             assert 'core.search' not in selected[-1][2]
             assert selected[-1][1]['prompt_profile_id'] == agent_id + '.default'
             with sessions() as db:

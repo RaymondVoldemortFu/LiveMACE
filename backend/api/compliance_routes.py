@@ -1,3 +1,4 @@
+from benchmark.persistence.compliance import compliance_service
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -28,7 +29,7 @@ async def get_compliance_history(
     db: Session = Depends(get_db),
 ):
     return _execute(
-        lambda: ComplianceService(db).history(account_id, limit, offset),
+        lambda: compliance_service(db).history(account_id, limit, offset),
         "Failed to get compliance history",
     )
 
@@ -41,7 +42,7 @@ async def get_compliance_trend(
     db: Session = Depends(get_db),
 ):
     return _execute(
-        lambda: ComplianceService(db).trend(account_id, period, metric),
+        lambda: compliance_service(db).trend(account_id, period, metric),
         "Failed to get compliance trend",
     )
 
@@ -49,7 +50,7 @@ async def get_compliance_trend(
 @router.get("/account/{account_id}/stats", response_model=ComplianceStats)
 async def get_compliance_stats(account_id: int, db: Session = Depends(get_db)):
     return _execute(
-        lambda: ComplianceService(db).stats(account_id),
+        lambda: compliance_service(db).stats(account_id),
         "Failed to get compliance stats",
     )
 
@@ -60,7 +61,7 @@ async def evaluate_compliance(
     trace_id: str | None = Query(None),
     db: Session = Depends(get_db),
 ):
-    result = ComplianceService(db).evaluate(ComplianceRequest(account_id=account_id, trace_id=trace_id))
+    result = compliance_service(db).evaluate(ComplianceRequest(account_id=account_id, trace_id=trace_id))
     return result.model_dump()
 
 
@@ -71,6 +72,6 @@ async def get_recent_decisions(
     db: Session = Depends(get_db),
 ):
     return _execute(
-        lambda: ComplianceService(db).recent_decisions(account_id, limit),
+        lambda: compliance_service(db).recent_decisions(account_id, limit),
         "Failed to get recent decisions",
     )

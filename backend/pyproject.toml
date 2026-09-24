@@ -85,7 +85,8 @@ include = [
 "../examples/extensions" = "examples/extensions"
 
 [tool.pytest.ini_options]
+addopts = "-m 'not integration'"
 markers = [
-    "integration: calls external HTTP APIs (requires .env credentials)",
+    "integration: accesses external providers or a dedicated database (explicit opt-in)",
     "slow: heavy subprocess/import tests (~1 min)",
 ]

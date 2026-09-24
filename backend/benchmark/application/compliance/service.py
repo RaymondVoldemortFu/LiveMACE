@@ -6,12 +6,11 @@ import json
 from dataclasses import dataclass
 
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
-
-from benchmark.persistence.sqlalchemy_repositories import (
-    SqlAlchemyAccountRepository,
-    SqlAlchemyRuleEvaluationRepository,
-    SqlAlchemyTraceRepository,
+from benchmark.persistence.repositories import (
+    AccountRepository,
+    RuleEvaluationRepository,
+    TraceRepository,
+    DecisionRepository,
 )
 from benchmark.application.compliance.reads import ComplianceReadService
 
@@ -35,20 +34,22 @@ class ComplianceRequest:
 
 
 class ComplianceService(ComplianceReadService):
-    def __init__(self, db: Session):
-        super().__init__(db)
-
-        def provider() -> Session:
-            return db
-
-        self._accounts = SqlAlchemyAccountRepository(provider)
-        self._rules = SqlAlchemyRuleEvaluationRepository(provider)
-        self._traces = SqlAlchemyTraceRepository(provider)
+    def __init__(
+        self,
+        accounts: AccountRepository,
+        rules: RuleEvaluationRepository,
+        traces: TraceRepository,
+        decisions: DecisionRepository,
+    ):
+        super().__init__(rules, decisions)
+        self._accounts, self._rules, self._traces = accounts, rules, traces
 
     def evaluate(self, request: ComplianceRequest) -> ComplianceResultDTO:
         account = self._accounts.get(request.account_id)
         row = self._rules.latest(request.account_id, request.trace_id)
-        trace_id = row.trace_id if row is not None and row.trace_id else request.trace_id
+        trace_id = (
+            row.trace_id if row is not None and row.trace_id else request.trace_id
+        )
         events = self._traces.list_runtime_events(trace_id) if trace_id else []
         decision_round_id = next(
             (
@@ -66,9 +67,13 @@ class ComplianceService(ComplianceReadService):
             decision_round_id=decision_round_id,
             component_versions=versions,
             gate_pass=None if row is None else row.gate_pass == "true",
-            s_rule_sat=None if row is None or row.s_rule_sat is None else float(row.s_rule_sat),
+            s_rule_sat=None
+            if row is None or row.s_rule_sat is None
+            else float(row.s_rule_sat),
             s_audit=None if row is None or row.s_audit is None else float(row.s_audit),
-            final_score=None if row is None or row.final_score is None else float(row.final_score),
+            final_score=None
+            if row is None or row.final_score is None
+            else float(row.final_score),
         )
 
 
@@ -77,7 +82,11 @@ def _component_versions(events, account_id: int) -> dict[str, str | None]:
         if event.account_id != account_id or event.event_type != "run.configured":
             continue
         try:
-            payload = json.loads(event.payload) if isinstance(event.payload, str) else event.payload
+            payload = (
+                json.loads(event.payload)
+                if isinstance(event.payload, str)
+                else event.payload
+            )
         except json.JSONDecodeError:
             return {}
         raw = payload.get("component_versions") if isinstance(payload, dict) else None

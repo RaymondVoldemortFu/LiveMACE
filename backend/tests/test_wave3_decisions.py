@@ -1,3 +1,4 @@
+from benchmark.persistence import SqlAlchemyUnitOfWork
 import threading
 import time
 from types import SimpleNamespace
@@ -118,7 +119,8 @@ def test_redaction_nested_and_serialized():
     assert '"abc"' not in result
 
 
-def test_worker_snapshot_releases_connection(tmp_path, monkeypatch):
+@pytest.mark.parametrize("use_default_factory", [False, True])
+def test_worker_snapshot_releases_connection(tmp_path, monkeypatch, use_default_factory):
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker
     from database.connection import Base
@@ -145,7 +147,10 @@ def test_worker_snapshot_releases_connection(tmp_path, monkeypatch):
         db.add(account)
         db.commit()
         aid = account.id
-    input = load_worker_input(aid, {"BTC": 60000}, "round", session_factory=sessions)
+    from database import connection
+    monkeypatch.setattr(connection, "SessionLocal", sessions)
+    kwargs = {} if use_default_factory else {"uow_factory": lambda: SqlAlchemyUnitOfWork(sessions)}
+    input = load_worker_input(aid, {"BTC": 60000}, "round", **kwargs)
     assert input.context.portfolio.total_assets == Decimal("10000")
     assert len(input.context.trace_id) == 36
     assert "test-key" not in repr(input)
@@ -157,7 +162,7 @@ def test_failed_runtime_event_is_discoverable(tmp_path):
     from sqlalchemy.orm import sessionmaker
     from database.connection import Base
     from database.models import Account, User
-    from benchmark.application.decisions.observability import PersistentEventSink
+    from benchmark.persistence.events import PersistentEventSink
     from services.agent_api_service import AgentApiService
 
     engine = create_engine(f"sqlite:///{tmp_path / 'events.sqlite'}")
@@ -241,7 +246,7 @@ def test_worker_runs_real_builtin_runtime_with_short_sessions(
         disabled_tools=tuple(spec.name for spec in runtime.tools.list()),
         prompt_profile_id=agent_id + ".default",
     )
-    original = load_worker_input(aid, {"BTC": 60000}, "round", session_factory=sessions)
+    original = load_worker_input(aid, {"BTC": 60000}, "round", uow_factory=lambda: SqlAlchemyUnitOfWork(sessions))
     monkeypatch.setattr(
         runner, "load_worker_input", lambda *args: replace(original, config=config)
     )
@@ -250,7 +255,7 @@ def test_worker_runs_real_builtin_runtime_with_short_sessions(
         "PersistentEventSink",
         partial(runner.PersistentEventSink, session_factory=sessions),
     )
-    monkeypatch.setattr(runner, "SessionLocal", sessions)
+    monkeypatch.setattr(__import__("benchmark.persistence.decision_summary", fromlist=["SessionLocal"]), "SessionLocal", sessions)
 
     class CheckedLLM(FakeLLM):
         def call(self, *args, **kwargs):

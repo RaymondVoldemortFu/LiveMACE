@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from benchmark.persistence.compliance import compliance_service
+
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
@@ -14,6 +16,7 @@ from types import SimpleNamespace
 from benchmark.accounts.config import AccountExtensionConfig, mirror_legacy_account_columns
 from benchmark.application.compliance.rules import RuleCatalog
 from benchmark.application.evaluation.checkpoint import CheckpointService
+from benchmark.persistence.checkpoints import checkpoint_batch
 from benchmark.application.evaluation.service import EvaluateTraceRequest, EvaluationService
 from benchmark.application.evaluation.tool_schema import resolve_tool_schema
 from benchmark.extensions import ExtensionSettings, build_extension_runtime
@@ -63,7 +66,7 @@ def test_checkpoint_service_rerun_does_not_add_rows_and_keeps_formula():
             session.close()
 
     now = datetime(2026, 6, 1, 15, 30, tzinfo=timezone.utc)
-    service = CheckpointService(session_scope=scope)
+    service = CheckpointService(batch_factory=lambda: checkpoint_batch(scope))
     first = service.run_due((3600, 3600, 0), now)
     second = service.run_due((3600,), now)
     assert first.created == 1
@@ -398,7 +401,7 @@ def test_compliance_evaluate_leaves_missing_scores_null(db_session):
     )
     db_session.add(account)
     db_session.flush()
-    result = ComplianceService(db_session).evaluate(ComplianceRequest(account_id=account.id, trace_id="missing"))
+    result = compliance_service(db_session).evaluate(ComplianceRequest(account_id=account.id, trace_id="missing"))
     assert result.account_id == account.id
     assert result.trace_id == "missing"
     assert result.decision_round_id is None

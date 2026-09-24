@@ -1,3 +1,4 @@
+from schemas.domain_reads import AccountOverview, DefaultOverview, LLMConnectionResult
 """
 Account and Asset Curve API Routes (Cleaned)
 """
@@ -25,7 +26,7 @@ from config.api_feature_config import ApiFeatureConfig
 from benchmark.builtin.prompts.preview import preview_system_prompt_for_account
 from services.security.api_key_security import encrypt_api_key, mask_api_key_for_display
 from services.account_api_service import AccountApiService
-from schemas.control_plane import TradingAccount, AccountSystemPromptResponse, DecisionSchedule, TradingAccountCreate, TradingAccountUpdate
+from schemas.control_plane import TradingAccount, AccountSystemPromptResponse, DecisionSchedule, TradingAccountCreate, TradingAccountUpdate, PersistedAssetCurvePoint
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +86,7 @@ async def get_decision_schedule():
         raise HTTPException(status_code=500, detail=f"Failed to get decision schedule: {str(e)}")
 
 
-@router.get("/{account_id}/overview")
+@router.get("/{account_id}/overview", response_model=AccountOverview, response_model_exclude_unset=True)
 async def get_specific_account_overview(account_id: int, db: Session = Depends(get_db)):
     """Get overview for a specific account"""
     try:
@@ -177,7 +178,7 @@ async def get_account_system_prompt(account_id: int, db: Session = Depends(get_d
 
 
 
-@router.get("/overview")
+@router.get("/overview", response_model=DefaultOverview, response_model_exclude_unset=True)
 async def get_account_overview(db: Session = Depends(get_db)):
     """Get overview for the default account (for paper trading demo)"""
     try:
@@ -229,7 +230,7 @@ async def create_new_account(payload: dict, db: Session = Depends(get_db)):
             )
 
         # Log incoming payload for debugging
-        logger.info(f"Creating account with payload: {payload}")
+        logger.info("Creating account fields: %s", sorted(payload))
 
         # Get the default user (or first user)
         account_service = AccountApiService(db)
@@ -434,7 +435,7 @@ async def update_account_settings(account_id: int, payload: dict, db: Session = 
         raise HTTPException(status_code=500, detail=f"Failed to update account: {str(e)}")
 
 
-@router.get("/asset-curve/timeframe")
+@router.get("/asset-curve/timeframe", response_model=list[PersistedAssetCurvePoint])
 async def get_asset_curve_by_timeframe(
     timeframe: str = "1d",
     db: Session = Depends(get_db)
@@ -483,7 +484,7 @@ def _map_status_code_to_message(status_code, model):
         429: "Rate limit exceeded. Please try again later."
     }.get(status_code, f"HTTP {status_code} error")
 
-@router.post("/test-llm")
+@router.post("/test-llm", response_model=LLMConnectionResult, response_model_exclude_unset=True)
 async def test_llm_connection(payload: dict):
     """Test LLM connection with provided credentials"""
     try:

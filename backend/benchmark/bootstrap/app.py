@@ -40,7 +40,9 @@ class AppSettings:
     def resolved_static_dir(self) -> str:
         if self.static_dir is not None:
             return self.static_dir
-        backend_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        backend_dir = os.path.dirname(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        )
         return os.path.join(backend_dir, "static")
 
 
@@ -72,9 +74,8 @@ def create_app(
             # (stop callbacks themselves are bounded) before the next retry.
             with anyio.CancelScope(shield=True):
                 retry_delay = 0.05
-                deadline = (
-                    time.monotonic()
-                    + max(settings.startup_cleanup_timeout_seconds, 0.0)
+                deadline = time.monotonic() + max(
+                    settings.startup_cleanup_timeout_seconds, 0.0
                 )
                 cleanup_failures = dict(exc.cleanup_failures)
                 while True:
@@ -114,7 +115,9 @@ def create_app(
             # Stop callbacks can report a still-draining worker. Keep ownership
             # and retry until cleanup completes instead of exiting ASGI early.
             with anyio.CancelScope(shield=True):
-                deadline = time.monotonic() + max(settings.shutdown_cleanup_timeout_seconds, 0)
+                deadline = time.monotonic() + max(
+                    settings.shutdown_cleanup_timeout_seconds, 0
+                )
                 while True:
                     try:
                         await shutdown_runtime(handle)
@@ -134,20 +137,41 @@ def create_app(
     _register_routes(app)
     _register_spa(app, settings)
     from fastapi.openapi.utils import get_openapi
-    from schemas.control_plane import PortfolioSnapshot, PortfolioUser, TradingAccountCreate, TradingAccountUpdate
+    from schemas.control_plane import (
+        PortfolioSnapshot,
+        PortfolioUser,
+        TradingAccountCreate,
+        TradingAccountUpdate,
+    )
 
     def openapi():
         if app.openapi_schema is None:
-            schema = get_openapi(title=app.title, version=app.version, routes=app.routes)
+            schema = get_openapi(
+                title=app.title, version=app.version, routes=app.routes
+            )
             components = schema.setdefault("components", {}).setdefault("schemas", {})
-            for model in (PortfolioSnapshot, PortfolioUser, TradingAccountCreate, TradingAccountUpdate):
-                definition = model.model_json_schema(ref_template="#/components/schemas/{model}")
+            for model in (
+                PortfolioSnapshot,
+                PortfolioUser,
+                TradingAccountCreate,
+                TradingAccountUpdate,
+            ):
+                definition = model.model_json_schema(
+                    ref_template="#/components/schemas/{model}"
+                )
                 components.update(definition.pop("$defs", {}))
                 components[model.__name__] = definition
             # WebSocket has no HTTP operation; publish its payload contract explicitly.
-            schema["x-websocket-snapshot"] = {"$ref": "#/components/schemas/PortfolioSnapshot"}
-            for method, path, model in (("post", "/api/account/", TradingAccountCreate), ("put", "/api/account/{account_id}", TradingAccountUpdate)):
-                schema["paths"][path][method]["requestBody"]["content"]["application/json"]["schema"] = {"$ref": f"#/components/schemas/{model.__name__}"}
+            schema["x-websocket-snapshot"] = {
+                "$ref": "#/components/schemas/PortfolioSnapshot"
+            }
+            for method, path, model in (
+                ("post", "/api/account/", TradingAccountCreate),
+                ("put", "/api/account/{account_id}", TradingAccountUpdate),
+            ):
+                schema["paths"][path][method]["requestBody"]["content"][
+                    "application/json"
+                ]["schema"] = {"$ref": f"#/components/schemas/{model.__name__}"}
             app.openapi_schema = schema
         return app.openapi_schema
 
@@ -168,7 +192,11 @@ def _register_middleware(app: FastAPI, settings: AppSettings) -> None:
 
 
 def _register_health(app: FastAPI) -> None:
-    @app.get("/api/health")
+    from schemas.domain_reads import HealthResponse, ReadinessResponse
+
+    @app.get(
+        "/api/health", response_model=HealthResponse, response_model_exclude_unset=True
+    )
     async def health_check(request: Request):
         handle = getattr(request.app.state, "runtime_handle", None)
         if handle is None:
@@ -179,22 +207,27 @@ def _register_health(app: FastAPI) -> None:
             "services": handle.health(),
         }
 
-    @app.get("/api/ready")
+    @app.get("/api/ready", response_model=ReadinessResponse)
     def readiness_check(request: Request):
         from fastapi.responses import JSONResponse
+
         handle = getattr(request.app.state, "runtime_handle", None)
         ready = bool(handle is not None and handle.is_ready())
         dependencies = {}
         if ready and os.getenv("WAVE3_PRODUCTION", "").lower() == "true":
             from .readiness import production_dependencies
+
             dependencies = production_dependencies()
             ready = all(value == "ready" for value in dependencies.values())
-        return JSONResponse(status_code=200 if ready else 503, content={
-            "ready": ready,
-            "status": "ready" if ready else "not_ready",
-            "services": handle.health() if handle is not None else {},
-            "dependencies": dependencies,
-        })
+        return JSONResponse(
+            status_code=200 if ready else 503,
+            content={
+                "ready": ready,
+                "status": "ready" if ready else "not_ready",
+                "services": handle.health() if handle is not None else {},
+                "dependencies": dependencies,
+            },
+        )
 
 
 def _register_static(app: FastAPI, settings: AppSettings) -> None:

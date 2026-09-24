@@ -54,8 +54,7 @@ class DecisionRoundService:
         from concurrent.futures import ThreadPoolExecutor, as_completed
         from uuid import uuid4
         from services import trading_commands as commands
-        from database.connection import SessionLocal
-        from .selection import select_agent_accounts
+        from .selection import select_scheduled_account_ids
         from .runner import run_account
 
         if self.entrypoint is not None:
@@ -73,10 +72,7 @@ class DecisionRoundService:
             if self.selector:
                 account_ids = self.selector(request.account_ids)
             else:
-                with SessionLocal() as db:
-                    account_ids = [
-                        a.id for a in select_agent_accounts(db, request.account_ids)
-                    ]
+                account_ids = select_scheduled_account_ids(request.account_ids)
             if not account_ids:
                 return DecisionRoundResult(round_id, 0, {})
             prices = (

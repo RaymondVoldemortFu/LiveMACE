@@ -137,26 +137,27 @@ export const RuntimeConfigPanel = forwardRef<RuntimeConfigHandle, {
         {catalog.toolsets.map((group) => (
           <label key={group.id} className="flex items-center gap-2 text-sm">
             <input type="checkbox" aria-label={`${group.name} tools`}
-              checked={group.tool_names.every((name) => !draft.disabled_tools.includes(name))}
+              checked={(draft.toolset_ids.length ? draft.toolset_ids : ['core.default-tools']).includes(group.id)}
               onChange={(event) => {
-                const disabled = new Set(draft.disabled_tools)
-                for (const name of group.tool_names) {
-                  if (event.target.checked) disabled.delete(name)
-                  else disabled.add(name)
-                }
-                runtime.setDraft({ ...draft, disabled_tools: [...disabled] })
+                const ids = new Set(draft.toolset_ids)
+                if (event.target.checked) ids.add(group.id)
+                else ids.delete(group.id)
+                runtime.setDraft({ ...draft, toolset_ids: [...ids] })
               }} />
             <span>{group.name} · {group.tool_names.length} tools</span>
           </label>
         ))}
+        <p className="text-xs text-muted-foreground">Select named toolsets; an empty selection uses all installed tools. Individual switches exclude tools from those sets.</p>
         {catalog.tools.map((tool) => {
-          const enabled = !draft.disabled_tools.includes(tool.name)
+          const included = !draft.toolset_ids.length || catalog.toolsets.some((group) => draft.toolset_ids.includes(group.id) && group.tool_names.includes(tool.name))
+          const enabled = included && !draft.disabled_tools.includes(tool.name)
           return (
             <label key={tool.name} className="flex items-start gap-2 text-sm">
               <input
                 type="checkbox"
                 className="mt-1"
                 checked={enabled}
+                disabled={!included}
                 onChange={(event) => {
                   const disabled = new Set(draft.disabled_tools)
                   if (event.target.checked) disabled.delete(tool.name)

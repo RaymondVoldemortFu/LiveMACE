@@ -196,7 +196,7 @@ def execute_trade_tool(
         }
 
 
-def _execute_trade_tool_legacy(
+def execute_trade_in_transaction(
     db: Session,
     account_id: int,
     operation: str,
@@ -518,95 +518,15 @@ def _execute_trade_tool_legacy(
         return {"executed": False, "error": str(e)}
 
 
-def _calc_open_size(
-    account: Account,
-    price: float,
-    market: str,
-    size_mode: str,
-    target_portion_of_balance: Optional[float],
-    usd_amount: Optional[float],
-) -> tuple[float, float]:
-    available_cash = float(account.current_cash)
-    if not math.isfinite(available_cash):
-        raise ValueError("account cash must be finite")
-    if not math.isfinite(float(price)) or float(price) <= 0:
-        raise ValueError("price must be finite and positive")
-    if available_cash <= 0:
-        return 0.0, 0.0
-
-    if size_mode == "all_in":
-        notional = available_cash
-    elif size_mode == "usd":
-        amt = float(usd_amount or 0.0)
-        if not math.isfinite(amt):
-            raise ValueError("usd_amount must be finite")
-        notional = max(0.0, min(amt, available_cash))
-    else:
-        portion = float(target_portion_of_balance if target_portion_of_balance is not None else 0.0)
-        if not math.isfinite(portion):
-            raise ValueError("target_portion_of_balance must be finite")
-        portion = max(0.0, min(portion, 1.0))
-        notional = available_cash * portion
-
-    if notional <= 0:
-        return 0.0, 0.0
-
-    if market == "US":
-        qty = int(Decimal(str(notional)) / Decimal(str(price)))
-    else:
-        qty = float(Decimal(str(notional)) / Decimal(str(price)))
-        qty = round(qty, 6)
-    return float(qty), float(notional)
+def _calc_open_size(account, *args, **kwargs):
+    from benchmark.application.trading.planner import plan_open_size
+    return plan_open_size({"current_cash": account.current_cash}, *args, **kwargs)
 
 
-def _calc_close_size(
-    position: Position,
-    market: str,
-    price: float,
-    size_mode: str,
-    target_portion_of_balance: Optional[float],
-    usd_amount: Optional[float],
-    close_ratio: Optional[float],
-) -> tuple[float, float]:
-    if float(position.leverage or 1) > 1:
-        position_qty = float(position.quantity)
-    else:
-        position_qty = float(position.available_quantity)
-    if not math.isfinite(position_qty):
-        raise ValueError("position quantity must be finite")
-    if not math.isfinite(float(price)) or float(price) <= 0:
-        raise ValueError("price must be finite and positive")
-    if position_qty <= 0:
-        return 0.0, 0.0
-
-    if size_mode in {"close_all", "all_in"}:
-        qty = position_qty
-    elif size_mode == "usd":
-        amt = float(usd_amount or 0.0)
-        if not math.isfinite(amt):
-            raise ValueError("usd_amount must be finite")
-        amt = max(0.0, amt)
-        qty = amt / price if price > 0 else 0.0
-    elif close_ratio is not None:
-        ratio = float(close_ratio)
-        if not math.isfinite(ratio):
-            raise ValueError("close_ratio must be finite")
-        ratio = max(0.0, min(ratio, 1.0))
-        qty = position_qty * ratio
-    else:
-        ratio = float(target_portion_of_balance or 0.0)
-        if not math.isfinite(ratio):
-            raise ValueError("target_portion_of_balance must be finite")
-        ratio = max(0.0, min(ratio, 1.0))
-        qty = position_qty * ratio
-
-    qty = min(qty, position_qty)
-    if market == "US":
-        qty = int(qty)
-    else:
-        qty = round(float(qty), 6)
-
-    return float(qty), float(qty * price)
+def _calc_close_size(position, *args, **kwargs):
+    from benchmark.application.trading.planner import plan_close_size
+    values = {key: getattr(position, key) for key in ("quantity", "available_quantity", "leverage")}
+    return plan_close_size(values, *args, **kwargs)
 
 
 def _execute_open(

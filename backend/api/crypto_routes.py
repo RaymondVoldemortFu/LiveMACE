@@ -1,3 +1,4 @@
+from schemas.domain_reads import CryptoPrice, PopularCrypto
 """
 Crypto-specific API routes
 """
@@ -22,7 +23,7 @@ async def get_crypto_symbols() -> List[str]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/price/{symbol}")
+@router.get("/price/{symbol}", response_model=CryptoPrice, response_model_exclude_unset=True)
 async def get_crypto_price(symbol: str) -> Dict[str, Any]:
     """Get current price for a crypto symbol"""
     try:
@@ -48,7 +49,7 @@ async def get_crypto_market_status(symbol: str) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/popular")
+@router.get("/popular", response_model=list[PopularCrypto], response_model_exclude_unset=True)
 async def get_popular_cryptos() -> List[Dict[str, Any]]:
     """Get popular crypto trading pairs with current prices"""
     popular_symbols = ["BTC", "ETH", "SOL", "DOGE", "BNB", "XRP"]

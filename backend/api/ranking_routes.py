@@ -1,3 +1,4 @@
+from schemas.domain_reads import RankingFactors, RankingSymbols, RankingTable
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
@@ -9,12 +10,12 @@ from services.ranking_api_service import RankingApiService
 router = APIRouter(prefix="/api/ranking", tags=["ranking"])
 
 
-@router.get("/factors")
+@router.get("/factors", response_model=RankingFactors, response_model_exclude_unset=True)
 async def get_available_factors():
     return RankingApiService.available_factors()
 
 
-@router.get("/table")
+@router.get("/table", response_model=RankingTable, response_model_exclude_unset=True)
 async def get_ranking_table(
     db: Session = Depends(get_db),
     days: int = Query(100, description="Number of days of historical data to use"),
@@ -24,7 +25,7 @@ async def get_ranking_table(
     return RankingApiService(db).ranking_table(days, factors, limit)
 
 
-@router.get("/symbols")
+@router.get("/symbols", response_model=RankingSymbols, response_model_exclude_unset=True)
 async def get_available_symbols(
     db: Session = Depends(get_db),
     days: int = Query(100, description="Number of days to check for data availability"),

@@ -385,3 +385,12 @@ docs/contributor-contribution-analysis.md
 docs/contributor-contribution-analysis.pdf
 !backend/tests/legacy_fixtures/
 !backend/tests/legacy_fixtures/*.py
+
+# SDK regression contracts are source fixtures.
+!backend/tests/testing/
+!backend/tests/testing/*.py
+.refactor-acceptance/
+!backend/tests/trading_commands_immediate_execution_test.py
+!backend/tests/services/
+backend/tests/services/*
+!backend/tests/services/test_container_initialization.py

@@ -2,6 +2,8 @@ import { apiJson } from './client'
 import type {
   AccountSystemPromptResponse,
   DecisionSchedule,
+  DefaultOverview,
+  LLMConnectionResult,
   TradingAccount,
   TradingAccountCreate,
   TradingAccountUpdate,
@@ -15,7 +17,7 @@ export async function getDecisionSchedule(): Promise<DecisionSchedule> {
   return apiJson('/account/decision-schedule')
 }
 
-export async function getOverview(): Promise<unknown> {
+export async function getOverview(): Promise<DefaultOverview> {
   return apiJson('/account/overview')
 }
 
@@ -52,7 +54,7 @@ export async function testLLMConnection(testData: {
   model?: string | null
   base_url?: string | null
   api_key?: string | null
-}): Promise<{ success: boolean; message: string; response?: unknown }> {
+}): Promise<LLMConnectionResult> {
   return apiJson('/account/test-llm', {
     method: 'POST',
     body: JSON.stringify(testData),

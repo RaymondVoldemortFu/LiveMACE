@@ -1,3 +1,4 @@
+from schemas.domain_reads import LatestTrace, ManualDecisionResponse
 from schemas.control_plane import AgentTrace, TraceSummary
 from fastapi import Header
 from pydantic import BaseModel, Field
@@ -25,7 +26,7 @@ def get_agent_trace(trace_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-@router.get("/latest/{account_id}")
+@router.get("/latest/{account_id}", response_model=LatestTrace, response_model_exclude_unset=True)
 def get_latest_trace(account_id: int, db: Session = Depends(get_db)):
     try:
         return AgentApiService(db).get_latest_trace(account_id)
@@ -47,7 +48,7 @@ class ManualDecisionRequest(BaseModel):
     max_concurrency: int = Field(default=1, ge=1, le=4)
 
 
-@router.post("/round")
+@router.post("/round", response_model=ManualDecisionResponse, response_model_exclude_unset=True)
 def run_manual_decision_round(
     request: ManualDecisionRequest,
     x_operator_token: str = Header(default=""),

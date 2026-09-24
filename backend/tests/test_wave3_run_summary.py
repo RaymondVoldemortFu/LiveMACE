@@ -19,7 +19,7 @@ def test_summary_uses_post_trade_equity_and_preserves_audit_without_reexecuting(
     from services import market_data, order_executor_leverage
     from services.agent import trade_execution_tool
 
-    monkeypatch.setattr(runner, "SessionLocal", session_factory)
+    monkeypatch.setattr(__import__("benchmark.persistence.decision_summary", fromlist=["SessionLocal"]), "SessionLocal", session_factory)
     monkeypatch.setattr(trade_execution_tool, "get_last_price", lambda *args: 100.0)
     monkeypatch.setattr(trade_execution_tool, "calc_positions_value", lambda *args: 0.0)
     monkeypatch.setattr(order_executor_leverage, "get_last_price", lambda *args: 100.0)
@@ -72,7 +72,7 @@ def test_summary_uses_post_trade_equity_and_preserves_audit_without_reexecuting(
 def test_empty_round_summary_has_explicit_status_without_an_executed_hold(
     session_factory, monkeypatch, termination,
 ):
-    monkeypatch.setattr(runner, "SessionLocal", session_factory)
+    monkeypatch.setattr(__import__("benchmark.persistence.decision_summary", fromlist=["SessionLocal"]), "SessionLocal", session_factory)
     result = AgentRunResult("trace-empty", "round-empty", termination)
     runner._save_run_summary(1, result, {})
     with session_factory() as db:

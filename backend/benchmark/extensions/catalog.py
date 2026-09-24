@@ -61,6 +61,62 @@ class ExtensionCatalog:
     def list_prompt_profiles(self) -> tuple[PromptProfileDescriptor, ...]:
         return self._result.prompts.list_profiles()
 
+    def list_toolsets(self) -> tuple[dict[str, Any], ...]:
+        """Expose deterministic named selections over the frozen tool registry.
+
+        Empty account selection retains all installed tools. Explicit selections
+        form a union, then disabled_tools and host capabilities restrict it.
+        """
+        specs = self.list_tools()
+        groups = {"core.default-tools": ("All installed tools", "1.0.0", specs)}
+        categories = (
+            ("trading.write", "trading"),
+            ("sandbox.write", "sandbox"),
+            ("memory.read", "memory"),
+            ("memory.write", "memory"),
+            ("network.read", "research"),
+            ("market.read", "market"),
+            ("account.read", "account"),
+        )
+        buckets = {}
+        for spec in specs:
+            category = next(
+                (
+                    name
+                    for capability, name in categories
+                    if capability in spec.required_capabilities
+                ),
+                "other",
+            )
+            buckets.setdefault(category, []).append(spec)
+        for category, tools in buckets.items():
+            groups[f"core.{category}-tools"] = (category.title(), "1.0.0", tools)
+        return tuple(
+            {
+                "id": key,
+                "name": name,
+                "version": version,
+                "tool_names": tuple(spec.name for spec in tools),
+                "requested_capabilities": tuple(
+                    sorted({c for spec in tools for c in spec.required_capabilities})
+                ),
+            }
+            for key, (name, version, tools) in sorted(groups.items())
+        )
+
+    def resolve_tool_names(self, toolset_ids=(), disabled_tools=()) -> tuple[str, ...]:
+        """Resolve saved selections, rejecting missing sets instead of widening access."""
+        groups = {group["id"]: group for group in self.list_toolsets()}
+        missing = set(toolset_ids) - groups.keys()
+        if missing:
+            raise ValueError("Unknown toolsets: " + ", ".join(sorted(missing)))
+        selected = {
+            name
+            for key in (toolset_ids or ("core.default-tools",))
+            for name in groups[key]["tool_names"]
+        }
+        return tuple(sorted(selected - set(disabled_tools)))
+
     def validate_account_config(
         self,
         config: AccountRuntimeConfigDTO | Mapping[str, Any],
@@ -164,19 +220,43 @@ class ExtensionCatalog:
                     )
                 )
 
-        families = {"core.react": "react", "core.multi-agent": "multi_agent",
-                    "core.advanced-multi-agent": "advanced_multi_agent", "core.rule-aware": "rule_aware"}
-        if dto.prompt_profile_id and dto.agent_id in families and resolved_profile_version:
+        families = {
+            "core.react": "react",
+            "core.multi-agent": "multi_agent",
+            "core.advanced-multi-agent": "advanced_multi_agent",
+            "core.rule-aware": "rule_aware",
+        }
+        if (
+            dto.prompt_profile_id
+            and dto.agent_id in families
+            and resolved_profile_version
+        ):
             from types import SimpleNamespace
             from benchmark.builtin.prompts import validate_profile_contract
+
             registry = self._result.prompts
             resolver = SimpleNamespace(
-                get_profile=lambda profile_id: registry.get_profile(profile_id, version=resolved_profile_version),
-                get_prompt_spec=registry.get_prompt_spec)
-            profile_report = validate_profile_contract(resolver, dto.prompt_profile_id, families[dto.agent_id])
+                get_profile=lambda profile_id: registry.get_profile(
+                    profile_id, version=resolved_profile_version
+                ),
+                get_prompt_spec=registry.get_prompt_spec,
+            )
+            profile_report = validate_profile_contract(
+                resolver, dto.prompt_profile_id, families[dto.agent_id]
+            )
             errors.extend(profile_report.errors)
 
-        disabled = set(dto.disabled_tools)
+        try:
+            selected_tools = set(
+                self.resolve_tool_names(dto.toolset_ids, dto.disabled_tools)
+            )
+        except ValueError as exc:
+            selected_tools = set()
+            errors.append(
+                ValidationIssue(
+                    path="toolset_ids", message=str(exc), code="TOOLSET_NOT_FOUND"
+                )
+            )
         for tool_name in dto.disabled_tools:
             try:
                 self._result.tools.get(tool_name)
@@ -190,7 +270,7 @@ class ExtensionCatalog:
                 )
 
         for spec in self._result.tools.list():
-            if spec.name in disabled:
+            if spec.name not in selected_tools:
                 continue
             missing = sorted(
                 set(spec.required_capabilities).difference(self._allowed_capabilities)
@@ -199,15 +279,11 @@ class ExtensionCatalog:
                 errors.append(
                     ValidationIssue(
                         path=f"tools.{spec.name}",
-                        message="required capabilities are not granted: " + ", ".join(missing),
+                        message="required capabilities are not granted: "
+                        + ", ".join(missing),
                         code="TOOL_CAPABILITY_DENIED",
                     )
                 )
-
-        if dto.toolset_ids:
-            errors.append(
-                ValidationIssue(path="toolset_ids", message="Named toolsets are not available; use disabled_tools to select tools", code="TOOLSET_NOT_FOUND")
-            )
 
         self._validate_component_versions(dto, errors)
 
@@ -259,6 +335,9 @@ class ExtensionCatalog:
         for tool in self._result.tools.list():
             extension_version = self._result.tools.get(tool.name).extension.version
             available.setdefault(tool.name, set()).add(extension_version)
+
+        for group in self.list_toolsets():
+            available.setdefault(group["id"], set()).add(group["version"])
 
         for component_id, requested_version in dto.component_versions.items():
             loaded_versions = available.get(component_id)

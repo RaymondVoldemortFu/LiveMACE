@@ -393,15 +393,15 @@ class AgentMemory(Base):
 
 
 # CRYPTO market trading configuration constants
-CRYPTO_MIN_COMMISSION = 0.1  # $0.1 minimum commission
-CRYPTO_COMMISSION_RATE = 0.001  # 0.1% commission rate
-CRYPTO_MIN_ORDER_QUANTITY = 0.0001  # Minimum 0.0001 BTC (supports fractional crypto)
+from benchmark.application.trading.fees import CRYPTO_MIN_COMMISSION
+from benchmark.application.trading.fees import CRYPTO_COMMISSION_RATE
+from benchmark.application.trading.fees import CRYPTO_MIN_ORDER_QUANTITY
 CRYPTO_LOT_SIZE = 0.0001  # Lot size for crypto
 
 # Leverage trading constants (Hyperliquid-style)
-CRYPTO_TAKER_FEE_RATE = 0.00035  # 0.035% taker fee
-CRYPTO_INTEREST_RATE_HOURLY = 0.0000125  # 0.00125%/hour (0.03%/day)
-CRYPTO_MAX_LEVERAGE = 50  # Maximum leverage allowed
+from benchmark.application.trading.fees import CRYPTO_TAKER_FEE_RATE
+from benchmark.application.trading.fees import CRYPTO_INTEREST_RATE_HOURLY
+from benchmark.application.trading.fees import CRYPTO_MAX_LEVERAGE
 CRYPTO_MAINTENANCE_MARGIN_RATIO = 0.5  # 50% of initial margin
 
 

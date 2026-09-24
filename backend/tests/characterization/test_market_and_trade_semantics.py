@@ -174,7 +174,7 @@ def test_execute_trade_hold_and_close_all_without_positions(monkeypatch):
             return None
 
     monkeypatch.setattr(trade_execution_tool, "_save_trade_log", lambda **kwargs: None)
-    hold = trade_execution_tool._execute_trade_tool_legacy(
+    hold = trade_execution_tool.execute_trade_in_transaction(
         DB(),
         1,
         "hold",
@@ -183,7 +183,7 @@ def test_execute_trade_hold_and_close_all_without_positions(monkeypatch):
     assert hold["executed"] is True
     assert hold["operation"] == "hold"
 
-    close_all = trade_execution_tool._execute_trade_tool_legacy(
+    close_all = trade_execution_tool.execute_trade_in_transaction(
         DB(),
         1,
         "close_all",

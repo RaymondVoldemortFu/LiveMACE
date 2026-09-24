@@ -32,14 +32,14 @@ class UnitOfWork(Protocol):
 
 ## TODO
 
-- [ ] 逐域定义 repository protocol，仅返回 DTO/view 或受控 entity handle，不向公共扩展暴露 ORM。
-- [ ] 补齐 Trade/Decision/Trace/Snapshot/Evaluation repository。
-- [ ] SQLAlchemy UoW 拥有且关闭 session；repository 不自行 commit。
-- [ ] request、scheduler、decision worker、trade gateway 的 session scope 分别测试。
-- [ ] 每个账户 worker 独立创建和关闭 UoW；同一 UoW 不得跨线程复用。
-- [ ] 对账户配置并发更新、pending order 处理提供 row lock/乐观锁接口。
-- [ ] 保留 SQLite NullPool 与 MySQL pool 配置；连接创建不移入 repository。
-- [ ] import boundary test：repositories 不 import FastAPI、Agent、market provider、WebSocket。
+- [x] 逐域定义 repository protocol，仅返回 DTO/view 或受控 entity handle，不向公共扩展暴露 ORM。
+- [x] 补齐 Trade/Decision/Trace/Snapshot/Evaluation repository。
+- [x] SQLAlchemy UoW 拥有且关闭 session；repository 不自行 commit。
+- [x] request、scheduler、decision worker、trade gateway 的 session scope 分别测试。
+- [x] 每个账户 worker 独立创建和关闭 UoW；同一 UoW 不得跨线程复用。
+- [x] 对账户配置并发更新、pending order 处理提供 row lock/乐观锁接口。
+- [x] 保留 SQLite NullPool 与 MySQL pool 配置；连接创建不移入 repository。
+- [x] import boundary test：repositories 不 import FastAPI、Agent、market provider、WebSocket。
 
 ## 验收
 
@@ -58,3 +58,9 @@ class UnitOfWork(Protocol):
 ## 前置与并行
 
 前置 M01。各 repository domain 可并行；M12 涉及账户配置表，需协调后串行合并 model 变更。
+
+## 2026-09-25 边界收尾
+
+Decision worker 输入通过 UoW factory 读取；账户选择与轮次摘要落库移入 persistence。Compliance service 接收 Account/RuleEvaluation/Trace/Decision repository；checkpoint application service 通过可注入 `CheckpointBatch` 协议协调，具体事务、savepoint 和关闭逻辑由 persistence 持有。事件 sink 的 DB 写入亦移入 persistence，application 保留纯脱敏逻辑。应用层不再创建 SQLAlchemy Session 或调用 query。
+
+最终完整回归及真实环境证据见 [整体完成核查](../overall-completion-audit.md)。

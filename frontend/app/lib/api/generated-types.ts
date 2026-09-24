@@ -6,6 +6,8 @@ export type AccountCheckpointItem = { "period_start"?: (string | null); "period_
 
 export type AccountCheckpointsResponse = { "account_id": number; "account_name": string; "interval_seconds": number; "items": Array<AccountCheckpointItem> }
 
+export type AccountOverview = { "total_assets": number; "positions_value": number; "positions_count": number; "pending_orders": number; "account": OverviewAccount; "llm_audit_stats": (AuditStats | null) }
+
 export type AccountSystemPromptResponse = { "account_id": number; "account_name": string; "agent_type": string; "agent_id": string; "memory_enabled": boolean; "tool_routing_enabled": boolean; "decision_protocol": string; "termination_token": string; "system_prompt": string; "prompt_profile_id": (string | null); "prompt_profile_version": (string | null); "prompt_id": (string | null); "prompt_version": (string | null); "prompt_hash": (string | null) }
 
 export type AgentStep = { "step_number": number; "role": string; "content": (string | null); "tool_calls": unknown; "tool_output": unknown; "created_at": (string | null) }
@@ -13,6 +15,8 @@ export type AgentStep = { "step_number": number; "role": string; "content": (str
 export type AgentTrace = { "trace_id": string; "steps": Array<AgentStep>; "events": Array<RuntimeEvent>; "schema_version": number }
 
 export type AssetCurvePoint = { "timestamp": number; "datetime_str": string; "total_assets": number; "initial_capital": number; "profit": number; "user_id": number; "username": string }
+
+export type AuditStats = { "count": number; "avg_score": (number | null); "avg_coverage": (number | null); "avg_conflict": (number | null) }
 
 export type CompareItem = { "account_id": number; "agent_name"?: (string | null); "period_start"?: (string | null); "period_end"?: (string | null); "pnl"?: (number | null); "return_rate": number; "volatility"?: (number | null) }
 
@@ -34,13 +38,27 @@ export type ComponentOut = { "id": string; "name": string; "version": string; "d
 
 export type ComponentSchemaOut = { "component_id": string; "component_type": string; "version": string; "schema": { [key: string]: unknown } }
 
+export type CryptoPrice = { "symbol": string; "price": number; "market": string }
+
 export type DecisionCompliance = { "gate_pass": (boolean | null); "final_score": (number | null); "s_audit": (number | null) }
 
 export type DecisionSchedule = { "job_id": string; "interval_seconds": string; "first_execution_time": string; "next_decision_time_utc": string; "next_decision_time_utc8": string }
 
+export type DefaultOverview = { "account": OverviewAccount; "portfolio": OverviewTotals }
+
+export type DeleteMemoriesResult = { "success": boolean; "deleted": number }
+
 export type ExtensionOut = { "id": (string | null); "version": (string | null); "name": (string | null); "description": string; "source": string; "status": string; "requested_capabilities": Array<string>; "allowed_capabilities": Array<string>; "errors": Array<ValidationIssueOut> }
 
+export type FactorColumn = { "key": string; "label": string; "type": string; "sortable": boolean }
+
+export type FactorDefinition = { "id": string; "name": string; "description": string; "columns": Array<FactorColumn> }
+
 export type HTTPValidationError = { "detail"?: Array<ValidationError> }
+
+export type HealthPrice = { "symbol": string; "price": (number | null) }
+
+export type HealthResponse = { "status": string; "message": string; "services"?: ({ [key: string]: string } | null) }
 
 export type KlineItem = { "timestamp": number; "datetime": string; "open": (number | null); "high": (number | null); "low": (number | null); "close": (number | null); "volume": (number | null); "amount": (number | null); "chg": (number | null); "percent": (number | null) }
 
@@ -48,13 +66,37 @@ export type KlineResponse = { "symbol": string; "market": string; "period": stri
 
 export type LLMAuditStats = { "count": number; "avg_score": (number | null); "avg_coverage": (number | null); "avg_conflict": (number | null) }
 
+export type LLMConnectionResult = { "success": boolean; "message": string; "response"?: (string | null); "normalized_base_url"?: (string | null) }
+
+export type LatestTrace = { "trace_id": (string | null) }
+
 export type LeaderboardItem = { "account_id": number; "agent_name"?: (string | null); "agent_type"?: (string | null); "equity_start"?: (number | null); "equity_end"?: (number | null); "pnl"?: (number | null); "return_rate": number; "volatility"?: (number | null) }
 
 export type LeaderboardResponse = { "interval_seconds": number; "period_end"?: (string | null); "order_by"?: (string | null); "items"?: Array<LeaderboardItem> }
 
 export type ManualDecisionRequest = { "account_ids": Array<number>; "max_concurrency"?: number }
 
+export type ManualDecisionResponse = { "decision_round_id": (string | null); "processed_accounts": number; "errors": { [key: string]: string } }
+
+export type MarketHealth = { "status": string; "timestamp": number; "message": string; "test_price"?: (HealthPrice | null); "error"?: (string | null) }
+
 export type MarketStatusResponse = { "symbol": string; "market"?: string; "market_status": string; "timestamp": number; "current_time": string }
+
+export type MemoryDiversity = { "total_memories": number; "avg_similarity": number; "diversity_score": number; "embeddings_available"?: (number | null); "note"?: (string | null); "similarity_std"?: (number | null); "interpretation"?: (string | null) }
+
+export type MemoryGrowth = { "total_memories": number; "dedup_rejection_rate": number; "growth_rate"?: (number | null); "time_span_days"?: (number | null); "growth_rate_per_day"?: (number | null); "add_attempts"?: (number | null); "dedup_rejections"?: (number | null); "addition_rate_per_decision"?: (number | null) }
+
+export type MemoryItem = { "id": number; "content": string; "market": (string | null); "created_at": string; "retrieval_count": number; "last_retrieved_at": (string | null) }
+
+export type MemoryList = { "memories": Array<MemoryItem> }
+
+export type MemoryMetrics = { "account_id": number; "evaluation_time": string; "retrieval_distribution": MemoryRetrieval; "memory_diversity": MemoryDiversity; "growth_pattern": MemoryGrowth }
+
+export type MemoryRetrieval = { "total_memories": number; "zombie_rate": number; "high_value_rate": number; "recently_retrieved_24h": number; "histogram": { [key: string]: number }; "zombie_memories"?: (number | null); "high_value_memories"?: (number | null); "avg_retrieval_count"?: (number | null); "median_retrieval_count"?: (number | null) }
+
+export type MemoryTimeline = { "timeline": Array<MemoryTimelinePoint> }
+
+export type MemoryTimelinePoint = { "date": string; "cumulative_count": number; "daily_additions": number }
 
 export type OrderCancelResult = { "message": string; "order_id": number }
 
@@ -67,6 +109,14 @@ export type OrderHealthResult = { "status": string; "timestamp": number; "statis
 export type OrderOut = { "id": number; "order_no": string; "user_id": number; "symbol": string; "name": string; "market": string; "side": string; "order_type": string; "price": (number | null); "quantity": number; "leverage": number; "filled_quantity": number; "status": string }
 
 export type OrderProcessingResult = { "executed_count": number; "total_checked": number; "message": string }
+
+export type OverviewAccount = { "id": number; "name": string; "account_type": string; "agent_type": (string | null); "current_cash": number; "frozen_cash": number }
+
+export type OverviewTotals = { "total_assets": number; "positions_value": number; "positions_count": number; "pending_orders": number }
+
+export type PersistedAssetCurvePoint = { "timestamp": number; "datetime_str": string; "total_assets": number; "initial_capital": number; "profit": number; "user_id": number; "username": string; "account_id": number; "profit_percentage": number; "cash": number; "positions_value": number }
+
+export type PopularCrypto = { "symbol": string; "price": number; "market": string; "name": string }
 
 export type PortfolioAccount = { "id": number; "user_id": number; "name": string; "account_type": string; "initial_capital": number; "current_cash": number; "frozen_cash": number; "enable_rule_aware"?: (boolean | null) }
 
@@ -85,6 +135,14 @@ export type PortfolioUser = { "id": number; "username": string }
 export type PriceResponse = { "symbol": string; "market": string; "price": number; "timestamp": number }
 
 export type PromptProfileOut = { "id": string; "name": string; "version": string; "description": string; "source": string; "status": string; "slots": { [key: string]: { [key: string]: (string | null) } }; "requested_capabilities": Array<string>; "allowed_capabilities": Array<string> }
+
+export type RankingFactors = { "success": boolean; "factors": Array<FactorDefinition>; "all_columns": Array<FactorColumn> }
+
+export type RankingSymbols = { "success": boolean; "symbols": Array<string>; "count": number; "data_period": string }
+
+export type RankingTable = { "success": boolean; "data": Array<{ [key: string]: (string | number | boolean | null) }>; "message"?: (string | null); "total_symbols"?: (number | null); "data_period"?: (string | null); "factors_computed"?: (Array<string> | string | null) }
+
+export type ReadinessResponse = { "ready": boolean; "status": string; "services": { [key: string]: string }; "dependencies": { [key: string]: string } }
 
 export type RecentDecision = { "trace_id": (string | null); "timestamp": (string | null); "operation": string; "symbol": (string | null); "leverage": (number | null); "executed": boolean; "compliance": (DecisionCompliance | null) }
 

@@ -14,8 +14,7 @@ from benchmark.contracts import (
     PortfolioView,
     PositionView,
 )
-from benchmark.persistence.uow import SqlAlchemyUnitOfWork
-from database.connection import SessionLocal
+from benchmark.persistence import UnitOfWorkFactory, default_unit_of_work_factory
 from services.security.api_key_security import resolve_runtime_api_key
 
 
@@ -34,8 +33,15 @@ def build_decision_trace_id(account, decision_round_id):
     return str(uuid4())
 
 
-def load_worker_input(account_id, prices, round_id, *, session_factory=SessionLocal):
-    with SqlAlchemyUnitOfWork(session_factory) as uow:
+def load_worker_input(
+    account_id,
+    prices,
+    round_id,
+    *,
+    uow_factory: UnitOfWorkFactory | None = None,
+):
+    factory = uow_factory or default_unit_of_work_factory()
+    with factory() as uow:
         account = uow.accounts.get(account_id)
         if account is None:
             raise ValueError("Account no longer exists")

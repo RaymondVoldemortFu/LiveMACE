@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Iterator
-
-from sqlalchemy.orm import Session
+from typing import Protocol, ContextManager, Callable
 
 
 @dataclass(frozen=True)
@@ -16,61 +13,43 @@ class CheckpointRunResult:
     intervals: tuple[int, ...]
 
 
-class CheckpointService:
-    """Create due checkpoints. Callers register the schedule elsewhere."""
+class CheckpointBatch(Protocol):
+    def list_accounts(self) -> list: ...
+    def create(self, account, interval: int, now: datetime) -> bool: ...
+    def commit(self) -> None: ...
 
-    def __init__(self, session_scope=None) -> None:
-        self._session_scope = session_scope or _owned_session
+
+class CheckpointService:
+    """Coordinate idempotent checkpoints through a transaction capability."""
+
+    def __init__(
+        self, batch_factory: Callable[[], ContextManager[CheckpointBatch]] | None = None
+    ):
+        if batch_factory is None:
+            from benchmark.persistence.checkpoints import checkpoint_batch
+
+            batch_factory = checkpoint_batch
+        self._batch_factory = batch_factory
 
     def run_due(self, intervals: tuple[int, ...], now: datetime) -> CheckpointRunResult:
-        from services.evaluation.checkpoint_service import (
-            _list_active_ai_accounts,
-            create_checkpoint_if_due,
-        )
         import logging
 
-        logger = logging.getLogger(__name__)
         normalized = tuple(sorted({int(item) for item in intervals if int(item) > 0}))
         if not normalized:
-            return CheckpointRunResult(created=0, intervals=())
-
+            return CheckpointRunResult(0, ())
         created = 0
-        with self._session_scope() as db:
-            accounts = _list_active_ai_accounts(db)
-            for interval_seconds in normalized:
+        with self._batch_factory() as batch:
+            accounts = batch.list_accounts()
+            for interval in normalized:
                 for account in accounts:
                     try:
-                        ckpt = create_checkpoint_if_due(
-                            db,
-                            account,
-                            interval_seconds=interval_seconds,
-                            now=now,
-                        )
-                    except Exception as exc:
-                        logger.error(
-                            "Checkpoint creation failed for account %s (%s) interval=%ss: %s",
+                        created += int(batch.create(account, interval, now))
+                    except Exception:
+                        logging.getLogger(__name__).exception(
+                            "Checkpoint failed account=%s interval=%s",
                             account.id,
-                            account.name,
-                            interval_seconds,
-                            exc,
-                            exc_info=True,
+                            interval,
                         )
-                        continue
-                    if ckpt is not None:
-                        created += 1
             if created:
-                db.commit()
-            else:
-                db.rollback()
-        return CheckpointRunResult(created=created, intervals=normalized)
-
-
-@contextmanager
-def _owned_session() -> Iterator[Session]:
-    from database.connection import SessionLocal
-
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+                batch.commit()
+        return CheckpointRunResult(created, normalized)

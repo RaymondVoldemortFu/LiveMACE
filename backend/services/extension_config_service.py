@@ -114,26 +114,11 @@ class ExtensionConfigService:
         ]
 
     def list_toolsets(self) -> list[dict[str, Any]]:
-        """Named UI groups expand to the account's existing per-tool opt-outs."""
-        groups = {}
-        for tool in self.list_tools():
-            capabilities = tool['requested_capabilities']
-            category = next((name for capability, name in (
-                ('trading.write', 'trading'), ('sandbox.write', 'sandbox'),
-                ('memory.read', 'memory'), ('memory.write', 'memory'),
-                ('network.read', 'research'), ('market.read', 'market'),
-                ('account.read', 'account'),
-            ) if capability in capabilities), 'other')
-            group = groups.setdefault(category, {
-                'id': f'core.{category}-tools', 'name': category.title(),
-                'version': '1.0.0', 'source': 'catalog', 'status': 'loaded',
-                'description': f'{category.title()} tools', 'config_schema': {},
-                'requested_capabilities': [], 'allowed_capabilities': [], 'tool_names': [],
-            })
-            group['tool_names'].append(tool['name'])
-            for field in ('requested_capabilities', 'allowed_capabilities'):
-                group[field] = sorted(set(group[field]) | set(tool[field]))
-        return [groups[key] for key in sorted(groups)]
+        """Return the named sets used by runtime validation and tool selection."""
+        return [{**group, "source": "catalog", "status": "loaded",
+                 "description": group["name"], "config_schema": {},
+                 "allowed_capabilities": sorted(set(group["requested_capabilities"]) & self.catalog.allowed_capabilities)}
+                for group in self.catalog.list_toolsets()]
 
     def list_tools(self) -> list[dict[str, Any]]:
         allowed = set(self.catalog.allowed_capabilities)

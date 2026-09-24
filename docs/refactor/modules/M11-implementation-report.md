@@ -47,3 +47,9 @@ Gateway 同时提供 `create_order()`、`cancel_order()` 和 `process_pending()`
 - `register_default_tools -> ReAct Agent -> execute_trade_tool -> Gateway` 生产调用链，以及缺失轮次和模型伪造运行时字段的失败行为。
 
 M00 characterization 继续验证原有交易状态变化；HTTP/WS 调用点迁移仍由 M21 完成，`core.execute_trade` 的最终 Tool 包装由 M06 完成。
+
+## 2026-09-25 最终计算层收尾
+
+`benchmark/application/trading/planner.py` 接收 detached mapping 和明确的报价/时间，返回账本计划。Crypto 开平仓、普通成交、费用利息、开平仓 sizing、订单创建、取消及冻结释放均已迁入纯计算函数；`persistence/ledger.py` 读取快照并应用计划，只 flush，不 commit。原服务保留交易编排入口，Gateway 的 receipt 和账本继续由外层 UoW 原子提交。计算失败不会修改输入快照或部分写入账本。
+
+完整回归覆盖 M00 数值特征、交易语义、margin/pending/幂等及失败回滚；最终验收证据统一见 [整体完成核查](../overall-completion-audit.md)。

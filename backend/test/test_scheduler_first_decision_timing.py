@@ -80,9 +80,13 @@ def test_add_interval_task_passes_start_date_into_interval_trigger():
         def add_job(self, **kwargs):
             self.calls.append(kwargs)
 
+    # Bootstrap tests reload this module; obtain its current enum and class together.
+    from services.scheduler import SchedulerState, TaskScheduler
+
     scheduler = TaskScheduler()
     scheduler.scheduler = _RecorderScheduler()
     scheduler._started = True
+    scheduler._admission_closed = False
     scheduler._state = SchedulerState.RUNNING
 
     start_date = datetime(2026, 4, 13, 21, 58, 0, tzinfo=timezone.utc)

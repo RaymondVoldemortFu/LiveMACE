@@ -40,8 +40,8 @@ def test_m10_legacy_json_symbols_are_removed_from_production_sources():
 
 
 def test_m10_worker_summary_has_no_order_execution_path():
-    text = _read("benchmark/application/decisions/runner.py")
-    summary = text[text.index("def _save_run_summary("):]
+    text = _read("benchmark/persistence/decision_summary.py")
+    summary = text[text.index("def save_run_summary("):]
     assert "save_ai_decision" in summary
     assert "create_order" not in summary
     assert "place_and_execute_crypto" not in summary

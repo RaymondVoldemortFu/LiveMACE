@@ -26,34 +26,37 @@ class ContainerService:
         return cls._instance
 
     def __init__(self):
-        if self._initialized:
-            return
-        self._initialized = True
-        self._lock = threading.RLock()
-        self._condition = threading.Condition(self._lock)
-        self._shutdown_registered = False
+        # Construction is shared by concurrent account workers. Publish readiness
+        # only after the client, lease maps and condition are all initialized.
+        with self._instance_lock:
+            if self._initialized:
+                return
+            self._lock = threading.RLock()
+            self._condition = threading.Condition(self._lock)
+            self._shutdown_registered = False
 
-        try:
-            self.client = docker.from_env()
-            self._build_image_if_needed()
-        except Exception as e:
-            logger.error(f"Failed to initialize Docker client: {e}")
-            self.client = None
+            try:
+                self.client = docker.from_env()
+                self._build_image_if_needed()
+            except Exception as e:
+                logger.error(f"Failed to initialize Docker client: {e}")
+                self.client = None
 
-        # account_id -> container_object (leased)
-        self.active_containers: Dict[int, docker.models.containers.Container] = {}
-        # Every adapter lease has an identity. A container may be shared by
-        # overlapping leases from the same account, but it is returned to the
-        # idle pool only after the final lease is released.
-        self._active_lease_ids: Dict[int, set[str]] = {}
-        # idle pooled containers
-        self.idle_containers: List[docker.models.containers.Container] = []
-        # initialized pool marker
-        self._pool_initialized = False
+            # account_id -> container_object (leased)
+            self.active_containers: Dict[int, docker.models.containers.Container] = {}
+            # Every adapter lease has an identity. A container may be shared by
+            # overlapping leases from the same account, but it is returned to the
+            # idle pool only after the final lease is released.
+            self._active_lease_ids: Dict[int, set[str]] = {}
+            # idle pooled containers
+            self.idle_containers: List[docker.models.containers.Container] = []
+            # initialized pool marker
+            self._pool_initialized = False
 
-        if not self._shutdown_registered:
-            atexit.register(self.shutdown)
-            self._shutdown_registered = True
+            if not self._shutdown_registered:
+                atexit.register(self.shutdown)
+                self._shutdown_registered = True
+            self._initialized = True
 
     def _parse_image_reference(self, image_ref: str) -> Tuple[str, str]:
         """Split image reference into (repository, tag)."""

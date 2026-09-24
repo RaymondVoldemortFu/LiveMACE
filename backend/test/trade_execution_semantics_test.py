@@ -88,7 +88,7 @@ def test_execute_trade_tool_rejects_crypto_short_in_spot(monkeypatch):
     account = SimpleNamespace(id=1, current_cash=1000)
     db = _FakeDb(account)
 
-    result = te._execute_trade_tool_legacy(
+    result = te.execute_trade_in_transaction(
         db=db,
         account_id=1,
         operation="open",

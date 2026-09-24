@@ -1,3 +1,4 @@
+from benchmark.persistence.compliance import compliance_service
 from datetime import datetime, timedelta
 
 from database.models import (
@@ -12,7 +13,7 @@ from database.models import (
 )
 from services.account_api_service import AccountApiService
 from services.agent_api_service import AgentApiService
-from benchmark.application.compliance.service import ComplianceService as ComplianceApiService
+from benchmark.persistence.compliance import compliance_service as ComplianceApiService
 from services.evaluation_api_service import EvaluationApiService
 from services.memory_api_service import MemoryApiService
 from services.ranking_api_service import RankingApiService

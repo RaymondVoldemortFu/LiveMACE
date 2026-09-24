@@ -1,3 +1,4 @@
+import type { TradingAccount, MemoryItem, MemoryMetrics, MemoryTimelinePoint } from "@/lib/api/generated-types"
 import { useEffect, useState } from 'react'
 import { Line, Bar, Doughnut } from 'react-chartjs-2'
 import 'chart.js/auto'
@@ -8,8 +9,8 @@ import { Brain } from 'lucide-react'
 import { getMemories, getMemoryGrowthTimeline, getMemoryMetrics } from '@/lib/api/memory'
 
 interface MemoryViewProps {
-  account: any
-  accounts: any[]
+  account: (Pick<TradingAccount, "id"> & Partial<Pick<TradingAccount, "memory_enabled">>) | null
+  accounts: TradingAccount[]
 }
 
 export function MemoryView({ account, accounts }: MemoryViewProps) {
@@ -20,9 +21,9 @@ export function MemoryView({ account, accounts }: MemoryViewProps) {
     memoryEnabledAccounts.find(a => a.id === account?.id)?.id || memoryEnabledAccounts[0]?.id || null
   )
   const [selectedMarket, setSelectedMarket] = useState<'ALL' | 'CRYPTO' | 'US'>('ALL')
-  const [memories, setMemories] = useState<any[]>([])
-  const [metrics, setMetrics] = useState<any>(null)
-  const [timeline, setTimeline] = useState<any[]>([])
+  const [memories, setMemories] = useState<MemoryItem[]>([])
+  const [metrics, setMetrics] = useState<MemoryMetrics | null>(null)
+  const [timeline, setTimeline] = useState<MemoryTimelinePoint[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -349,7 +350,7 @@ export function MemoryView({ account, accounts }: MemoryViewProps) {
                     </div>
                     <div className="flex justify-between">
                       <span className="text-sm font-medium">Addition Rate:</span>
-                      <span className="text-sm">{metrics.growth_pattern.addition_rate_per_decision.toFixed(3)} per decision</span>
+                      <span className="text-sm">{(metrics.growth_pattern.addition_rate_per_decision ?? 0).toFixed(3)} per decision</span>
                     </div>
                   </div>
                 </CardContent>
