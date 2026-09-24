@@ -1,4 +1,4 @@
-# Open Alpha Arena 重构方案说明
+# LiveMACE bench 重构方案说明
 
 这份文档用于团队内部对齐本轮重构。更细的接口定义和任务拆分见：
 

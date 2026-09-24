@@ -27,7 +27,7 @@
    - 得到 pnl 与 return_rate
 4. 将结果写入数据库表 `agent_period_checkpoints`
 5. 后端提供查询 API（leaderboard / account checkpoints / compare）
-6. 前端在“同花顺Bench”右侧新增卡片展示：
+6. 前端在“LiveMACE bench”右侧新增卡片展示：
    - 最新周期排行榜
    - 选择 agent 查看其 checkpoints 列表
 
@@ -184,7 +184,7 @@ Unique(account_id, interval_seconds, period_end)
 - `getEvalAccountCheckpoints(accountId, intervalSeconds, limit)`
   - 调用：`/evaluation/checkpoints/account/{accountId}?interval_seconds=...&limit=...`
 
-### 4.2 UI 展示（同花顺Bench右侧卡片）
+### 4.2 UI 展示（LiveMACE bench右侧卡片）
 
 文件：`frontend/app/components/portfolio/AccountDataView.tsx`
 
@@ -242,7 +242,7 @@ GET http://localhost:5611/api/evaluation/checkpoints/account/1?interval_seconds=
 
 打开前端：`http://localhost:5621/`
 
-- 在“同花顺Bench”右侧看到“Agent 结算评分”卡片
+- 在“LiveMACE bench”右侧看到“Agent 结算评分”卡片
 - 周期可切换；点击排行榜行可切换下方 agent；checkpoint 条数可选 5/10/20
 
 ---

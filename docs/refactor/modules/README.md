@@ -1,6 +1,6 @@
 # 模块级重构任务索引
 
-本目录是 Open Alpha Arena 结构重构的实施任务清单。它不修改或替代 `docs/refactor/0000-0010`，而是把现有 RFC 和 `docs/current_system_architecture_analysis.md` 落成可以由不同开发者独立认领的代码任务。
+本目录是 LiveMACE bench 结构重构的实施任务清单。它不修改或替代 `docs/refactor/0000-0010`，而是把现有 RFC 和 `docs/current_system_architecture_analysis.md` 落成可以由不同开发者独立认领的代码任务。
 
 团队评审时可先阅读 [重构方案说明](refactor-explanation-for-team.md)，开发排期和任务认领参考 [模块分组与并行开发计划](module-groups.md)，再按需查看公共接口规范和各模块任务。
 

@@ -10,13 +10,13 @@ updated: "2026-06-19"
 related: "AGENT.md；docs/agent_architecture.md；docs/GEMINI_MESSAGE_FLOW.md；backend/services/evaluation/EVALUATION_REPORT.md"
 ---
 
-# RFC-0000: Open Alpha Arena 重构规划索引
+# RFC-0000: LiveMACE bench 重构规划索引
 
 ---
 
 ## Summary
 
-本目录把 Open Alpha Arena 的重构拆成一组可独立评审、可分阶段落地的 RFC。拆分依据来自仓库根目录 `AGENT.md` 中定义的运行形态：
+本目录把 LiveMACE bench 的重构拆成一组可独立评审、可分阶段落地的 RFC。拆分依据来自仓库根目录 `AGENT.md` 中定义的运行形态：
 
 ```text
 Vite/React frontend

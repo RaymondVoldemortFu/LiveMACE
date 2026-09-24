@@ -467,7 +467,7 @@ def write_report(
     end_time = metrics["end_time"].max()
 
     relative_plot = plot_dir.relative_to(output_dir)
-    report = f"""# Alpha Arena 金融指标分析报告
+    report = f"""# LiveMACE bench 金融指标分析报告
 
 > 数据来源：`alpha_arena_final.sqlite`  
 > 样本区间：{start_time:%Y-%m-%d %H:%M UTC} 至 {end_time:%Y-%m-%d %H:%M UTC}  
@@ -785,7 +785,7 @@ def run_analysis(db_path: Path, output_dir: Path, plot_dir: Path) -> Path:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Analyze Alpha Arena final financial metrics.")
+    parser = argparse.ArgumentParser(description="Analyze LiveMACE bench final financial metrics.")
     parser.add_argument("--db", type=Path, default=DEFAULT_DB_PATH, help="Path to alpha_arena_final.sqlite")
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR, help="Directory for CSV and report outputs")
     parser.add_argument("--plot-dir", type=Path, default=DEFAULT_PLOT_DIR, help="Directory for plot image outputs")

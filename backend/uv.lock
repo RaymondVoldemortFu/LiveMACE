@@ -2548,7 +2548,7 @@ wheels = [
 ]
 
 [[package]]
-name = "my-backend"
+name = "livemace-bench-backend"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

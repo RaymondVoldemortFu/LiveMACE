@@ -12,7 +12,7 @@ interface HeaderProps {
   onUserChange?: (username: string) => void
 }
 
-export default function Header({ title = 'Crypto Paper Trading' }: HeaderProps) {
+export default function Header({ title = 'LiveMACE bench' }: HeaderProps) {
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     if (typeof document === 'undefined') return 'dark'
     return document.documentElement.classList.contains('dark') ? 'dark' : 'light'

@@ -16,7 +16,7 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 PROJECT_ROOT = BACKEND_DIR.parent
 DEFAULT_DB_PATH = PROJECT_ROOT / "alpha_arena_final.sqlite"
 
-app = FastAPI(title="Alpha Arena DB Viewer", docs_url="/docs", redoc_url=None)
+app = FastAPI(title="LiveMACE bench DB Viewer", docs_url="/docs", redoc_url=None)
 _DB_PATH = DEFAULT_DB_PATH
 
 
@@ -683,7 +683,7 @@ HTML_PAGE = r"""
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Alpha Arena DB Viewer</title>
+  <title>LiveMACE bench DB Viewer</title>
   <style>
     :root {
       color-scheme: light;
@@ -1064,7 +1064,7 @@ HTML_PAGE = r"""
   <div class="app">
     <header>
       <div class="title">
-        <h1>Alpha Arena DB Viewer</h1>
+        <h1>LiveMACE bench DB Viewer</h1>
         <span id="dbPath">正在读取数据库...</span>
       </div>
       <div class="tabs">

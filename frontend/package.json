@@ -1,5 +1,5 @@
 {
-  "name": "my-frontend",
+  "name": "livemace-bench-frontend",
   "private": true,
   "scripts": {
     "dev": "vite --port 5621",

@@ -16,7 +16,7 @@ related: "RFC-0000；AGENT.md；docs/agent_architecture.md"
 
 ## Summary
 
-本 RFC 定义 Open Alpha Arena 重构后的目标分层：前端控制台、API/WebSocket 边界、应用服务层、Agent 运行时、交易执行层、数据访问层、基础设施层。重构目标不是换框架，而是把现有可运行系统中的隐式副作用、跨层调用和重复语义收敛为稳定契约。
+本 RFC 定义 LiveMACE bench 重构后的目标分层：前端控制台、API/WebSocket 边界、应用服务层、Agent 运行时、交易执行层、数据访问层、基础设施层。重构目标不是换框架，而是把现有可运行系统中的隐式副作用、跨层调用和重复语义收敛为稳定契约。
 
 目标架构：
 

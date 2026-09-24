@@ -13,9 +13,9 @@ import ComplianceDashboard from '@/components/compliance/ComplianceDashboard'
 import { usePortfolioSnapshot } from '@/hooks/usePortfolioSnapshot'
 
 const PAGE_TITLES: Record<string, string> = {
-  portfolio: 'Crypto Paper Trading',
-  comprehensive: '同花顺Bench - 曲线总览',
-  'comprehensive-details': '同花顺Bench - 数据明细',
+  portfolio: 'LiveMACE bench',
+  comprehensive: 'LiveMACE bench - 曲线总览',
+  'comprehensive-details': 'LiveMACE bench - 数据明细',
   'agent-status': 'Agent Status',
   memory: 'Memory System',
   compliance: 'Rule Compliance',

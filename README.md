@@ -1,6 +1,24 @@
-# Open Alpha Arena
+# LiveMACE bench
 
-This is a project inspired by [nof1 Alpha Arena](https://nof1.ai), you can setup AI trading bot on crypto market.
+LiveMACE bench is a benchmark platform for evaluating LLM agents through live market data and simulated trading in crypto and US equities. It combines agent decisions, tool use, portfolio accounting, and evaluation in one reproducible workflow. The project was inspired by [nof1 Alpha Arena](https://nof1.ai).
+
+## Capabilities
+
+- Four built-in agent architectures: ReAct, MultiAgent, AdvancedMultiAgent, and RuleAware, alongside buy-and-hold and grid baselines.
+- Extensible Agents, Tools, and Prompt profiles through a synchronous SDK and a shared Catalog; per-account runtime configuration includes named toolsets.
+- Crypto spot and leveraged trading, US-equity trading, and a simulated ledger that tracks orders, fees, positions, and portfolio value.
+- Account-scoped traces, memory, tool-use evaluation, rule compliance, and portfolio performance views.
+- An interactive dashboard for comparing agent performance and inspecting decisions, tool calls, and portfolio changes.
+
+## Workflow
+
+```text
+Live market data → Agent analysis and tool use → Simulated trades → Portfolio and evaluation
+```
+
+Agents gather market information, use tools to investigate opportunities, and submit trading decisions. The backend records each trade and maintains account balances and positions. The dashboard brings together performance curves, decision traces, and evaluation results for comparison across models and agent architectures.
+
+Build custom Agents, Tools, and Prompt profiles with the [extension SDK](docs/extensions/README.md) and [runnable examples](examples/extensions).
 
 ## Star History
 
@@ -15,44 +33,51 @@ This is a project inspired by [nof1 Alpha Arena](https://nof1.ai), you can setup
 ## Getting Started
 
 ### Prerequisites
+
 - Node.js 18+ and pnpm
 - Python 3.10+ and uv
-- Redis/Valkey (required by backend tool-cache, without it will cause 429 error from exchange)
+- Redis/Valkey for the shared backend tool cache
+- Docker for agent sandbox tools
+- MySQL for concurrent trading runs; SQLite is available for local development
 
 ### Install
+
 ```bash
 # install JS deps and sync Python env
 pnpm run install:all
 ```
 
+### Configuration
+
+```bash
+cp backend/.env.example backend/.env
+```
+
+Set `API_KEY`, `BASE_URL`, `DATABASE_URL`, and `TOOL_CACHE_REDIS_URL` for your environment. US market data uses `ALPACA_KEY` and `ALPACA_SECRET`; optional memory and search providers have their own settings in the example file. Configure `AI_TRADE_FIRST_EXECUTION_TIME` and `AI_TRADE_INTERVAL_SECONDS` for scheduled runs.
+
 ### Development
+
 By default, the workspace scripts launch:
+
 - Backend on port 5611
 - Frontend on port 5621
 
 Start both dev servers:
+
 ```bash
 pnpm run dev
 ```
 Open:
+
 - Frontend: http://localhost:5621
 - Backend WS: ws://localhost:5611/ws
 
-Important: The frontend source is currently configured for port 5621. To use the workspace defaults (5611), update the following in frontend/app/main.tsx:
-- WebSocket URL: ws://localhost:5611/ws
-- API_BASE: http://127.0.0.1:5611
+Vite proxies `/api` and `/ws` to the backend on port 5611 through `frontend/vite.config.ts`. The frontend uses same-origin URLs; configure the backend proxy target in this file when using a different port.
 
-Alternatively, run the backend on 5611:
-```bash
-# from repo root
-cd backend
-uv sync
-# ensure Redis is available locally (example)
-docker run -d --name redis -p 6379:6379 valkey/valkey:8-alpine
-uv run uvicorn main:app --port 5611 --host 0.0.0.0
-```
+The backend starts scheduled trading and market-data tasks according to your account and environment configuration.
 
 ### Build
+
 ```bash
 # build frontend; backend has no dedicated build step
 pnpm run build
@@ -60,6 +85,7 @@ pnpm run build
 Static assets for the frontend are produced by Vite. The backend is a standard FastAPI app that can be run with Uvicorn or any ASGI server.
 
 ### Docker Deploy
+
 1) Prepare environment variables:
 
 ```bash
@@ -89,6 +115,7 @@ Linux one-click deploy script:
 ```
 
 Notes:
+
 - `docker-compose.yml` starts four services: `frontend` (Nginx), `backend` (FastAPI), `mysql`, and `redis`.
 - Frontend and backend are deployed in separate containers; frontend proxies `/api` and `/ws` to backend internally.
 - `DATABASE_URL` is injected into backend container.
@@ -97,6 +124,7 @@ Notes:
 - The compose file mounts `/var/run/docker.sock` to backend so sandbox container features can work.
 
 ### Batch Account Initialization
+
 From `backend/`:
 
 ```bash
@@ -104,9 +132,11 @@ uv run python script/create_accounts_from_env.py --mode all-combinations
 ```
 
 Note:
+
 - The script auto-initializes missing database tables (including `users` / `accounts`) on first run.
 
 Optional flags:
+
 - Update existing same-name accounts:
 
 ```bash
@@ -120,6 +150,7 @@ uv run python script/create_accounts_from_env.py --mode all-combinations
 ```
 
 Combination mode config:
+
 - Runtime API config still uses `API_KEY` and `BASE_URL`.
 - Account combinations come from CSV via `.env` var `ACCOUNT_COMBO_CSV_PATH`.
 - One CSV row equals one combination, then script creates one account per model for each row.
@@ -128,7 +159,7 @@ Combination mode config:
 
 ## Extensions
 
-Open Alpha Arena exposes a synchronous extension SPI for Agents, Tools, and
+LiveMACE bench exposes a synchronous extension SPI for Agents, Tools, and
 Prompt-only packages. Built-in components and third-party extensions use the
 same Catalog. Runnable examples are in
 [`examples/extensions`](examples/extensions), with step-by-step guides in

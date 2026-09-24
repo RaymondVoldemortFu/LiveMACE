@@ -1,4 +1,4 @@
-# Open Alpha Arena 当前系统架构分析
+# LiveMACE bench 当前系统架构分析
 
 > 文档性质：基于当前源码的现状分析（as-is），用于指导后续代码结构整理。  
 > 核验基线：Git commit `abb252d`，核验日期 2026-07-12。  
@@ -7,7 +7,7 @@
 
 ## 1. 结论摘要
 
-Open Alpha Arena 是一个以 FastAPI 后端为事实源的 LLM 纸面交易系统。其运行时主链可以概括为：
+LiveMACE bench 是一个以 FastAPI 后端为事实源的 LLM 纸面交易系统。其运行时主链可以概括为：
 
 ```text
 React 控制台

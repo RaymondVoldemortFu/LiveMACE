@@ -34,7 +34,7 @@ class ErrorEmailHandler(logging.Handler):
         from_addr: str,
         password: str,
         recipients: List[str],
-        subject_prefix: str = "[open-alpha-arena]",
+        subject_prefix: str = "[LiveMACE bench]",
     ):
         super().__init__(level=logging.ERROR)
         self.smtp_server = smtp_server

@@ -1,4 +1,4 @@
-# Alpha Arena DB Viewer
+# LiveMACE bench DB Viewer
 
 一个独立的只读 SQLite 查看工具，用于浏览 `alpha_arena_final.sqlite` 中的账号、历史 trace 和任意表数据。
 

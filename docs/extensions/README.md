@@ -1,4 +1,4 @@
-# Extension SDK
+# LiveMACE bench Extension SDK
 
 The extension surface is a small, synchronous SPI.  An extension directory is
 catalogued from `alpha-arena-extension.yaml`; it may contain an Agent, Tools,
