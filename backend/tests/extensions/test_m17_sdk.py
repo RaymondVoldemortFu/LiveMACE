@@ -480,7 +480,7 @@ def test_cli_validate_test_and_list_examples():
 def test_cli_test_applies_agent_schema_defaults(tmp_path: Path):
     root = tmp_path / "cli-defaults"
     root.mkdir()
-    (root / "alpha-arena-extension.yaml").write_text(
+    (root / "livemace-bench-extension.yaml").write_text(
         "api_version: 1\n"
         "id: com.example.cli-defaults\n"
         "version: 1.0.0\n"
@@ -556,7 +556,7 @@ def test_wheel_contains_loadable_examples(tmp_path: Path):
         "combined-extension",
     )
     for name in examples:
-        assert f"examples/extensions/{name}/alpha-arena-extension.yaml" in names
+        assert f"examples/extensions/{name}/livemace-bench-extension.yaml" in names
     probe = subprocess.run(
         [
             sys.executable,

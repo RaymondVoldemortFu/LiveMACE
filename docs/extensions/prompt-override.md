@@ -30,8 +30,8 @@ Use evidence from the available tools before deciding.
 Validate and inspect it offline:
 
 ```bash
-alpha-arena extension validate path/to/prompt-extension
-alpha-arena extension list path/to/prompt-extension
+livemace-bench extension validate path/to/prompt-extension
+livemace-bench extension list path/to/prompt-extension
 ```
 
 Required variables must be present when rendering.  Rendered content carries

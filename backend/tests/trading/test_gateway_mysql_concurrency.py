@@ -154,7 +154,7 @@ def test_pending_matcher_holds_account_lock_against_direction_change(monkeypatch
     from sqlalchemy.engine import make_url
 
     url = _mysql_url()
-    assert make_url(url).database == "alpha_arena_wave3_test"
+    assert make_url(url).database == "livemace_bench_test"
     engine = create_engine(url, pool_pre_ping=True)
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)

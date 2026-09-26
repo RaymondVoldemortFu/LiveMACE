@@ -16,7 +16,7 @@ import pandas as pd
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 PROJECT_ROOT = BACKEND_DIR.parent
-DEFAULT_DB_PATH = PROJECT_ROOT / "alpha_arena_final.sqlite"
+DEFAULT_DB_PATH = PROJECT_ROOT / "livemace_bench_final.sqlite"
 ANALYSIS_DIR = Path(__file__).resolve().parent
 DEFAULT_OUTPUT_DIR = ANALYSIS_DIR
 DEFAULT_PLOT_DIR = ANALYSIS_DIR / "plot"
@@ -454,6 +454,7 @@ def write_report(
     architecture_variance: pd.DataFrame,
     final_return_pivot: pd.DataFrame,
     final_profit_pivot: pd.DataFrame,
+    db_path: Path = DEFAULT_DB_PATH,
 ) -> Path:
     llm_metrics = metrics[metrics["is_llm_account"]].copy()
     baselines = metrics[~metrics["is_llm_account"]].copy()
@@ -467,9 +468,9 @@ def write_report(
     end_time = metrics["end_time"].max()
 
     relative_plot = plot_dir.relative_to(output_dir)
-    report = f"""# LiveMACE bench 金融指标分析报告
+    report = f"""# LiveMACEBench 金融指标分析报告
 
-> 数据来源：`alpha_arena_final.sqlite`  
+> 数据来源：`{db_path.name}`<br>
 > 样本区间：{start_time:%Y-%m-%d %H:%M UTC} 至 {end_time:%Y-%m-%d %H:%M UTC}  
 > 排除账号：`account_id=6`、`account_id=27`（用户指定为异常数据）  
 > 生成脚本：`backend/analysis/financial_metrics_analysis.py`
@@ -781,12 +782,13 @@ def run_analysis(db_path: Path, output_dir: Path, plot_dir: Path) -> Path:
         architecture_variance,
         final_return_pivot,
         final_profit_pivot,
+        db_path=db_path,
     )
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Analyze LiveMACE bench final financial metrics.")
-    parser.add_argument("--db", type=Path, default=DEFAULT_DB_PATH, help="Path to alpha_arena_final.sqlite")
+    parser = argparse.ArgumentParser(description="Analyze LiveMACEBench final financial metrics.")
+    parser.add_argument("--db", type=Path, default=DEFAULT_DB_PATH, help="Path to livemace_bench_final.sqlite")
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR, help="Directory for CSV and report outputs")
     parser.add_argument("--plot-dir", type=Path, default=DEFAULT_PLOT_DIR, help="Directory for plot image outputs")
     return parser.parse_args()

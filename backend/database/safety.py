@@ -45,6 +45,15 @@ def validate_database_target(
         .expanduser()
         .resolve()
     )
-    same_file = target.exists() and protected.exists() and target.samefile(protected)
-    if target.name == "alpha_arena_final.sqlite" or target == protected or same_file:
-        raise ValueError("The original alpha_arena_final.sqlite dataset is protected")
+    renamed_source = Path(__file__).resolve().parents[2] / "livemace_bench_final.sqlite"
+    same_file = target.exists() and any(
+        source.exists() and target.samefile(source)
+        for source in (protected, renamed_source)
+    )
+    # Preserve the guard for the existing source dataset as well as new exports.
+    if (
+        target.name in {"alpha_arena_final.sqlite", "livemace_bench_final.sqlite"}
+        or target == protected
+        or same_file
+    ):
+        raise ValueError("The original source dataset is protected")

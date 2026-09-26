@@ -23,7 +23,7 @@ from benchmark.extensions import (
 
 def _write_manifest(root: Path, body: str) -> None:
     root.mkdir(parents=True, exist_ok=True)
-    (root / "alpha-arena-extension.yaml").write_text(body, encoding="utf-8")
+    (root / "livemace-bench-extension.yaml").write_text(body, encoding="utf-8")
 
 
 def _prompt_extension(
@@ -231,7 +231,7 @@ def test_python_entrypoint_is_metadata_only(tmp_path):
 def test_incompatible_python_and_capabilities_do_not_import(tmp_path):
     root = tmp_path / "incompatible"
     _prompt_extension(root, extension_id="com.example.incompatible")
-    manifest = root / "alpha-arena-extension.yaml"
+    manifest = root / "livemace-bench-extension.yaml"
     manifest.write_text(
         manifest.read_text(encoding="utf-8")
         .replace(
@@ -258,7 +258,7 @@ def test_incompatible_python_and_capabilities_do_not_import(tmp_path):
 def test_incompatible_python_requirement_is_reported(tmp_path):
     root = tmp_path / "python-incompatible"
     _prompt_extension(root, extension_id="com.example.python-incompatible")
-    manifest = root / "alpha-arena-extension.yaml"
+    manifest = root / "livemace-bench-extension.yaml"
     manifest.write_text(
         manifest.read_text(encoding="utf-8").replace(
             "components:\n",
@@ -392,7 +392,7 @@ def test_external_manifest_id_cannot_claim_core_tool_namespace(
         extension_version="9.0.0",
         include_tool=True,
     )
-    manifest = root / "alpha-arena-extension.yaml"
+    manifest = root / "livemace-bench-extension.yaml"
     manifest.write_text(
         manifest.read_text(encoding="utf-8").replace(
             "components:\n", f"{capability_block}components:\n"
@@ -537,7 +537,7 @@ def test_dynamic_imports_use_each_extension_private_namespace(tmp_path):
             "            resources.__name__,\n"
             "            json_spec.name,\n"
             "            plain_json_module.__name__,\n"
-            "            local_spec.name.startswith('_alpha_arena_extension_'),\n"
+            "            local_spec.name.startswith('_livemace_bench_extension_'),\n"
             "            missing_spec is None,\n"
             "            resource_text,\n"
             "            resource_text_alias,\n"
@@ -885,7 +885,7 @@ def test_loader_rejects_manifest_symlink_outside_extension_root(tmp_path):
     )
     root = tmp_path / "escaped-manifest"
     root.mkdir()
-    (root / "alpha-arena-extension.yaml").symlink_to(real_manifest)
+    (root / "livemace-bench-extension.yaml").symlink_to(real_manifest)
 
     result = load_extensions(ExtensionSettings(extension_roots=(root,)))
 

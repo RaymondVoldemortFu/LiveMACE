@@ -223,10 +223,28 @@ class ContainerService:
 
     def _container_labels(self) -> Dict[str, str]:
         return {
-            "open-alpha-arena-bench.managed": "true",
-            "open-alpha-arena-bench.component": "agent-sandbox",
-            "open-alpha-arena-bench.instance": os.getenv("SANDBOX_INSTANCE", "default"),
+            "livemace-bench.managed": "true",
+            "livemace-bench.component": "agent-sandbox",
+            "livemace-bench.instance": os.getenv("SANDBOX_INSTANCE", "default"),
         }
+
+    def _list_managed_containers(self, *, before_list=None, **filters):
+        """Find this instance's sandboxes across label versions during upgrades."""
+        containers = {}
+        for namespace in ("livemace-bench", "open-alpha-arena-bench"):
+            labels = {
+                f"{namespace}.managed": "true",
+                f"{namespace}.component": "agent-sandbox",
+                f"{namespace}.instance": os.getenv("SANDBOX_INSTANCE", "default"),
+            }
+            if before_list is not None:
+                before_list()
+            for container in self.client.containers.list(
+                all=True,
+                filters={**filters, "label": [f"{key}={value}" for key, value in labels.items()]},
+            ):
+                containers[container.id] = container
+        return list(containers.values())
 
     def _create_container(self):
         return self.client.containers.run(
@@ -255,10 +273,7 @@ class ContainerService:
 
         # Cleanup stale managed containers from previous runs
         try:
-            stale_managed = self.client.containers.list(
-                all=True,
-                filters={"label": [f"{key}={value}" for key, value in self._container_labels().items()]},
-            )
+            stale_managed = self._list_managed_containers()
             for c in stale_managed:
                 self._remove_container_quietly(c)
         except Exception as e:
@@ -266,10 +281,8 @@ class ContainerService:
 
         # Also cleanup exited containers created from the sandbox image
         try:
-            exited = self.client.containers.list(
-                all=True,
-                filters={"ancestor": AgentConfig.DOCKER_IMAGE_NAME, "status": "exited",
-                         "label": [f"{key}={value}" for key, value in self._container_labels().items()]},
+            exited = self._list_managed_containers(
+                ancestor=AgentConfig.DOCKER_IMAGE_NAME, status="exited"
             )
             for c in exited:
                 self._remove_container_quietly(c)
@@ -628,10 +641,7 @@ class ContainerService:
                 try:
                     apply_remaining_timeout()
                     tracked_ids = self._tracked_container_ids()
-                    leaked = self.client.containers.list(
-                        all=True,
-                        filters={"label": [f"{key}={value}" for key, value in self._container_labels().items()]},
-                    )
+                    leaked = self._list_managed_containers(before_list=apply_remaining_timeout)
                     for container in leaked:
                         container_id = getattr(container, "id", None)
                         if container_id in tracked_ids:

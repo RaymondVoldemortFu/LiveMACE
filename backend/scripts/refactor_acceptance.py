@@ -47,8 +47,8 @@ def configure(args, output):
         LLM_REQUEST_TIMEOUT_SECONDS="60",
         LLM_MAX_RETRIES="1",
         TOOL_CACHE_ENABLED="true",
-        ALPHA_ARENA_EXTENSION_DIRS="",
-        ALPHA_ARENA_DISABLED_EXTENSIONS="",
+        LIVEMACE_BENCH_EXTENSION_DIRS="",
+        LIVEMACE_BENCH_DISABLED_EXTENSIONS="",
     )
     os.environ["TOOL_CACHE_KEY_PREFIX"] = os.environ["SANDBOX_INSTANCE"]
     os.environ["DOCKER_HOST"] = subprocess.check_output(
@@ -124,7 +124,7 @@ def start_dependencies(containers):
         f"mysql+pymysql://root:{password}@127.0.0.1:{mysql_port}/refactor_acceptance?charset=utf8mb4"
     )
     os.environ["MYSQL_TEST_DATABASE_URL"] = os.environ["DATABASE_URL"].replace(
-        "/refactor_acceptance?", "/alpha_arena_wave3_test?"
+        "/refactor_acceptance?", "/livemace_bench_test?"
     )
     os.environ["TOOL_CACHE_REDIS_URL"] = f"redis://127.0.0.1:{redis_port}/0"
     import pymysql
@@ -141,7 +141,7 @@ def start_dependencies(containers):
                 connect_timeout=2,
             )
             with connection.cursor() as cursor:
-                cursor.execute("CREATE DATABASE IF NOT EXISTS alpha_arena_wave3_test")
+                cursor.execute("CREATE DATABASE IF NOT EXISTS livemace_bench_test")
             connection.close()
             break
         except pymysql.MySQLError:

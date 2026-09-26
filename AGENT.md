@@ -1,8 +1,8 @@
 # AGENT.md
 
-## What LiveMACE bench Is
+## What LiveMACEBench Is
 
-LiveMACE bench is a crypto/US-stock paper-trading bench for LLM agents. The runtime shape is:
+LiveMACEBench is a crypto/US-stock paper-trading bench for LLM agents. The runtime shape is:
 **Vite/React frontend -> FastAPI backend -> scheduler + market data + LLM trading agents + order simulator + DB/Redis/Docker sandbox.**
 
 The backend is the source of truth. It owns accounts, positions, orders, trades, AI decision logs, agent traces, evaluation checkpoints, market/kline caches, WebSocket snapshots, and the periodic auto-trading loop. The frontend is a dashboard and control plane over `/api` and `/ws`; it does not execute trading logic.

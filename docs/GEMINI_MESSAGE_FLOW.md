@@ -1,6 +1,6 @@
 # Gemini API 消息转换流程
 
-本文档详细说明在 LiveMACE bench 项目中使用 Gemini 模型时，消息的发送、接收及转换流程。
+本文档详细说明在 LiveMACEBench 项目中使用 Gemini 模型时，消息的发送、接收及转换流程。
 
 ## 架构概览
 

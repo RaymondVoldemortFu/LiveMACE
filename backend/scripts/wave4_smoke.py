@@ -18,9 +18,9 @@ def main():
     with TemporaryDirectory(prefix='wave4-smoke-') as directory:
         os.environ['DATABASE_URL'] = f'sqlite:///{directory}/smoke.sqlite'
         os.environ['WAVE3_PRODUCTION'] = 'false'
-        os.environ['ALPHA_ARENA_EXTENSION_DIRS'] = ''
-        os.environ['ALPHA_ARENA_DISABLED_EXTENSIONS'] = ''
-        os.environ['ALPHA_ARENA_ALLOWED_CAPABILITIES'] = 'market.read,account.read,memory.read,memory.write,network.read,sandbox.write,trading.write'
+        os.environ['LIVEMACE_BENCH_EXTENSION_DIRS'] = ''
+        os.environ['LIVEMACE_BENCH_DISABLED_EXTENSIONS'] = ''
+        os.environ['LIVEMACE_BENCH_ALLOWED_CAPABILITIES'] = 'market.read,account.read,memory.read,memory.write,network.read,sandbox.write,trading.write'
         from benchmark.bootstrap.app import create_app, AppSettings
         from benchmark.bootstrap.runtime import StartupMode
         from fastapi.testclient import TestClient

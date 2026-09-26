@@ -110,7 +110,7 @@ class ExtensionModuleNamespace:
     def __init__(self, root: Path, *, module_prefix: str | None = None) -> None:
         self.root = root.resolve(strict=True)
         self.module_prefix = module_prefix
-        self.name = f"_alpha_arena_extension_{uuid4().hex}"
+        self.name = f"_livemace_bench_extension_{uuid4().hex}"
         self._installed = False
         module_builtins = dict(vars(builtins))
         module_builtins["__import__"] = self._import

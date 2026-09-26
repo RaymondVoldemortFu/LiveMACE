@@ -1,6 +1,8 @@
-# LiveMACE bench
+# LiveMACEBench
 
-LiveMACE bench is a benchmark platform for evaluating LLM agents through live market data and simulated trading in crypto and US equities. It combines agent decisions, tool use, portfolio accounting, and evaluation in one reproducible workflow. The project was inspired by [nof1 Alpha Arena](https://nof1.ai).
+*Benchmarking LLM Agent Capabilities in Live Financial Markets*
+
+LiveMACEBench is a benchmark platform for evaluating LLM agents through live market data and simulated trading in crypto and US equities. It combines agent decisions, tool use, portfolio accounting, and evaluation in one reproducible workflow. The project was inspired by [nof1](https://nof1.ai).
 
 ## Capabilities
 
@@ -19,16 +21,6 @@ Live market data → Agent analysis and tool use → Simulated trades → Portfo
 Agents gather market information, use tools to investigate opportunities, and submit trading decisions. The backend records each trade and maintains account balances and positions. The dashboard brings together performance curves, decision traces, and evaluation results for comparison across models and agent architectures.
 
 Build custom Agents, Tools, and Prompt profiles with the [extension SDK](docs/extensions/README.md) and [runnable examples](examples/extensions). See the [documentation index](docs/README.md) for architecture and configuration guides.
-
-## Star History
-
-<a href="https://www.star-history.com/#RaymondVoldemortFu/open-alpha-arena-bench&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=RaymondVoldemortFu/open-alpha-arena-bench&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=RaymondVoldemortFu/open-alpha-arena-bench&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=RaymondVoldemortFu/open-alpha-arena-bench&type=date&legend=top-left" />
- </picture>
-</a>
 
 ## Getting Started
 
@@ -159,7 +151,7 @@ Combination mode config:
 
 ## Extensions
 
-LiveMACE bench exposes a synchronous extension SPI for Agents, Tools, and
+LiveMACEBench exposes a synchronous extension SPI for Agents, Tools, and
 Prompt-only packages. Built-in components and third-party extensions use the
 same Catalog. Runnable examples are in
 [`examples/extensions`](examples/extensions), with step-by-step guides in
@@ -169,9 +161,9 @@ From `backend/`, validate, test, or inspect an extension without starting the
 full application runtime:
 
 ```bash
-uv run alpha-arena extension validate ../examples/extensions/minimal-agent
-uv run alpha-arena extension test ../examples/extensions/minimal-agent
-uv run alpha-arena extension list ../examples/extensions/prompt-override --json
+uv run livemace-bench extension validate ../examples/extensions/minimal-agent
+uv run livemace-bench extension test ../examples/extensions/minimal-agent
+uv run livemace-bench extension list ../examples/extensions/prompt-override --json
 ```
 
 The same CLI is available as `python -m benchmark` or

@@ -1,13 +1,13 @@
-# LiveMACE bench DB Viewer
+# LiveMACEBench DB Viewer
 
-一个独立的只读 SQLite 查看工具，用于浏览 `alpha_arena_final.sqlite` 中的账号、历史 trace 和任意表数据。
+一个独立的只读 SQLite 查看工具，用于浏览 `livemace_bench_final.sqlite` 中的账号、历史 trace 和任意表数据。
 
 ## 启动
 
 在 `backend` 目录复用本项目 uv 环境运行：
 
 ```bash
-uv run python -m analysis.db_viewer --db ../alpha_arena_final.sqlite --port 8765
+uv run python -m analysis.db_viewer --db ../livemace_bench_final.sqlite --port 8765
 ```
 
 打开：

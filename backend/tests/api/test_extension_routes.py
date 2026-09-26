@@ -89,9 +89,9 @@ def test_component_schema_and_standard_not_found_error():
 
 def test_default_catalog_uses_deployment_extension_settings(monkeypatch):
     extension_root = Path(__file__).resolve().parents[3] / "examples/extensions/minimal-agent"
-    monkeypatch.setenv("ALPHA_ARENA_EXTENSION_DIRS", str(extension_root))
-    monkeypatch.setenv("ALPHA_ARENA_DISABLED_EXTENSIONS", "benchmark.core")
-    monkeypatch.setenv("ALPHA_ARENA_ALLOWED_CAPABILITIES", "market.read")
+    monkeypatch.setenv("LIVEMACE_BENCH_EXTENSION_DIRS", str(extension_root))
+    monkeypatch.setenv("LIVEMACE_BENCH_DISABLED_EXTENSIONS", "benchmark.core")
+    monkeypatch.setenv("LIVEMACE_BENCH_ALLOWED_CAPABILITIES", "market.read")
     __import__("benchmark.extensions.host", fromlist=["reset_extension_runtime"]).reset_extension_runtime()
     try:
         service = get_extension_config_service()

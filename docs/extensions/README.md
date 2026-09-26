@@ -1,7 +1,7 @@
-# LiveMACE bench Extension SDK
+# LiveMACEBench Extension SDK
 
 The extension surface is a small, synchronous SPI.  An extension directory is
-catalogued from `alpha-arena-extension.yaml`; it may contain an Agent, Tools,
+catalogued from `livemace-bench-extension.yaml`; it may contain an Agent, Tools,
 Prompt files, or any combination of the three.
 
 The four runnable examples are in `examples/extensions/`:
@@ -15,14 +15,26 @@ From the repository root, validate and test one example with:
 
 ```bash
 cd backend
-uv run alpha-arena extension validate ../examples/extensions/minimal-agent
-uv run alpha-arena extension test ../examples/extensions/minimal-agent
-uv run alpha-arena extension list ../examples/extensions/minimal-agent
+uv run livemace-bench extension validate ../examples/extensions/minimal-agent
+uv run livemace-bench extension test ../examples/extensions/minimal-agent
+uv run livemace-bench extension list ../examples/extensions/minimal-agent
 ```
 
-The same commands are available through the installed `alpha-arena` entry
+The same commands are available through the installed `livemace-bench` entry
 point.  `list` performs only local manifest/schema/Prompt-index checks; it does
 not start a scheduler or connect to a service.
+
+## Runtime configuration
+
+| Setting | Purpose |
+| --- | --- |
+| `LIVEMACE_BENCH_EXTENSION_DIRS` | Colon-separated extension directories |
+| `LIVEMACE_BENCH_DISABLED_EXTENSIONS` | Comma-separated extension IDs to disable |
+| `LIVEMACE_BENCH_ALLOWED_CAPABILITIES` | Comma-separated capability allowlist; defaults to all known capabilities |
+
+When upgrading an existing checkout, run `uv sync` from `backend/` to refresh
+the installed CLI. Name each custom extension manifest
+`livemace-bench-extension.yaml` and use the environment variables above.
 
 Built-in components and third-party extensions use the same Catalog loading
 path. The v1 SPI is synchronous: extensions may manage asyncio or threads

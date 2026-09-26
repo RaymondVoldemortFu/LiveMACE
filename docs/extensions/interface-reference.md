@@ -378,7 +378,7 @@ DecisionRoundService.run()                         # 同步入口
 
 ## 8. 扩展 Manifest
 
-文件名固定为 `alpha-arena-extension.yaml`：
+文件名固定为 `livemace-bench-extension.yaml`：
 
 ```yaml
 api_version: 1

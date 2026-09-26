@@ -667,6 +667,7 @@ def run_startup_migrations(
                         f"{database_name}:{migration.migration_id}".encode("utf-8")
                     )
                     lock_name = (
+                        # Keep this stable so deployed versions share the same lock.
                         "open_alpha_migration_"
                         + hashlib.sha256(lock_identity).hexdigest()[:40]
                     )

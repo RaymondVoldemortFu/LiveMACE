@@ -1,6 +1,6 @@
-# LiveMACE bench 系统架构
+# LiveMACEBench 系统架构
 
-LiveMACE bench 使用实时行情驱动 LLM Agent，并在模拟账本中记录交易。后端拥有账户、资金、持仓、订单、成交与评估结果；前端负责配置、展示和订阅。
+LiveMACEBench 使用实时行情驱动 LLM Agent，并在模拟账本中记录交易。后端拥有账户、资金、持仓、订单、成交与评估结果；前端负责配置、展示和订阅。
 
 ## 主要边界
 

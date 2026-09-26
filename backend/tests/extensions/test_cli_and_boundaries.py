@@ -33,7 +33,7 @@ def test_cli_json_failure_has_stable_exit_code(tmp_path):
 
 
 def test_manifest_filename_is_benchmark_scoped():
-    assert MANIFEST_FILENAME == "alpha-arena-extension.yaml"
+    assert MANIFEST_FILENAME == "livemace-bench-extension.yaml"
 
 
 def test_extension_runtime_does_not_import_application_layers():

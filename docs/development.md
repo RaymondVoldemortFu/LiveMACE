@@ -50,3 +50,13 @@ uv run python scripts/refactor_acceptance.py --credentials .env
 - Prompt、工具 schema 与 provider 变化应覆盖其输入输出契约。
 
 本机隔离栈的配置与操作说明见[运维文档](operations/local-stack.md)。
+
+## 更新已有环境
+
+安装入口与扩展配置见 [SDK 文档](extensions/README.md#runtime-configuration)。
+默认 Compose 项目为 `livemace-bench`，使用 `livemace_bench` 数据库和 `livemace` 用户。
+已有环境应通过 `COMPOSE_PROJECT_NAME` 或 `docker compose -p` 保留原项目名与数据卷，
+并继续通过 `MYSQL_DATABASE`、`MYSQL_USER`、`MYSQL_PASSWORD` 和
+`DATABASE_URL` 指向原有资源；MySQL 初始化变量只对空数据卷生效。
+分析脚本可用 `--db`，离线评估可用 `--db-path` 或 `--database-url` 指定已有数据。
+本机隔离栈、源数据库与历史备份保留既有资源身份。

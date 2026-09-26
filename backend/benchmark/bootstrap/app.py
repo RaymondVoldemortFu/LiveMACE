@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class AppSettings:
-    title: str = "LiveMACE bench API"
+    title: str = "LiveMACEBench API"
     cors_allow_origins: List[str] = field(default_factory=lambda: ["*"])
     static_dir: Optional[str] = None  # default: backend/static
     startup_cleanup_timeout_seconds: float = 10.0

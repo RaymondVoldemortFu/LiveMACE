@@ -39,7 +39,7 @@ def session_factory(tmp_path):
     mysql_url = os.getenv("MYSQL_TEST_DATABASE_URL") if os.getenv("WAVE3_MYSQL_REGRESSION") == "true" else None
     if mysql_url:
         from sqlalchemy.engine import make_url
-        assert make_url(mysql_url).database == "alpha_arena_wave3_test"
+        assert make_url(mysql_url).database == "livemace_bench_test"
         engine = create_engine(mysql_url, pool_pre_ping=True)
         Base.metadata.drop_all(engine)
     else:

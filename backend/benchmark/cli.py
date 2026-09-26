@@ -1,4 +1,4 @@
-"""The lightweight ``alpha-arena`` command line interface.
+"""The lightweight ``livemace-bench`` command line interface.
 
 Only extension commands live here.  They intentionally stop at validation,
 catalog loading, and contract checks; no application scheduler or persistence
@@ -41,7 +41,7 @@ from benchmark.tools import SynchronousToolInvoker
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="alpha-arena")
+    parser = argparse.ArgumentParser(prog="livemace-bench")
     commands = parser.add_subparsers(dest="command", required=True)
     extension = commands.add_parser(
         "extension", help="validate, test, or list an extension directory"

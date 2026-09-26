@@ -8,6 +8,8 @@ from pathlib import Path
 import subprocess
 import sys
 
+import pytest
+
 from benchmark.cli import main
 from benchmark.contracts import TRADING_WRITE
 from benchmark.extensions import (
@@ -44,9 +46,9 @@ def test_settings_from_environ_parses_colon_and_comma_lists(tmp_path):
     second = tmp_path / "two"
     settings = settings_from_environ(
         {
-            "ALPHA_ARENA_EXTENSION_DIRS": f"{first}:{second}:",
-            "ALPHA_ARENA_DISABLED_EXTENSIONS": "com.example.one, com.example.two",
-            "ALPHA_ARENA_ALLOWED_CAPABILITIES": "market.read,account.read",
+            "LIVEMACE_BENCH_EXTENSION_DIRS": f"{first}:{second}:",
+            "LIVEMACE_BENCH_DISABLED_EXTENSIONS": "com.example.one, com.example.two",
+            "LIVEMACE_BENCH_ALLOWED_CAPABILITIES": "market.read,account.read",
         }
     )
     assert settings.extension_roots == (first, second)
@@ -64,6 +66,11 @@ def test_settings_from_environ_keeps_all_capabilities_when_unset():
     assert settings.extension_roots == ()
     assert settings.disabled_extensions == frozenset()
     assert settings.allowed_capabilities == KNOWN_CAPABILITIES
+
+
+def test_settings_reject_retired_environment_instead_of_dropping_policy():
+    with pytest.raises(ValueError, match="LIVEMACE_BENCH"):
+        settings_from_environ({"ALPHA_ARENA_ALLOWED_CAPABILITIES": "market.read"})
 
 
 def test_four_example_directories_validate_as_complete_extensions():
@@ -183,7 +190,7 @@ def test_combined_extension_contributes_agent_tool_and_prompt_with_builtin():
 def test_invalid_external_extension_does_not_block_builtin(tmp_path):
     broken = tmp_path / "broken"
     broken.mkdir()
-    (broken / "alpha-arena-extension.yaml").write_text(
+    (broken / "livemace-bench-extension.yaml").write_text(
         "api_version: 1\n"
         "id: com.example.broken\n"
         "version: 1.0.0\n"
@@ -240,10 +247,13 @@ def test_wheel_archives_builtin_resources_once(tmp_path):
     )
     wheels = list(tmp_path.glob("*.whl"))
     assert len(wheels) == 1, completed.stderr
-    names = zipfile.ZipFile(wheels[0]).namelist()
+    with zipfile.ZipFile(wheels[0]) as archive:
+        names = archive.namelist()
+        entry_points = next(name for name in names if name.endswith(".dist-info/entry_points.txt"))
+        assert "livemace-bench = benchmark.cli:main" in archive.read(entry_points).decode()
     assert len(names) == len(set(names))
     for path in (
-        "benchmark/builtin/alpha-arena-extension.yaml",
+        "benchmark/builtin/livemace-bench-extension.yaml",
         "benchmark/builtin/prompts/__init__.py",
         "benchmark/builtin/prompts/index.yaml",
         "benchmark/builtin/prompts/advanced/manager.txt",

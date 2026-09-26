@@ -1,9 +1,10 @@
 import json
 import os
 import statistics
+from pathlib import Path
 from collections import defaultdict
 
-DIR_PATH = "/home/loading/nlp/open-alpha-arena-bench/backend/services/evaluation/eval_results/account_2"
+DIR_PATH = Path(__file__).resolve().parent / "account_2"
 
 # 存每个 metric 在不同文件中的 mean
 # 结构: { "metric_a": [mean1, mean2, mean3], ... }

@@ -368,6 +368,7 @@ temp
 backend/script/results/*
 backend/eval/eval_output/
 *.sql
+!backend/livemace_bench_backup.sql
 *.docx
 /WAVE 2*.pdf
 *_report.md

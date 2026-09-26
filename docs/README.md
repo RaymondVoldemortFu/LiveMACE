@@ -1,4 +1,4 @@
-# LiveMACE bench 文档
+# LiveMACEBench 文档
 
 ## 使用与配置
 

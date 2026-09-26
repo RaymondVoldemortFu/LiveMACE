@@ -14,9 +14,9 @@ from fastapi.responses import HTMLResponse
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 PROJECT_ROOT = BACKEND_DIR.parent
-DEFAULT_DB_PATH = PROJECT_ROOT / "alpha_arena_final.sqlite"
+DEFAULT_DB_PATH = PROJECT_ROOT / "livemace_bench_final.sqlite"
 
-app = FastAPI(title="LiveMACE bench DB Viewer", docs_url="/docs", redoc_url=None)
+app = FastAPI(title="LiveMACEBench DB Viewer", docs_url="/docs", redoc_url=None)
 _DB_PATH = DEFAULT_DB_PATH
 
 
@@ -683,7 +683,7 @@ HTML_PAGE = r"""
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>LiveMACE bench DB Viewer</title>
+  <title>LiveMACEBench DB Viewer</title>
   <style>
     :root {
       color-scheme: light;
@@ -1064,7 +1064,7 @@ HTML_PAGE = r"""
   <div class="app">
     <header>
       <div class="title">
-        <h1>LiveMACE bench DB Viewer</h1>
+        <h1>LiveMACEBench DB Viewer</h1>
         <span id="dbPath">正在读取数据库...</span>
       </div>
       <div class="tabs">
@@ -1932,7 +1932,7 @@ HTML_PAGE = r"""
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run a local read-only viewer for alpha_arena_final.sqlite")
+    parser = argparse.ArgumentParser(description="Run a local read-only viewer for livemace_bench_final.sqlite")
     parser.add_argument("--db", default=str(DEFAULT_DB_PATH), help="SQLite DB path")
     parser.add_argument("--host", default="127.0.0.1", help="Bind host")
     parser.add_argument("--port", type=int, default=8765, help="Bind port")

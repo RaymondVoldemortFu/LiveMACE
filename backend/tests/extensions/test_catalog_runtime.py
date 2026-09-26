@@ -310,7 +310,7 @@ def test_entrypoint_module_must_be_inside_extension_root(tmp_path: Path):
     root = tmp_path / "outside-entrypoint"
     root.mkdir()
     (root / "schema.json").write_text('{"type": "object"}', encoding="utf-8")
-    (root / "alpha-arena-extension.yaml").write_text(
+    (root / "livemace-bench-extension.yaml").write_text(
         "api_version: 1\n"
         "id: com.example.outside\n"
         "version: 1.0.0\n"
@@ -346,7 +346,7 @@ def test_failed_replacement_restores_existing_module(tmp_path: Path):
         root = tmp_path / "extension"
         root.mkdir()
         (root / "schema.json").write_text('{"type": "object"}', encoding="utf-8")
-        (root / "alpha-arena-extension.yaml").write_text(
+        (root / "livemace-bench-extension.yaml").write_text(
             "api_version: 1\n"
             "id: com.example.collision\n"
             "version: 1.0.0\n"
@@ -375,7 +375,7 @@ def test_failed_replacement_restores_existing_module(tmp_path: Path):
 def test_builtin_failure_remains_fatal_when_runtime_uses_builtin_root(tmp_path: Path):
     broken = tmp_path / "broken-builtin"
     broken.mkdir()
-    (broken / "alpha-arena-extension.yaml").write_text(
+    (broken / "livemace-bench-extension.yaml").write_text(
         "api_version: 1\n"
         "id: benchmark.core\n"
         "version: 1.0.0\n"

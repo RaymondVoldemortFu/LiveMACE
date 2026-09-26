@@ -49,7 +49,7 @@ assert_agent_contract(
 ```
 
 Run the same checks from the command line with
-`alpha-arena extension test path/to/extension`.  The command loads only the
+`livemace-bench extension test path/to/extension`.  The command loads only the
 selected catalog and never starts the application runtime.
 
 When `assert_tool_contract()` is called without cases, it derives schema

@@ -1032,14 +1032,14 @@ def _parse_args() -> argparse.Namespace:
         "--database-url", default=None, dest="database_url",
         help=(
             "Override DATABASE_URL for this run. "
-            "Example: sqlite:///./alpha_arena.sqlite"
+            "Example: sqlite:///./livemace_bench.sqlite"
         ),
     )
     parser.add_argument(
         "--db-path", default=None, dest="db_path",
         help=(
             "SQLite file path (converted to DATABASE_URL automatically). "
-            "Example: ./alpha_arena.sqlite  or  ../backend/alpha_arena.sqlite"
+            "Example: ./livemace_bench.sqlite  or  ../backend/livemace_bench.sqlite"
         ),
     )
     parser.add_argument("--model", default=None)

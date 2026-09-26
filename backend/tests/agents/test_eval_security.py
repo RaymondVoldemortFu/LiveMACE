@@ -11,6 +11,6 @@ def test_redact_database_url_hides_password_and_keeps_location():
 
 
 def test_redact_database_url_preserves_passwordless_sqlite_url():
-    assert redact_database_url("sqlite:///alpha_arena.sqlite") == (
-        "sqlite:///alpha_arena.sqlite"
+    assert redact_database_url("sqlite:///livemace_bench.sqlite") == (
+        "sqlite:///livemace_bench.sqlite"
     )

@@ -1,7 +1,7 @@
 api_version: 1
 id: benchmark.core
 version: 1.0.0
-name: LiveMACE bench Built-ins
+name: LiveMACEBench Built-ins
 description: Built-in agents, tools, and prompt profiles shipped with the benchmark runtime.
 python:
   requires: ">=3.10"

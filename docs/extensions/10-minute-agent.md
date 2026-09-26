@@ -29,7 +29,7 @@ class HoldAgent:
         )
 ```
 
-Declare the factory in `alpha-arena-extension.yaml`:
+Declare the factory in `livemace-bench-extension.yaml`:
 
 ```yaml
 api_version: 1
@@ -46,7 +46,7 @@ components:
       config_schema: schema.json
 ```
 
-`schema.json` supplies defaults that `alpha-arena extension test` applies through
+`schema.json` supplies defaults that `livemace-bench extension test` applies through
 the Agent registry:
 
 ```json
@@ -66,8 +66,8 @@ Tool call; an Agent should not construct orders directly.
 Run the static and runtime checks:
 
 ```bash
-alpha-arena extension validate path/to/hold-agent
-alpha-arena extension test path/to/hold-agent
+livemace-bench extension validate path/to/hold-agent
+livemace-bench extension test path/to/hold-agent
 ```
 
 The SPI is synchronous.  An Agent may manage its own event loop or worker pool

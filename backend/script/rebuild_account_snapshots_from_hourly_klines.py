@@ -57,7 +57,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--db-path",
-        default="alpha_arena_final.sqlite",
+        default="livemace_bench_final.sqlite",
         help="Path to the SQLite database",
     )
     parser.add_argument(

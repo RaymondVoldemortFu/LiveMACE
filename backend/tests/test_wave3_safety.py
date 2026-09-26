@@ -38,6 +38,28 @@ def test_explicit_schema_and_migration_guard(tmp_path, monkeypatch):
     assert not source.exists()
 
 
+@pytest.mark.parametrize("filename", ["alpha_arena_final.sqlite", "livemace_bench_final.sqlite"])
+def test_source_export_names_remain_protected(tmp_path, filename):
+    with pytest.raises(ValueError, match="protected"):
+        validate_database_target(f"sqlite:///{tmp_path / filename}", {})
+    assert not (tmp_path / filename).exists()
+
+
+def test_renamed_source_export_aliases_remain_protected(tmp_path, monkeypatch):
+    from database import safety
+
+    monkeypatch.setattr(safety, "__file__", str(tmp_path / "backend/database/safety.py"))
+    source = tmp_path / "livemace_bench_final.sqlite"
+    source.touch()
+    alias = tmp_path / "alias.sqlite"
+    alias.symlink_to(source)
+    hardlink = tmp_path / "hardlink.sqlite"
+    hardlink.hardlink_to(source)
+    for path in (alias, hardlink):
+        with pytest.raises(ValueError, match="protected"):
+            validate_database_target(f"sqlite:///{path}", {})
+
+
 def test_production_requires_dedicated_mysql():
     env = {"WAVE3_PRODUCTION": "true"}
     for url in ("sqlite://", "mysql+pymysql://localhost/alpha_arena"):
@@ -64,6 +86,6 @@ def test_sandbox_cleanup_is_instance_scoped(monkeypatch):
 
     monkeypatch.setenv("SANDBOX_INSTANCE", "wave3")
     labels = ContainerService._container_labels(None)
-    assert labels["open-alpha-arena-bench.instance"] == "wave3"
+    assert labels["livemace-bench.instance"] == "wave3"
     source = (Path(__file__).parents[1] / "services/container_service.py").read_text()
-    assert 'filters={"label": "open-alpha-arena-bench.managed=true"}' not in source
+    assert 'filters={"label": "livemace-bench.managed=true"}' not in source

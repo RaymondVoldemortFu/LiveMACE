@@ -249,8 +249,8 @@ def _arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--db-path",
-        default=str(BACKEND_DIR / "alpha_arena.sqlite"),
-        help="SQLite 数据库路径（默认 backend/alpha_arena.sqlite）",
+        default=str(BACKEND_DIR / "livemace_bench.sqlite"),
+        help="SQLite 数据库路径（默认 backend/livemace_bench.sqlite）",
     )
     parser.add_argument("--sample-size", type=int, default=5, help="每个模型采样记录数，默认 5")
     parser.add_argument("--seed", type=int, default=42, help="随机种子，默认 42")

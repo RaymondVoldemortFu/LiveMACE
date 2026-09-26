@@ -1,7 +1,9 @@
+name: livemace-bench
+
 services:
   redis:
     image: valkey/valkey:8-alpine
-    container_name: open-alpha-redis
+    container_name: livemace-bench-redis
     restart: unless-stopped
     ports:
       - "6379:6379"
@@ -13,12 +15,12 @@ services:
 
   mysql:
     image: mysql:8.4
-    container_name: usmover-mysql
+    container_name: livemace-bench-mysql
     restart: unless-stopped
     environment:
-      MYSQL_DATABASE: ${MYSQL_DATABASE:-alpha_arena}
-      MYSQL_USER: ${MYSQL_USER:-alpha}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-alpha123}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-livemace_bench}
+      MYSQL_USER: ${MYSQL_USER:-livemace}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-livemace123}
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root123}
     ports:
       - "3306:3306"
@@ -34,12 +36,12 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: open-alpha-backend
+    container_name: livemace-bench-backend
     restart: unless-stopped
     env_file:
       - ./backend/.env
     environment:
-      DATABASE_URL: ${DATABASE_URL:-mysql+pymysql://${MYSQL_USER:-alpha}:${MYSQL_PASSWORD:-alpha123}@mysql:3306/${MYSQL_DATABASE:-alpha_arena}?charset=utf8mb4}
+      DATABASE_URL: ${DATABASE_URL:-mysql+pymysql://${MYSQL_USER:-livemace}:${MYSQL_PASSWORD:-livemace123}@mysql:3306/${MYSQL_DATABASE:-livemace_bench}?charset=utf8mb4}
       DB_POOL_SIZE: ${DB_POOL_SIZE:-80}
       DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-120}
       DB_POOL_TIMEOUT: ${DB_POOL_TIMEOUT:-30}
@@ -62,7 +64,7 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    container_name: open-alpha-frontend
+    container_name: livemace-bench-frontend
     restart: unless-stopped
     depends_on:
       - backend

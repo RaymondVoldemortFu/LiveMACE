@@ -42,7 +42,7 @@ test = [
 ]
 
 [project.scripts]
-alpha-arena = "benchmark.cli:main"
+livemace-bench = "benchmark.cli:main"
 
 [[tool.uv.index]]
 name = "pytorch-cpu"

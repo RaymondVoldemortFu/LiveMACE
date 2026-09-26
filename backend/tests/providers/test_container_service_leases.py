@@ -249,4 +249,48 @@ def test_container_shutdown_drops_orphan_leases_when_other_remove_fails():
     assert service._active_lease_ids == {3: {"lease-3"}}
 
 
+@pytest.mark.parametrize("operation", ["initialize", "shutdown"])
+def test_cleanup_covers_label_versions_and_preserves_other_instances(monkeypatch, operation):
+    monkeypatch.setenv("SANDBOX_INSTANCE", "test-instance")
+    removed = set()
+
+    class Container:
+        def __init__(self, name, namespace, instance="test-instance", component="agent-sandbox"):
+            self.id = name
+            self.labels = {
+                f"{namespace}.managed": "true",
+                f"{namespace}.component": component,
+                f"{namespace}.instance": instance,
+            }
+
+        def remove(self, force=False):
+            assert force and self.id not in removed
+            removed.add(self.id)
+
+    current = Container("current", "livemace-bench")
+    legacy = Container("legacy", "open-alpha-arena-bench")
+    dual = Container("dual", "livemace-bench")
+    dual.labels.update(legacy.labels)
+    containers = [current, legacy, dual]
+    for namespace in ("livemace-bench", "open-alpha-arena-bench"):
+        containers.append(Container(f"foreign-{namespace}", namespace, instance="other"))
+        containers.append(Container(f"unrelated-{namespace}", namespace, component="other"))
+
+    def list_containers(*, all, filters):
+        assert all
+        required = dict(value.split("=", 1) for value in filters["label"])
+        return [container for container in containers
+                if container.id not in removed
+                and required.items() <= container.labels.items()]
+
+    service = _service_for_shutdown()
+    service.client.containers = SimpleNamespace(list=list_containers)
+    if operation == "initialize":
+        service._pool_initialized = False
+        service._desired_base_pool_size = lambda: 0
+        service._initialize_pool_if_needed()
+    else:
+        service.shutdown()
+    assert removed == {"current", "legacy", "dual"}
+
 

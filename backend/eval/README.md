@@ -23,12 +23,12 @@ cd backend
 The script reads the database from `DATABASE_URL` (or defaults to `./data.db`)
 and the LLM config from `.env`, identical to the main app.
 
-If your active DB file is `backend/alpha_arena.sqlite`, pass one of:
+If your active DB file is `backend/livemace_bench.sqlite`, pass one of:
 
 ```bash
-uv run python eval/offline_llm_audit.py --db-path ./alpha_arena.sqlite
+uv run python eval/offline_llm_audit.py --db-path ./livemace_bench.sqlite
 # or
-uv run python eval/offline_llm_audit.py --database-url sqlite:///./alpha_arena.sqlite
+uv run python eval/offline_llm_audit.py --database-url sqlite:///./livemace_bench.sqlite
 ```
 
 ### Quick Start
@@ -166,22 +166,22 @@ LLM, giving it objective ground truth to work against.
 cd backend
 
 # Default: output to eval_output/rule_informed_<ts>/, no DB writes
-uv run python eval/offline_llm_audit_rule_informed.py --db-path ./alpha_arena.sqlite
+uv run python eval/offline_llm_audit_rule_informed.py --db-path ./livemace_bench.sqlite
 
 # Limit to 20 records
-uv run python eval/offline_llm_audit_rule_informed.py --db-path ./alpha_arena.sqlite --limit 20
+uv run python eval/offline_llm_audit_rule_informed.py --db-path ./livemace_bench.sqlite --limit 20
 
 # Re-audit records that already have scores (compare both methods)
-uv run python eval/offline_llm_audit_rule_informed.py --db-path ./alpha_arena.sqlite --force-reaudit
+uv run python eval/offline_llm_audit_rule_informed.py --db-path ./livemace_bench.sqlite --force-reaudit
 
 # Also write new scores back to DB (overwrites existing llm_audit_* fields)
-uv run python eval/offline_llm_audit_rule_informed.py --db-path ./alpha_arena.sqlite --write-db
+uv run python eval/offline_llm_audit_rule_informed.py --db-path ./livemace_bench.sqlite --write-db
 
 # Qwen thinking model: disable thinking for faster offline audit
-uv run python eval/offline_llm_audit_rule_informed.py --db-path ./alpha_arena.sqlite --write-db --disable-thinking
+uv run python eval/offline_llm_audit_rule_informed.py --db-path ./livemace_bench.sqlite --write-db --disable-thinking
 
 # Skip chart generation
-uv run python eval/offline_llm_audit_rule_informed.py --db-path ./alpha_arena.sqlite --no-charts
+uv run python eval/offline_llm_audit_rule_informed.py --db-path ./livemace_bench.sqlite --no-charts
 ```
 
 ### CLI Options
@@ -198,11 +198,11 @@ All options from `offline_llm_audit.py` are supported, plus:
 
 1. Run the standard audit first (populates baseline scores in DB):
    ```bash
-   uv run python eval/offline_llm_audit.py --db-path ./alpha_arena.sqlite
+   uv run python eval/offline_llm_audit.py --db-path ./livemace_bench.sqlite
    ```
 2. Run the rule-informed audit (DB not overwritten by default):
    ```bash
-   uv run python eval/offline_llm_audit_rule_informed.py --db-path ./alpha_arena.sqlite --force-reaudit
+   uv run python eval/offline_llm_audit_rule_informed.py --db-path ./livemace_bench.sqlite --force-reaudit
    ```
 3. Compare `original_llm_audit_score` vs `new_final_normalized_score` in `results.json`
    and review the trend charts and summary table.

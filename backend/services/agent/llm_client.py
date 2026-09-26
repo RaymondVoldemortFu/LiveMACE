@@ -20,7 +20,7 @@ _THOUGHT_SIG_KEYS: tuple[str, ...] = ("thought_signature", "thoughtSignature")
 # 部分兼容网关在响应 JSON 中不带 thought_signature，但回传历史时要求 function 上存在且非空；
 # 空串或非 base64 形态可能被上游判为「缺失」（错误信息仍写 missing）。
 _DEFAULT_GEMINI_THOUGHT_SIG_PLACEHOLDER = base64.b64encode(
-    b"open_alpha_arena_gemini_thought_sig_compat_v1"
+    b"livemace_bench_gemini_thought_sig_compat_v1"
 ).decode("ascii")
 
 logger = logging.getLogger(__name__)

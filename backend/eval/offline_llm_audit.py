@@ -968,7 +968,7 @@ def _parse_args() -> argparse.Namespace:
         dest="database_url",
         help=(
             "Override DATABASE_URL for this run. Example: "
-            "sqlite:///./alpha_arena.sqlite"
+            "sqlite:///./livemace_bench.sqlite"
         ),
     )
     parser.add_argument(
@@ -976,7 +976,7 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         dest="db_path",
         help=(
-            "SQLite file path shortcut for this run. Example: ./alpha_arena.sqlite"
+            "SQLite file path shortcut for this run. Example: ./livemace_bench.sqlite"
         ),
     )
     parser.add_argument(

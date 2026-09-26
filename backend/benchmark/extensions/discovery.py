@@ -113,10 +113,13 @@ def discover_extensions(settings: ExtensionSettings) -> tuple[ExtensionCandidate
 def settings_from_environ(
     environ: Mapping[str, str] | None = None,
 ) -> ExtensionSettings:
-    """Build discovery settings from the ALPHA_ARENA_* process environment."""
+    """Build discovery settings from the LIVEMACE_BENCH_* process environment."""
 
     source = os.environ if environ is None else environ
-    directories = source.get("ALPHA_ARENA_EXTENSION_DIRS", "")
+    # Fail explicitly rather than silently dropping an existing capability policy.
+    if any(key.startswith("ALPHA_ARENA_") for key in source):
+        raise ValueError("Rename extension environment variables to LIVEMACE_BENCH_* before starting")
+    directories = source.get("LIVEMACE_BENCH_EXTENSION_DIRS", "")
     roots = tuple(
         Path(item.strip())
         for item in directories.split(":")
@@ -124,10 +127,10 @@ def settings_from_environ(
     )
     disabled = frozenset(
         item.strip()
-        for item in source.get("ALPHA_ARENA_DISABLED_EXTENSIONS", "").split(",")
+        for item in source.get("LIVEMACE_BENCH_DISABLED_EXTENSIONS", "").split(",")
         if item.strip()
     )
-    raw_capabilities = source.get("ALPHA_ARENA_ALLOWED_CAPABILITIES")
+    raw_capabilities = source.get("LIVEMACE_BENCH_ALLOWED_CAPABILITIES")
     if raw_capabilities is None or not raw_capabilities.strip():
         capabilities = KNOWN_CAPABILITIES
     else:

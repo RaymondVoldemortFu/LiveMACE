@@ -22,7 +22,7 @@ from benchmark.contracts import (
     to_jsonable,
 )
 
-MANIFEST_FILENAME = "alpha-arena-extension.yaml"
+MANIFEST_FILENAME = "livemace-bench-extension.yaml"
 _SCHEMA_PATH = Path(__file__).with_name("schema") / "manifest-v1.json"
 _ENTRYPOINT_RE = re.compile(
     r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*:"
