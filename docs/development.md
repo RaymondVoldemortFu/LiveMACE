@@ -28,19 +28,19 @@ git diff --check
 
 应用工厂 `benchmark.bootstrap.app.create_app` 接受 `AppSettings` 和 `StartupMode`。单元测试使用 fake ports、临时数据库或注入的 UoW factory；HTTP 测试根据需求显式选择启动模式。
 
-`backend/scripts/wave4_smoke.py` 提供临时 SQLite 的 HTTP / WebSocket 应用烟测。运行前在仓库根目录构建前端，再从 `backend/` 执行：
+`backend/scripts/http_smoke.py` 提供临时 SQLite 的 HTTP / WebSocket 应用烟测。运行前在仓库根目录构建前端，再从 `backend/` 执行：
 
 ```sh
-uv run python scripts/wave4_smoke.py
+uv run python scripts/http_smoke.py
 ```
 
-真实模型端到端验证脚本为 `backend/scripts/refactor_acceptance.py`。准备 Docker、provider 配置文件及脚本使用的 MySQL、Valkey、Agent 沙箱镜像后，从 `backend/` 执行：
+真实模型端到端验证脚本为 `backend/scripts/live_agent_check.py`。准备 Docker、provider 配置文件及脚本使用的 MySQL、Valkey、Agent 沙箱镜像后，从 `backend/` 执行：
 
 ```sh
-uv run python scripts/refactor_acceptance.py --credentials .env
+uv run python scripts/live_agent_check.py --credentials .env --model YOUR_MODEL
 ```
 
-该脚本创建独立容器和临时账户，运行四种 Agent 并核对事件、回执、账本、HTTP、WebSocket 和 MySQL 行锁。它会发起真实模型请求；证据写入 `.refactor-acceptance/`，退出时清理所创建的容器。`--serve-after` 可在自动检查通过后保留临时页面服务，停止服务后清理资源。
+该脚本创建独立容器和临时账户，运行四种 Agent 并核对事件、回执、账本、HTTP、WebSocket 和 MySQL 行锁。它会发起真实模型请求；证据写入 `.live-agent-check/`，退出时清理所创建的容器。`--serve-after` 可在自动检查通过后保留临时页面服务，停止服务后清理资源。
 
 ## 交易与扩展变更
 
@@ -48,8 +48,6 @@ uv run python scripts/refactor_acceptance.py --credentials .env
 - 新增或修改财务行为时，检查成功、业务拒绝、异常回滚、幂等及账户并发语义。
 - 扩展使用同步公开接口、显式能力声明和版本化配置；详见[扩展契约测试](extensions/contract-tests.md)。
 - Prompt、工具 schema 与 provider 变化应覆盖其输入输出契约。
-
-本机隔离栈的配置与操作说明见[运维文档](operations/local-stack.md)。
 
 ## 更新已有环境
 

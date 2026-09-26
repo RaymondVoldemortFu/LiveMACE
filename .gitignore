@@ -317,9 +317,9 @@ backend/tests/characterization/__pycache__/
 backend/tests/fakes/__pycache__/
 !backend/tests/agents/
 !backend/tests/agents/**
-!backend/tests/refactor/
-!backend/tests/refactor/**
-backend/tests/refactor/__pycache__/
+!backend/tests/regression/
+!backend/tests/regression/**
+backend/tests/regression/__pycache__/
 backend/tests/agents/__pycache__/
 !backend/tests/bootstrap/
 !backend/tests/bootstrap/**
@@ -374,7 +374,6 @@ backend/eval/eval_output/
 __pycache__
 *.pyc
 
-!backend/tests/test_wave3_*.py
 
 docs/contributor-commit-timing.md
 docs/contributor-commit-timing.pdf
@@ -415,3 +414,18 @@ tool_quality_scores_*.json
 /backend/services/.bashrc
 /backend/config/account_combinations*.csv
 !/backend/config/account_combinations.example.csv
+
+# Local deployment and operational evidence
+/backend/Dockerfile.wave3
+/backend/Dockerfile.wave3.dockerignore
+/frontend/Dockerfile.wave3
+/frontend/Dockerfile.wave3.dockerignore
+/frontend/nginx.wave3.conf
+/compose.wave3.yml
+/scripts/wave3_probe.py
+/scripts/wave3_runtime.py
+/scripts/wave3_watch_cycles.py
+/docs/operations/local-stack.md
+/backend/tests/test_wave3_provider_gate.py
+/backend/tests/test_wave3_watch_cycles.py
+/.live-agent-check/

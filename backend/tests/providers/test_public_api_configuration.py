@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 PUBLIC_APIS = ROOT / "backend/services/agent/public-apis"
 
 
@@ -28,7 +28,7 @@ def provider(monkeypatch):
     monkeypatch.setenv("WAVE3_PRODUCTION", "true")
     monkeypatch.setenv("WAVE3_MODEL", "deepseek-flash")
     monkeypatch.setenv("BASE_URL", "https://api.deepseek.com/v1")
-    monkeypatch.setenv("API_KEY", "test-only-wave3-key")
+    monkeypatch.setenv("API_KEY", "test-only-provider-key")
     monkeypatch.setenv("openai_model", "old-model")
     monkeypatch.setenv("base_url", "https://old-provider.invalid/v1")
     monkeypatch.setenv("api_key", "test-only-legacy-key")
@@ -40,69 +40,6 @@ def provider(monkeypatch):
         "model": "deepseek-flash",
         "base_url": "https://api.deepseek.com/v1",
     }
-
-
-def validate(tmp_path, report, accounts=None):
-    runtime = load_module(ROOT / "scripts/wave3_runtime.py", "wave3_gate_test")
-    probe = tmp_path / "probe.json"
-    probe.write_text(json.dumps(report))
-    runtime.validate_model_probe(
-        probe,
-        accounts
-        or [
-            SimpleNamespace(
-                id=1, model="deepseek-flash", base_url="https://api.deepseek.com/v1"
-            )
-        ],
-    )
-
-
-@pytest.mark.parametrize(
-    "changes",
-    [
-        {"model": "gpt-5.6-luna"},
-        {"base_url": "https://old-provider.invalid/v1"},
-        {"base_url": None},
-        {"passed": "true"},
-        {"passed": False},
-    ],
-)
-def test_schedule_rejects_stale_or_failed_probe(tmp_path, provider, changes):
-    with pytest.raises(ValueError, match="successful model/tool probe"):
-        validate(tmp_path, {**provider, **changes})
-
-
-def test_schedule_accepts_current_provider_with_trailing_slash(tmp_path, provider):
-    validate(tmp_path, {**provider, "base_url": provider["base_url"] + "/"})
-
-
-@pytest.mark.parametrize("field,value", [("model", "old-model"), ("base_url", None)])
-def test_schedule_checks_every_selected_account(tmp_path, provider, field, value):
-    accounts = [
-        SimpleNamespace(id=i, model=provider["model"], base_url=provider["base_url"])
-        for i in (1, 2)
-    ]
-    setattr(accounts[1], field, value)
-    with pytest.raises(ValueError, match="Account 2"):
-        validate(tmp_path, provider, accounts)
-
-
-@pytest.mark.parametrize("content", [None, "{broken", "[]"])
-def test_schedule_fails_closed_for_missing_or_corrupt_evidence(
-    tmp_path, provider, content
-):
-    runtime = load_module(ROOT / "scripts/wave3_runtime.py", "wave3_gate_test")
-    probe = tmp_path / "probe.json"
-    if content is not None:
-        probe.write_text(content)
-    with pytest.raises(ValueError):
-        runtime.validate_model_probe(probe, [])
-
-
-def test_schedule_requires_explicit_environment(tmp_path, provider, monkeypatch):
-    monkeypatch.delenv("WAVE3_MODEL")
-    with pytest.raises(ValueError, match="WAVE3_MODEL"):
-        validate(tmp_path, provider)
 
 
 def make_client(config, handler):
@@ -135,7 +72,7 @@ def completion_response(content="OK"):
 def test_public_api_uses_current_provider_and_bounded_wire_request(
     provider, tokens, expected
 ):
-    config = load_module(PUBLIC_APIS / "config.py", "wave3_public_config_test")
+    config = load_module(PUBLIC_APIS / "config.py", "public_config_test")
     requests = []
 
     def handler(request):
@@ -150,16 +87,16 @@ def test_public_api_uses_current_provider_and_bounded_wire_request(
         )
     request = requests[0]
     assert str(request.url) == "https://api.deepseek.com/v1/chat/completions"
-    assert request.headers["authorization"] == "Bearer test-only-wave3-key"
+    assert request.headers["authorization"] == "Bearer test-only-provider-key"
     assert json.loads(request.content)["model"] == "deepseek-flash"
     assert json.loads(request.content)["max_tokens"] == expected
     assert json.loads(request.content)["thinking"] == {"type": "disabled"}
     assert request.extensions["timeout"]["read"] == 60
 
 
-def test_public_api_retains_legacy_configuration_outside_wave3(provider, monkeypatch):
+def test_public_api_retains_legacy_configuration_outside_isolated_mode(provider, monkeypatch):
     monkeypatch.setenv("WAVE3_PRODUCTION", "false")
-    config = load_module(PUBLIC_APIS / "config.py", "wave3_public_config_test")
+    config = load_module(PUBLIC_APIS / "config.py", "public_config_test")
     assert (config.OPENAI_MODEL, config.BASE_URL, config.API_KEY) == (
         "old-model",
         "https://old-provider.invalid/v1",
@@ -171,7 +108,7 @@ def test_public_api_obeys_parent_request_scope(provider):
     from datetime import datetime, timedelta, timezone
     from services.agent.request_scope import RequestScope, use_request_scope
 
-    config = load_module(PUBLIC_APIS / "config.py", "wave3_public_config_test")
+    config = load_module(PUBLIC_APIS / "config.py", "public_config_test")
     requests = []
     scope = RequestScope(
         deadline_at=datetime.now(timezone.utc) + timedelta(seconds=10),
@@ -199,7 +136,7 @@ def test_generated_tool_loads_with_host_config_and_reaches_current_provider(
 ):
     import config as host_config
 
-    server = load_module(PUBLIC_APIS / "api_server.py", "wave3_public_server_test")
+    server = load_module(PUBLIC_APIS / "api_server.py", "public_server_test")
     public_config = server._load_config()
     requests = []
 
@@ -219,7 +156,7 @@ def test_generated_tool_loads_with_host_config_and_reaches_current_provider(
 
 
 def test_public_api_explicit_thinking_overrides_environment(provider):
-    config = load_module(PUBLIC_APIS / "config.py", "wave3_public_config_test")
+    config = load_module(PUBLIC_APIS / "config.py", "public_config_test")
     requests = []
 
     def handler(request):
@@ -233,44 +170,3 @@ def test_public_api_explicit_thinking_overrides_environment(provider):
         )
     assert json.loads(requests[0].content)["thinking"] == {"type": "enabled"}
     assert explicit == {"thinking": {"type": "enabled"}}
-
-
-@pytest.mark.parametrize(
-    "arguments,expected",
-    [([], 1), (["--concurrency", "2"], 2), (["--concurrency", "4"], 4)],
-)
-def test_operator_script_sends_selected_concurrency(monkeypatch, arguments, expected):
-    import io
-    import urllib.request
-
-    runtime = load_module(ROOT / "scripts/wave3_runtime.py", "wave3_cli_test")
-    monkeypatch.setattr(runtime, "configure", lambda: None)
-    monkeypatch.setenv("DECISION_OPERATOR_TOKEN", "test-only-token")
-    monkeypatch.setattr(
-        sys, "argv", ["wave3_runtime.py", "round", "--accounts", "1", "2", *arguments]
-    )
-    requests = []
-
-    def urlopen(request, timeout):
-        requests.append(request)
-        return io.BytesIO(b'{"status":"ok"}')
-
-    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
-    runtime.main()
-    assert json.loads(requests[0].data) == {
-        "account_ids": [1, 2],
-        "max_concurrency": expected,
-    }
-
-
-@pytest.mark.parametrize("concurrency", ["0", "5", "many"])
-def test_operator_script_rejects_invalid_concurrency(monkeypatch, concurrency):
-    runtime = load_module(ROOT / "scripts/wave3_runtime.py", "wave3_cli_test")
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        ["wave3_runtime.py", "round", "--accounts", "1", "--concurrency", concurrency],
-    )
-    with pytest.raises(SystemExit) as exc:
-        runtime.main()
-    assert exc.value.code == 2

@@ -62,7 +62,7 @@ def audit_system(monkeypatch):
             ]
         )
         db.commit()
-    rules = RuleEngine(str(Path(__file__).resolve().parents[1] / "config/rules"))
+    rules = RuleEngine(str(Path(__file__).resolve().parents[2] / "config/rules"))
     agent = object.__new__(RuleAwareAgent)
     agent.rule_engine = rules
     agent.rule_validator = RuleValidator(rules)

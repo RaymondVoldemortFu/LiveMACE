@@ -1,6 +1,6 @@
 """Run four real LLM Agents in a fresh MySQL/Redis environment and verify their ledger.
 
-Usage: python scripts/refactor_acceptance.py --credentials ../.wave3/runtime.env
+Usage: python scripts/live_agent_check.py --credentials .env --model YOUR_MODEL
 The credential file supplies model/provider settings only. Dedicated temporary
 containers and a unique sandbox label isolate this run from existing projects.
 --serve-after opens an HTTP service only after all automatic checks pass.
@@ -38,7 +38,7 @@ def configure(args, output):
         ENABLE_ACCOUNT_UPDATE_API="true",
         ENABLE_MANUAL_ORDER_API="true",
         DECISION_OPERATOR_TOKEN=secrets.token_urlsafe(32),
-        SANDBOX_INSTANCE="refactor-acceptance-" + uuid4().hex[:10],
+        SANDBOX_INSTANCE="live-agent-check-" + uuid4().hex[:10],
         DOCKER_POOL_MAX_SIZE="2",
         DOCKER_POOL_MAX_OVERFLOW="0",
         AGENT_ROUND_TIMEOUT_SECONDS=str(args.round_timeout),
@@ -87,10 +87,10 @@ def start_dependencies(containers):
         environment={
             "MYSQL_ROOT_HOST": "%",
             "MYSQL_ROOT_PASSWORD": password,
-            "MYSQL_DATABASE": "refactor_acceptance",
+            "MYSQL_DATABASE": "live_agent_check",
         },
         ports={"3306/tcp": ("127.0.0.1", None)},
-        labels={"refactor.acceptance": label},
+        labels={"livemace.agent-check": label},
     )
     containers.append(mysql)
     redis = client.containers.run(
@@ -98,7 +98,7 @@ def start_dependencies(containers):
         detach=True,
         name=label + "-redis",
         ports={"6379/tcp": ("127.0.0.1", None)},
-        labels={"refactor.acceptance": label},
+        labels={"livemace.agent-check": label},
     )
     containers.append(redis)
 
@@ -121,10 +121,10 @@ def start_dependencies(containers):
     mysql_port = published_port(mysql, "3306/tcp")
     redis_port = published_port(redis, "6379/tcp")
     os.environ["DATABASE_URL"] = (
-        f"mysql+pymysql://root:{password}@127.0.0.1:{mysql_port}/refactor_acceptance?charset=utf8mb4"
+        f"mysql+pymysql://root:{password}@127.0.0.1:{mysql_port}/live_agent_check?charset=utf8mb4"
     )
     os.environ["MYSQL_TEST_DATABASE_URL"] = os.environ["DATABASE_URL"].replace(
-        "/refactor_acceptance?", "/livemace_bench_test?"
+        "/live_agent_check?", "/livemace_bench_test?"
     )
     os.environ["TOOL_CACHE_REDIS_URL"] = f"redis://127.0.0.1:{redis_port}/0"
     import pymysql
@@ -137,7 +137,7 @@ def start_dependencies(containers):
                 port=int(mysql_port),
                 user="root",
                 password=password,
-                database="refactor_acceptance",
+                database="live_agent_check",
                 connect_timeout=2,
             )
             with connection.cursor() as cursor:
@@ -465,7 +465,7 @@ def run(args, output, mysql):
                     name="Acceptance " + agent_id,
                     account_type="MANUAL",
                     agent_type=agent_id.removeprefix("core.").replace("-", "_"),
-                    model=os.getenv("WAVE3_MODEL", "deepseek-flash"),
+                    model=args.model,
                     base_url=os.environ["BASE_URL"],
                     api_key=os.environ["API_KEY"],
                     initial_capital=10000,
@@ -535,7 +535,7 @@ def run(args, output, mysql):
             [
                 "sh",
                 "-c",
-                'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysqldump -uroot --single-transaction --skip-comments refactor_acceptance',
+                'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysqldump -uroot --single-transaction --skip-comments live_agent_check',
             ]
         )
         assert dumped.exit_code == 0, "Acceptance database export failed"
@@ -570,7 +570,7 @@ def run(args, output, mysql):
         assert not task_scheduler.is_running(), "unexpected recurring scheduler"
         report = dict(
             passed=True,
-            model=os.getenv("WAVE3_MODEL", "deepseek-flash"),
+            model=args.model,
             completed_at=datetime.now(timezone.utc).isoformat(),
             round_id=result["decision_round_id"],
             accounts=reports,
@@ -600,12 +600,13 @@ def run(args, output, mysql):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--credentials", type=Path, default=ROOT / ".wave3/runtime.env")
+    parser.add_argument("--credentials", type=Path, required=True)
+    parser.add_argument("--model", required=True)
     parser.add_argument("--serve-after", action="store_true")
     parser.add_argument("--port", type=int, default=5688)
     parser.add_argument("--round-timeout", type=int, default=600)
     args = parser.parse_args()
-    output = ROOT / ".refactor-acceptance" / datetime.now().strftime("%Y%m%d-%H%M%S")
+    output = ROOT / ".live-agent-check" / datetime.now().strftime("%Y%m%d-%H%M%S")
     output.mkdir(parents=True, mode=0o700)
     os.umask(0o077)
     containers = []

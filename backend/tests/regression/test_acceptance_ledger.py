@@ -5,7 +5,7 @@ from types import SimpleNamespace as Row
 
 import pytest
 
-from scripts.refactor_acceptance import verify_ledger
+from scripts.live_agent_check import verify_ledger
 
 
 def test_verifier_rejects_fabricated_trade_result():

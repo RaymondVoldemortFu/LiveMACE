@@ -34,8 +34,8 @@ services:
 
   backend:
     build:
-      context: ./backend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: backend/Dockerfile
     container_name: livemace-bench-backend
     restart: unless-stopped
     env_file:
@@ -58,12 +58,12 @@ services:
       # Required by backend/services/container_service.py to manage sandbox containers
       - /var/run/docker.sock:/var/run/docker.sock
       # Persist backend log files to host directory
-      - ./backend/logs:/app/logs
+      - ./backend/logs:/app/backend/logs
 
   frontend:
     build:
-      context: ./frontend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: frontend/Dockerfile
     container_name: livemace-bench-frontend
     restart: unless-stopped
     depends_on:

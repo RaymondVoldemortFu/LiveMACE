@@ -19,7 +19,6 @@
 - [扩展 SDK](extensions/README.md)
 - [完整公共接口规范 v1](extensions/interface-reference.md)
 
-## 运维与设计提案
+## 设计提案
 
-- [本机隔离测试栈](operations/local-stack.md)
 - [账户级推理参数提案](proposals/account-reasoning-effort.md)

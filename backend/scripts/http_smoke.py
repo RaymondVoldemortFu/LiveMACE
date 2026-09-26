@@ -15,7 +15,7 @@ def main():
     parser.add_argument('--serve', action='store_true')
     parser.add_argument('--port', type=int, default=5644)
     args = parser.parse_args()
-    with TemporaryDirectory(prefix='wave4-smoke-') as directory:
+    with TemporaryDirectory(prefix='http-smoke-') as directory:
         os.environ['DATABASE_URL'] = f'sqlite:///{directory}/smoke.sqlite'
         os.environ['WAVE3_PRODUCTION'] = 'false'
         os.environ['LIVEMACE_BENCH_EXTENSION_DIRS'] = ''

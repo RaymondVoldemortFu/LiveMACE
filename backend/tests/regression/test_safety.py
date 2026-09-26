@@ -87,5 +87,5 @@ def test_sandbox_cleanup_is_instance_scoped(monkeypatch):
     monkeypatch.setenv("SANDBOX_INSTANCE", "wave3")
     labels = ContainerService._container_labels(None)
     assert labels["livemace-bench.instance"] == "wave3"
-    source = (Path(__file__).parents[1] / "services/container_service.py").read_text()
+    source = (Path(__file__).parents[2] / "services/container_service.py").read_text()
     assert 'filters={"label": "livemace-bench.managed=true"}' not in source

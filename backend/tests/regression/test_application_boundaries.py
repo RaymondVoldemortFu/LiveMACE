@@ -1,4 +1,4 @@
-"""Final refactor contracts exercise boundaries and persisted results."""
+"""Application contracts exercise boundaries and persisted results."""
 
 from copy import deepcopy
 from datetime import datetime, timezone
