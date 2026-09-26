@@ -1,5 +1,7 @@
 # Public SPI and Version Rules
 
+For complete DTOs, method signatures, configuration, and error contracts, see the [v1 interface reference](interface-reference.md).
+
 Extension authors may import from these stable namespaces:
 
 | Namespace | Main types |

@@ -261,57 +261,6 @@ python init_asset_metadata.py --add MEMECOIN --is-meme true
 
 ---
 
-## 🧪 Testing
-
-### Run Test Suite
-
-```bash
-python test_crypto_classification.py
-```
-
-**Test Coverage:**
-1. Classification System (12 test cases)
-   - Well-known cryptos
-   - Pattern-based detection
-   - Unknown tokens
-
-2. Database Integration
-   - Auto-detection
-   - Manual overrides
-   - Pattern-based meme detection
-
-3. Bulk Initialization
-   - Multi-symbol initialization
-   - Update existing records
-   - Verify data integrity
-
-**Expected Output:**
-```
-================================================================================
-CRYPTOCURRENCY CLASSIFICATION & METADATA SYSTEM - TEST SUITE
-================================================================================
-
-✓ PASS | BTC             -> Layer1       (meme=False) | confidence=high
-✓ PASS | DOGE            -> Meme         (meme=True ) | confidence=high
-...
-Classification Tests: 12 passed, 0 failed
-
-Database Integration Tests: ALL PASSED
-Bulk Initialization Tests: ALL PASSED
-
-================================================================================
-TEST SUMMARY
-================================================================================
-✓ PASSED     | Classification System
-✓ PASSED     | Database Integration
-✓ PASSED     | Bulk Initialization
-================================================================================
-
-🎉 ALL TESTS PASSED!
-```
-
----
-
 ## 🔄 Data Flow
 
 ### Scenario 1: Application Startup
@@ -404,7 +353,7 @@ AI makes trading decision
 
 ### Adding New Known Cryptocurrencies
 
-Edit [`crypto_classification.py`](crypto_classification.py#L21):
+Edit [`crypto_classification.py`](../backend/crypto_classification.py):
 
 ```python
 KNOWN_CLASSIFICATIONS: Dict[str, Dict[str, any]] = {
@@ -420,7 +369,7 @@ KNOWN_CLASSIFICATIONS: Dict[str, Dict[str, any]] = {
 
 ### Adding New Meme Patterns
 
-Edit [`crypto_classification.py`](crypto_classification.py#L149):
+Edit [`crypto_classification.py`](../backend/crypto_classification.py):
 
 ```python
 MEME_PATTERNS = [
@@ -432,7 +381,7 @@ MEME_PATTERNS = [
 
 ### Updating Liquidity Scores
 
-Edit [`init_asset_metadata.py`](init_asset_metadata.py#L77):
+Edit [`init_asset_metadata.py`](../backend/init_asset_metadata.py):
 
 ```python
 liquidity_map = {
@@ -473,19 +422,17 @@ liquidity_map = {
 
 ## 🔗 Related Files
 
-- [`crypto_classification.py`](crypto_classification.py) - Classification engine
-- [`init_asset_metadata.py`](init_asset_metadata.py) - Database initialization
-- [`test_crypto_classification.py`](test_crypto_classification.py) - Test suite
-- [`database/models.py`](database/models.py) - AssetMetadata model definition
+- [`crypto_classification.py`](../backend/crypto_classification.py) - Classification engine
+- [`init_asset_metadata.py`](../backend/init_asset_metadata.py) - Database initialization
+- [`database/models.py`](../backend/database/models.py) - AssetMetadata model definition
 
 ---
 
 ## 📞 Support
 
 For questions or issues:
-1. Run `python test_crypto_classification.py` to verify system health
-2. Check logs for detailed classification decisions
-3. Use `--add <SYMBOL>` with `--sector` and `--is-meme` for manual overrides
+1. Check logs for detailed classification decisions
+2. Use `--add <SYMBOL>` with `--sector` and `--is-meme` for manual overrides
 
 ---
 

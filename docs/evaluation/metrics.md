@@ -1,4 +1,4 @@
-# Evaluation 指标说明报告
+# 评估指标
 
 本文基于当前代码实现，总结所有指标的数值范围、打分方法与计算公式。
 
@@ -14,11 +14,14 @@
 ### 2) Invalid / No-op Call Rate
 - **含义**：无效或无信息增量的调用比例，包含：
   - 工具返回错误或空结果
+  - 工具输出格式无效
   - 参数不符合 schema
   - 重复调用相同工具与参数
-- **数值范围**：`[0, 1]`
+- **数值范围**：非负值；各类计数可能重叠，结果可超过 `1`，实现不做归一化截断。
 - **公式**：  
-  `invalid_or_noop_rate = (error_calls + invalid_params_calls + noop_calls) / total_tool_calls`
+  `invalid_or_noop_rate = (error_calls + invalid_output_calls + invalid_params_calls + noop_calls) / total_tool_calls`
+
+两项比例在工具调用总数为零时为 `0`。历史工具 schema 不可用时，`schema_status` 为 `unavailable`，`hallucination_rate` 和 `invalid_or_noop_rate` 均为 `null`，并通过 `unavailable_calls` 保留不可评估的调用数。
 
 ### 3) Tool Cost / Budget Usage
 - **含义**：单位步骤的工具调用成本，当前实现用 “每步平均工具调用次数” 近似。
@@ -32,7 +35,7 @@
 - **中位数**：`median(values)`
 - **方差**：`pvariance(values)`
   
-实现：`descriptive_stats()`（`tool_use_evaluator.py`）
+实现：`descriptive_stats()`（`tool_use_evaluator.py`）。评测脚本汇总时排除 `null`，并在存在不可评估记录时提供 `evaluated_count` 和 `unavailable_count`；整组均不可评估时，均值、中位数和方差均为 `null`。
 
 ---
 
@@ -98,8 +101,8 @@
 ---
 
 ## 五、指标范围速览
-- **Tool Hallucination Rate**：`[0, 1]`
-- **Invalid / No-op Call Rate**：`[0, 1]`
+- **Tool Hallucination Rate**：`[0, 1]`；schema 不可用时为 `null`
+- **Invalid / No-op Call Rate**：非负，可超过 `1`；schema 不可用时为 `null`
 - **Tool Cost / Budget Usage**：`[0, +∞)`（平均每步调用次数）
 - **LLM 评分指标**：`[0, 10]`
 - **Token 消耗**：`[0, +∞)`

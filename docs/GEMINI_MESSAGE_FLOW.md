@@ -93,7 +93,7 @@ user → model → user → model
 
 ### 1. Agent 准备消息 (OpenAI 格式)
 
-**文件**: `backend/services/agent/react.py`
+**文件**: `backend/benchmark/builtin/agents/react.py`
 
 ```python
 messages = [
@@ -365,7 +365,7 @@ Gemini 要求严格的 user-model 交替模式。如果每个 `functionResponse`
 |------|------|
 | `backend/services/agent/gemini_client.py` | Gemini 客户端，消息转换核心逻辑 |
 | `backend/services/agent/llm_client.py` | 统一 LLM 入口，自动路由 Gemini/OpenAI |
-| `backend/services/agent/react.py` | ReAct Agent 主循环 |
+| `backend/benchmark/builtin/agents/react.py` | ReAct Agent 主循环 |
 | `backend/services/agent/sub_agents/search_agent.py` | Search Sub-Agent，已兼容 Gemini |
 | `backend/api/account_routes.py` | 测试连接 API，使用 LLMClient |
 

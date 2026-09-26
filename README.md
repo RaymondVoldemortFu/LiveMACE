@@ -18,7 +18,7 @@ Live market data → Agent analysis and tool use → Simulated trades → Portfo
 
 Agents gather market information, use tools to investigate opportunities, and submit trading decisions. The backend records each trade and maintains account balances and positions. The dashboard brings together performance curves, decision traces, and evaluation results for comparison across models and agent architectures.
 
-Build custom Agents, Tools, and Prompt profiles with the [extension SDK](docs/extensions/README.md) and [runnable examples](examples/extensions).
+Build custom Agents, Tools, and Prompt profiles with the [extension SDK](docs/extensions/README.md) and [runnable examples](examples/extensions). See the [documentation index](docs/README.md) for architecture and configuration guides.
 
 ## Star History
 

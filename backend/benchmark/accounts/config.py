@@ -45,7 +45,7 @@ class ConfigValidationError(ValueError):
 class AccountExtensionConfig:
     """Explicit, versioned Agent/Toolset/Prompt configuration for an account.
 
-    Mirrors the public DTO in ``000-public-interface-spec.md`` §9. Frozen so a
+    Mirrors the public DTO in ``docs/extensions/interface-reference.md`` §9. Frozen so a
     resolved config cannot be mutated after validation; use ``replace`` for a
     modified copy.
 

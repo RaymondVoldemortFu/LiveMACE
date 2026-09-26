@@ -10,7 +10,7 @@ The backend is the source of truth. It owns accounts, positions, orders, trades,
 Useful first reads for a new session:
 
 - `README.md` for setup and deployment commands.
-- `docs/refactor/modules/README.md` and `docs/refactor/overall-completion-audit.md` for architecture and completion evidence.
+- `docs/architecture.md` for architecture and `docs/development.md` for contributor workflows.
 - `backend/main.py` and `backend/benchmark/bootstrap/app.py` for ASGI assembly and lifespan.
 - `backend/benchmark/bootstrap/runtime.py` for staged startup and shutdown.
 - `backend/services/trading_commands.py` and `backend/services/agent/trade_execution_tool.py` for the actual order execution paths.

@@ -36,3 +36,4 @@ supervise those resources.
 - [Override a Prompt without Python](prompt-override.md)
 - [Contract tests and fake ports](contract-tests.md)
 - [Public SPI, versions, and capabilities](public-spi.md)
+- [Complete v1 interface reference](interface-reference.md)

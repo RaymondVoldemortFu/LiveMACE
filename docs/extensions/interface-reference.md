@@ -1,6 +1,6 @@
 # 公共扩展接口规范 v1
 
-本文冻结模块任务共同实现的公开接口。接口位置以最终包 `benchmark` 表示；落地时 Python 源码目录为 `backend/benchmark/`。公开接口版本为 `1`，内部模块不得要求扩展导入 `backend/services/*`、SQLAlchemy model 或 FastAPI 对象。
+本文定义 `benchmark` 包的公开扩展接口，Python 源码位于 `backend/benchmark/`。公开接口版本为 `1`，内部模块不得要求扩展导入 `backend/services/*`、SQLAlchemy model 或 FastAPI 对象。
 
 ## 1. 稳定性等级
 
@@ -312,7 +312,7 @@ class ToolEventSink(Protocol):
     def emit(self, event: "ToolRuntimeEvent") -> None: ...
 ```
 
-`AgentRuntimeEvent.type` 允许：`agent.started`、`agent.completed`、`agent.failed`、`agent.cancelled`、`agent.step`。`agent.step` 对应内置 Agent 的逐步回调；`metadata` 必须包含 1-based `step_number` 和 `role`，并保留 `content`、`tool_calls`、`name`、`tool_call_id` 等消息字段。持久化到 `AgentTrace` 由 M16 完成。
+`AgentRuntimeEvent.type` 允许：`agent.started`、`agent.completed`、`agent.failed`、`agent.cancelled`、`agent.step`。`agent.step` 对应内置 Agent 的逐步回调；`metadata` 必须包含 1-based `step_number` 和 `role`，并保留 `content`、`tool_calls`、`name`、`tool_call_id` 等消息字段。事件由 persistence event sink 写入 `AgentTrace`。
 
 Provider port 与 Agent/Tool 一样采用同步接口。Provider 错误统一包含 `code`、`message`、`retryable`、`provider_id`；四字段由 `benchmark.contracts.ProviderError` 直接承载（`retryable`/`provider_id` 为 keyword-only、有默认值），provider adapter 内完成第三方异常归一化。第三方扩展可在自身实现内部使用异步 I/O，但必须同步返回 port 规定的结果，系统不负责驱动其 event loop。
 
@@ -468,21 +468,3 @@ API 错误格式保持：
 - v1 内接口新增参数必须为 keyword-only 且有默认值。
 - 系统启动日志列出装载的 extension/component id、version 和来源，不记录密钥。
 - 账户保存 component version，用于 trace 可复现；系统不得在运行中静默切换版本。
-
-## 附录 A：条款落地波次对照（非规范性）
-
-本规范描述 v1 目标态。以下条款在当前开发进度（Wave 1 接口骨架）下尚未落地，属计划内空窗，接口评审时不视为违例；落地波次以 `module-groups.md` 为准：
-
-| 条款 | 归属模块 | 计划波次 |
-| --- | --- | --- |
-| §3/§7.1 `DecisionRoundService` 经 ThreadPoolExecutor 编排 `AgentRuntime.run()`（当前委托 legacy 调度） | M10 | Wave 3 |
-| §4 `core.*` 内置工具在 `benchmark/builtin/tools` 落地（当前为 legacy 无前缀实现 + 名称别名映射） | M06 | Wave 2 |
-| §5 账户显式 profile 优先级（`PromptSourcePriority.ACCOUNT`）接线 | M12 | Wave 2/3 |
-| §7 HTTP/WS 下单统一经 `TradeCommandGateway`（当前直调 `order_matching`） | M21 | Wave 3 |
-| §7 Agent 工具强制 `{decision_round_id}:{tool_call_id}` idempotency key（当前 legacy 工具层允许显式覆盖） | M06 | Wave 2 |
-| §7.1 决策 worker 使用独立 UoW（当前为独立 `SessionLocal` + finally 关闭） | M10 | Wave 3 |
-| §8 装载阶段只 import 声明 entrypoint（loader/discovery/catalog 未实现） | M13 | Wave 2/3 |
-| §9 账户扩展配置整节（DTO、保存校验、`configuration_invalid`） | M12 | Wave 2/3 |
-| §10 API 错误信封（`error` 包装 + `request_id`） | M14/M21 | Wave 3 |
-| §11 跨扩展 component id 全局唯一仲裁、启动装载日志 | M13 | Wave 2/3 |
-| §11 账户钉 `component_versions`、禁止运行中静默切换版本 | M12 | Wave 2/3 |
