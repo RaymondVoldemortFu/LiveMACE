@@ -12,16 +12,15 @@
 | Valkey | `127.0.0.1:16379` |
 | Compose 配置 | `.wave3/compose.env` |
 | 模型与服务配置 | `.wave3/runtime.env` |
-| 配置模板 | `deploy/wave3/` |
 | 运行证据 | `.wave3/evidence/` |
 
-环境文件应设置权限 `600`。保存独立的数据库密码、`API_KEY_CIPHER_KEY` 和 `DECISION_OPERATOR_TOKEN`；恢复数据库时需要原加密键解密账户凭据。模型、行情与搜索凭据按模板配置。
+环境文件应设置权限 `600`。保存独立的数据库密码、`API_KEY_CIPHER_KEY` 和 `DECISION_OPERATOR_TOKEN`；恢复数据库时需要原加密键解密账户凭据。模型、行情与搜索凭据保存在 `.wave3/runtime.env`，具体变量见 `backend/.env.example` 与 `compose.wave3.yml`。
 
 服务绑定 loopback；后端挂载 Docker socket 管理沙箱。单个进程持有 scheduler、决策锁、Catalog 和沙箱池，部署保持一个 Uvicorn worker。
 
 ## 初始化与状态
 
-从模板准备好环境文件后，在仓库根目录执行：
+确认既有环境文件齐全并获得操作授权后，在仓库根目录执行：
 
 ```sh
 backend/.venv/bin/python scripts/wave3_runtime.py record-fingerprint

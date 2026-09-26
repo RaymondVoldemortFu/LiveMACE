@@ -50,7 +50,7 @@ def _load_tool_quality_scores() -> Dict[str, int]:
     default_path = (
         Path(__file__).resolve().parent
         / "tool_eval"
-        / "tool_quality_scores_20260407_203219.json"
+        / "tool_quality_scores.json"
     )
     score_path = Path(
         (os.getenv("TOOL_QUALITY_SCORE_PATH") or str(default_path)).strip()

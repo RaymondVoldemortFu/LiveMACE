@@ -2,6 +2,12 @@
 
 本文基于当前代码实现，总结所有指标的数值范围、打分方法与计算公式。
 
+工具路由质量计算使用仓库内的 `backend/services/evaluation/tool_eval/tool_quality_scores.json`
+参考评分表，可通过 `TOOL_QUALITY_SCORE_PATH` 指定其他评分表。
+多智能体评测配置位于 `backend/services/evaluation/multi_agent_evaluation/`，
+将其中的 `evaluation.env.example` 复制为 `evaluation.env` 后填写。
+评测生成的账户结果保存在本地输出目录，由 Git 忽略。
+
 ## 一、客观指标（Tool Use Objective Metrics）
 来源：`backend/services/evaluation/tool_use_evaluator.py`
 

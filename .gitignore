@@ -368,7 +368,6 @@ temp
 backend/script/results/*
 backend/eval/eval_output/
 *.sql
-!backend/livemace_bench_backup.sql
 *.docx
 /WAVE 2*.pdf
 *_report.md
@@ -395,3 +394,24 @@ docs/contributor-contribution-analysis.pdf
 !backend/tests/services/
 backend/tests/services/*
 !backend/tests/services/test_container_initialization.py
+
+# Local evaluation outputs and publication intermediates
+eval_result/
+eval_results/
+/backend/services/evaluation/results/
+tool_quality_scores_*.json
+/scripts/temp/
+/deploy/wave3/
+/backend/db_backups/
+*.sql.gz
+*.sqlite-wal
+*.sqlite-shm
+*.db-wal
+*.db-shm
+
+# Machine-specific evaluation and shell configuration
+*.env
+!*.env.example
+/backend/services/.bashrc
+/backend/config/account_combinations*.csv
+!/backend/config/account_combinations.example.csv
