@@ -10,7 +10,7 @@ Live markets. Persistent agents. Trace-level evaluation.
 [![Python](https://img.shields.io/badge/Python-3.10%2B-2E5AA8?style=flat-square&logo=python&logoColor=white)](backend/pyproject.toml)
 [![License](https://img.shields.io/badge/License-MIT-8061B4?style=flat-square)](LICENSE)
 
-**[Paper](https://arxiv.org/abs/2610.09872) · [Quick Start](#quick-start) · [Documentation](docs/README.md) · [Extension SDK](docs/extensions/README.md) · [Citation](#citation)**
+**[Paper](https://arxiv.org/abs/2610.09872) · [Demo](#demo) · [Quick Start](#quick-start) · [Documentation](docs/README.md) · [Extension SDK](docs/extensions/README.md) · [Citation](#citation)**
 
 </div>
 
@@ -23,6 +23,12 @@ Live markets. Persistent agents. Trace-level evaluation.
 **LiveMACEBench** uses live financial markets as an evolving environment for evaluating persistent LLM agents. Agents gather information, reason, and execute simulated trades while the benchmark records their decisions, tool calls, memory interactions, and portfolio state.
 
 The accompanying paper, [**LiveMACE: Process-Aware Evaluation of LLM Agent Capabilities in Evolving Markets**](https://arxiv.org/abs/2610.09872), studies five frontier LLMs across 30 days of live evaluation. It finds an **outcome–capability gap**: realized returns can diverge from capability measurements, and similar outcomes can emerge from different patterns of mechanism use.
+
+## Demo
+
+[![LiveMACE video overview](docs/assets/livemace-demo-poster.jpg)](https://github.com/RaymondVoldemortFu/LiveMACE/raw/refs/heads/main/docs/assets/livemace-demo.mp4)
+
+**[▶ Watch the 55-second overview](https://github.com/RaymondVoldemortFu/LiveMACE/raw/refs/heads/main/docs/assets/livemace-demo.mp4)** — live markets, four agent capabilities, and evaluation through decision traces.
 
 ## What LiveMACEBench evaluates
 
