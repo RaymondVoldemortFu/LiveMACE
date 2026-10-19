@@ -26,9 +26,9 @@ The accompanying paper, [**LiveMACE: Process-Aware Evaluation of LLM Agent Capab
 
 ## Overview
 
-[![LiveMACE overview](docs/assets/livemace-overview-poster.jpg)](https://github.com/RaymondVoldemortFu/LiveMACE/raw/refs/heads/main/docs/assets/livemace-overview.mp4)
+https://github.com/user-attachments/assets/12322b8a-2dcb-48a6-af31-d02832e8bc45
 
-**[▶ Watch the 55-second overview](https://github.com/RaymondVoldemortFu/LiveMACE/raw/refs/heads/main/docs/assets/livemace-overview.mp4)** — live markets, four agent capabilities, and evaluation through decision traces.
+Live markets, four agent capabilities, and evaluation through decision traces.
 
 ## What LiveMACEBench evaluates
 
